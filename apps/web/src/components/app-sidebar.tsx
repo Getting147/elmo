@@ -145,7 +145,6 @@ export function AppSidebar({
 					title: t?.diagnosticReports || "9章诊断报告",
 					url: "/reports",
 					icon: IconFileText,
-					absolute: true,
 				},
 			);
 		}
