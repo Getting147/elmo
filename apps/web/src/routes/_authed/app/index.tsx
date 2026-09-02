@@ -5,6 +5,7 @@
  * In multi-org mode (whitelabel): shows brand switcher
  */
 
+import { useState, useEffect } from "react";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Button } from "@workspace/ui/components/button";
@@ -69,7 +70,13 @@ export const Route = createFileRoute("/_authed/app/")({
 });
 
 function BrandSwitcherPage() {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => {
+		setMounted(true);
+	}, []);
 	const { organizations, canCreateBrands } = Route.useLoaderData();
+
+	if (!mounted) return null;
 
 	return (
 		<FullPageCard title="Brand Switcher" subtitle="Select a brand to get started">

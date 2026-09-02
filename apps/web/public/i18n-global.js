@@ -68,7 +68,6 @@
     "Actions": "操作"
   };
 
-  // 构造反向字典 (中文 -> 英文)
   const EN_DICT = {};
   for (let k in ZH_DICT) {
     EN_DICT[ZH_DICT[k]] = k;
@@ -78,16 +77,23 @@
     return localStorage.getItem("elmo_lang") || "zh";
   }
 
+  let isTranslating = false;
+
   function translateNode(node, targetLang) {
+    if (!node) return;
     const dict = targetLang === "zh" ? ZH_DICT : EN_DICT;
     if (node.nodeType === Node.TEXT_NODE) {
       const txt = node.nodeValue.trim();
-      if (txt && dict[txt]) {
+      if (txt && dict[txt] && node.nodeValue !== dict[txt]) {
         node.nodeValue = node.nodeValue.replace(txt, dict[txt]);
       }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
-      if (node.placeholder && dict[node.placeholder]) {
-        node.placeholder = dict[node.placeholder];
+      // 避免修改表单输入框内部值
+      if (node.tagName === "INPUT" || node.tagName === "TEXTAREA") {
+        if (node.placeholder && dict[node.placeholder]) {
+          node.placeholder = dict[node.placeholder];
+        }
+        return;
       }
       if (node.title && dict[node.title]) {
         node.title = dict[node.title];
@@ -98,34 +104,52 @@
     }
   }
 
-  // 全量即时重绘整个 DOM 树（无需刷新页面）
   function renderAll(targetLang) {
-    if (document.body) {
-      translateNode(document.body, targetLang);
+    if (document.body && !isTranslating) {
+      isTranslating = true;
+      try {
+        translateNode(document.body, targetLang);
+      } finally {
+        setTimeout(() => { isTranslating = false; }, 50);
+      }
     }
   }
 
-  window.addEventListener("DOMContentLoaded", () => {
-    renderAll(getLang());
-  });
+  // 确保在 React 完成客户端水合之后再执行首次全局翻译，彻底避免 React #418 Hydration Mismatch
+  if (document.readyState === "complete") {
+    setTimeout(() => { renderAll(getLang()); }, 300);
+  } else {
+    window.addEventListener("load", () => {
+      setTimeout(() => { renderAll(getLang()); }, 300);
+    });
+  }
 
-  // 监听 DOM 异步插入
+  // 监听 DOM 异步插入，防抖安全翻译
+  let debounceTimer = null;
   const observer = new MutationObserver((mutations) => {
-    const curLang = getLang();
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        translateNode(node, curLang);
-      }
-    }
+    if (isTranslating) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      renderAll(getLang());
+    }, 150);
   });
 
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    characterData: true
-  });
+  if (document.body) {
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: false
+    });
+  } else {
+    document.addEventListener("DOMContentLoaded", () => {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: false
+      });
+    });
+  }
 
-  // 全局无刷新平滑切换函数
   window.setElmoLanguage = function (nextLang) {
     localStorage.setItem("elmo_lang", nextLang);
     renderAll(nextLang);

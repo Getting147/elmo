@@ -47,6 +47,47 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 	brand?: BrandWithPrompts | null;
 }
 
+function SidebarBrandIcon() {
+	return (
+		<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-sm">
+			<svg className="size-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+				<circle cx="12" cy="12" r="9" />
+				<path d="M12 3a9 9 0 0 1 9 9" />
+				<circle cx="12" cy="12" r="3" />
+			</svg>
+		</div>
+	);
+}
+
+function SafeLanguageSwitcher() {
+	const [mounted, setMounted] = React.useState(false);
+	const { t, language, setLanguage } = useLanguage();
+
+	React.useEffect(() => {
+		setMounted(true);
+	}, []);
+
+	if (!mounted) {
+		return (
+			<div className="px-2 py-1 flex items-center justify-between border-t pt-2 opacity-0">
+				<span className="text-[11px]">...</span>
+			</div>
+		);
+	}
+
+	return (
+		<div className="px-2 py-1 flex items-center justify-between border-t pt-2">
+			<span className="text-[11px] text-muted-foreground">{t?.currentLang || "简体中文"}</span>
+			<button
+				onClick={() => setLanguage(language === "zh" ? "en" : "zh")}
+				className="text-[11px] font-medium text-primary hover:underline cursor-pointer"
+			>
+				{t?.switchLang || "切换为 English"}
+			</button>
+		</div>
+	);
+}
+
 export function AppSidebar({
 	isAdmin = false,
 	hasReportAccess = false,
@@ -101,7 +142,7 @@ export function AppSidebar({
 					icon: IconTarget,
 				},
 				{
-					title: t?.diagnosticReports || "📄 9章诊断报告",
+					title: t?.diagnosticReports || "9章诊断报告",
 					url: "/reports",
 					icon: IconFileText,
 					absolute: true,
@@ -184,10 +225,14 @@ export function AppSidebar({
 					<SidebarMenuItem>
 						<SidebarMenuButton size="lg" asChild>
 							<Link to="/app">
-								<Logo className="size-8" />
-								<div className="grid flex-1 text-left text-sm leading-tight">
-									<span className="truncate font-semibold">{brand?.name || "NegencyGEO"}</span>
-									<span className="truncate text-xs text-muted-foreground">AI Search Optimizer</span>
+								<SidebarBrandIcon />
+								<div className="grid flex-1 text-left text-sm leading-tight overflow-hidden pl-1">
+									<span className="truncate font-semibold text-foreground text-[14px]">
+										{brand?.name || "NegencyGEO"}
+									</span>
+									<span className="truncate text-[11px] text-muted-foreground">
+										AI Search Optimizer
+									</span>
 								</div>
 							</Link>
 						</SidebarMenuButton>
@@ -199,15 +244,7 @@ export function AppSidebar({
 			</SidebarContent>
 			<SidebarFooter className="gap-2">
 				{/* 语言一键切换快捷按钮 */}
-				<div className="px-2 py-1 flex items-center justify-between border-t pt-2">
-					<span className="text-[11px] text-muted-foreground">{t?.currentLang || "简体中文"}</span>
-					<button
-						onClick={() => setLanguage(language === "zh" ? "en" : "zh")}
-						className="text-[11px] font-medium text-primary hover:underline cursor-pointer"
-					>
-						{t?.switchLang || "切换为 English"}
-					</button>
-				</div>
+				<SafeLanguageSwitcher />
 				<DemoModePill />
 				<NavAppInfo />
 				<NavUser />

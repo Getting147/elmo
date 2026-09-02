@@ -1,7 +1,7 @@
 /**
  * /app/new - Create a new brand (local mode only).
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Button } from "@workspace/ui/components/button";
@@ -26,6 +26,15 @@ export const Route = createFileRoute("/_authed/app/new")({
 	},
 	component: NewBrandPage,
 });
+
+export function SafeHydrate({ children }: { children: React.ReactNode }) {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => {
+		setMounted(true);
+	}, []);
+	if (!mounted) return null;
+	return <>{children}</>;
+}
 
 function NewBrandPage() {
 	const [isLoading, setIsLoading] = useState(false);
@@ -60,7 +69,8 @@ function NewBrandPage() {
 	};
 
 	return (
-		<FullPageCard title="Create a new brand" subtitle="Set up a brand to start tracking" showBackButton>
+		<SafeHydrate>
+			<FullPageCard title="Create a new brand" subtitle="Set up a brand to start tracking">
 			<form onSubmit={handleFormSubmit} className="space-y-4">
 				<div className="space-y-2">
 					<Label htmlFor="brandName">Brand name</Label>
@@ -97,5 +107,6 @@ function NewBrandPage() {
 				</Button>
 			</form>
 		</FullPageCard>
+		</SafeHydrate>
 	);
 }
