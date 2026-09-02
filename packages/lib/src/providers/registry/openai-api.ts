@@ -18,7 +18,7 @@ import type {
 	StructuredResearchResult,
 } from "../types";
 
-const DEFAULT_RESEARCH_MODEL = "gpt-5-mini";
+const DEFAULT_RESEARCH_MODEL = "gpt-4o-mini";
 
 function getOpenAIResponsesModel(model: string) {
 	const apiKey = getCredential("OPENAI_API_KEY");

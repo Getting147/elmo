@@ -29,13 +29,20 @@ export function DefaultPendingComponent() {
 export function DefaultErrorComponent({ error }: ErrorComponentProps) {
 	useEffect(() => {
 		Sentry.captureException(error);
+		console.error("[TanStack Error Caught]:", error);
 	}, [error]);
+
+	const errorMessage = error instanceof Error ? error.message : String(error || "");
 
 	return (
 		<FullPageCard
 			title="Something went wrong"
 			subtitle="An unexpected error occurred while loading this page."
 			showBackButton={true}
-		/>
+		>
+			<div className="p-4 bg-red-50 text-red-700 text-xs rounded border border-red-200 mt-4 overflow-auto max-h-40 font-mono">
+				<strong>Debug Details:</strong> {errorMessage || "No detail provided"}
+			</div>
+		</FullPageCard>
 	);
 }

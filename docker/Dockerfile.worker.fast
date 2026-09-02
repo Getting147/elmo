@@ -1,0 +1,23 @@
+# Elmo Custom Worker Builder
+FROM node:24-alpine AS base
+RUN corepack enable pnpm
+
+FROM base AS builder
+WORKDIR /app
+COPY . .
+RUN pnpm install --no-frozen-lockfile
+
+FROM base AS worker
+WORKDIR /app
+ENV NODE_ENV=production
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 worker
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+COPY --from=builder --chown=worker:nodejs /app /app
+
+USER worker
+WORKDIR /app/apps/worker
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["npx", "tsx", "src/index.ts"]

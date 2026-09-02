@@ -154,29 +154,30 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		}
 		if (statusData.status === "done") {
 			const suggestion = statusData.suggestion;
-			setData({
-				brandName: suggestion.brandName || brand?.name || "",
-				website: brand?.website || suggestion.website || "",
-				additionalDomains: suggestion.additionalDomains,
-				aliases: suggestion.aliases,
-				competitors: suggestion.competitors.map((c) =>
-					newCompetitorEntry({
-						name: c.name,
-						domains: c.domains,
-						aliases: c.aliases,
-						expanded: false,
-					}),
-				),
-				prompts: suggestion.suggestedPrompts.map((p) =>
-					newPromptEntry({ value: p.prompt, tags: p.tags, enabled: true }),
-				),
-			});
-			setPhase("review");
-			trackEvent("onboarding_analyzed", {
-				competitor_count: suggestion.competitors.length,
-				prompt_count: suggestion.suggestedPrompts.length,
-			});
-			if (brandId) queryClient.removeQueries({ queryKey: analyzeStatusKey(brandId) });
+			if (suggestion) {
+				setData({
+					brandName: suggestion.brandName || brand?.name || "",
+					website: brand?.website || suggestion.website || "",
+					additionalDomains: suggestion.additionalDomains || [],
+					aliases: suggestion.aliases || [],
+					competitors: (suggestion.competitors || []).map((c) =>
+						newCompetitorEntry({
+							name: c.name,
+							domains: c.domains || [],
+							aliases: c.aliases || [],
+							expanded: false,
+						}),
+					),
+					prompts: (suggestion.suggestedPrompts || []).map((p) =>
+						newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
+					),
+				});
+				setPhase("review");
+				trackEvent("onboarding_analyzed", {
+					competitor_count: suggestion.competitors?.length || 0,
+					prompt_count: suggestion.suggestedPrompts?.length || 0,
+				});
+			}
 		}
 	}, [phase, statusData, brandId, brand?.name, brand?.website, queryClient]);
 

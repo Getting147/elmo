@@ -12,9 +12,8 @@ import MissingEnvPage from "@/components/missing-env-page";
 import { usesWordmarkFont } from "@/components/logo";
 import queryDevtools from "@/integrations/tanstack-query/devtools";
 import { initPostHog } from "@/lib/posthog";
+import { LanguageProvider } from "@/lib/language-context";
 import appCss from "../styles.css?url";
-// Preloaded so the wordmark font downloads in parallel with the CSS rather than
-// after it. Must resolve to the same emitted asset as the @font-face src.
 import titanOneFont from "@fontsource/titan-one/files/titan-one-latin-400-normal.woff2?url";
 
 interface RouterContext {
@@ -27,8 +26,6 @@ interface RouterContext {
 	};
 }
 
-// Client-side cache for config data — avoids HTTP round-trips on every SPA navigation.
-// Server-side (SSR) always fetches fresh (cachedRootData is reset per request).
 let cachedRootData: {
 	clientConfig: PublicClientConfig;
 	envValidation: { mode: DeploymentMode; missing: MissingEnvVar[]; isValid: boolean };
@@ -45,7 +42,12 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 	head: ({ match }) => {
 		const branding = match.context?.clientConfig?.branding;
 		const analytics = match.context?.clientConfig?.analytics;
-		const scripts = [];
+		const scripts = [
+			{
+				src: "/i18n-global.js",
+				defer: true,
+			}
+		];
 		if (analytics?.clarityProjectId) {
 			scripts.push({
 				src: `https://www.clarity.ms/tag/${analytics.clarityProjectId}`,
@@ -62,21 +64,15 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 		}
 
 		const hasCustomIcon = Boolean(branding?.icon && branding.icon !== DEFAULT_APP_ICON);
-		const appName = branding?.name || "Elmo";
+		const appName = branding?.name || "NegencyGEO-Monitor";
 		const themeColor = hasCustomIcon ? "#000000" : ELMO_THEME_COLOR;
 		const appUrl = branding?.url ? branding.url.replace(/\/$/, "") : undefined;
 
 		const title = `${appName} - AI Search Optimization`;
 		const description = "Track and optimize your brand's visibility across AI models.";
-		// Don't pass `title` to /api/og — the renderer already shows the brand
-		// (Elmo logo or whitelabel icon + name), so a "Brand - AI Search Optimization"
-		// title would render redundantly. Pages that override og:image can supply
-		// a page-specific title via the query param.
 		const ogImageParams = new URLSearchParams({ description });
 		const ogImagePath = `/api/og?${ogImageParams.toString()}`;
 		const ogImage = appUrl ? `${appUrl}${ogImagePath}` : ogImagePath;
-		// og:logo is non-standard but used by some unfurlers (LinkedIn). Falls back
-		// to the absolute branding icon URL when available.
 		const ogLogo = (() => {
 			if (!branding?.icon) return undefined;
 			if (branding.icon.startsWith("http")) return branding.icon;
@@ -107,8 +103,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 				{ name: "twitter:image", content: ogImage },
 			],
 			links: [
-				// Whitelabel deployments render an icon + system-font name instead,
-				// so the wordmark font is never used there.
 				...(usesWordmarkFont(branding)
 					? [
 							{
@@ -116,25 +110,18 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 								as: "font",
 								type: "font/woff2",
 								href: titanOneFont,
-								// Inside a conditional spread the literal widens to `string`,
-								// which doesn't satisfy React's `CrossOrigin` union.
 								crossOrigin: "anonymous" as const,
 							},
 						]
 					: []),
 				{ rel: "stylesheet", href: appCss },
 				{ rel: "manifest", href: "/api/manifest" },
-				// Whitelabel uses its own icon URL for both favicon and iOS touch;
-				// Elmo default uses the committed SVG + opaque 180×180 PNG.
 				...(hasCustomIcon && branding?.icon
 					? [
 							{ rel: "icon", type: "image/png", href: branding.icon },
 							{ rel: "apple-touch-icon", href: branding.icon },
 						]
 					: [
-							// Icons live under /icons/ (not the root) so browsers' default
-							// probes for /favicon.ico and /apple-touch-icon.png 404 on
-							// whitelabel deployments instead of picking up Elmo assets.
 							{ rel: "icon", type: "image/svg+xml", href: "/icons/elmo-icon.svg" },
 							{ rel: "icon", type: "image/png", sizes: "96x96", href: "/icons/elmo-icon-96.png" },
 							{ rel: "icon", type: "image/x-icon", href: "/icons/favicon.ico" },
@@ -179,7 +166,9 @@ function RootComponent() {
 				<HeadContent />
 			</head>
 			<body className="font-sans antialiased">
-				<Outlet />
+				<LanguageProvider>
+					<Outlet />
+				</LanguageProvider>
 				<TanStackDevtools plugins={[queryDevtools]} />
 				<Scripts />
 			</body>

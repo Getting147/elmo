@@ -52,7 +52,9 @@ async function latestJobForBrand(brandId: string): Promise<JobRow | undefined> {
 	const result = await db.execute(sql`
 		SELECT id, state, data, output
 		FROM pgboss.job
-		WHERE name = ${ANALYZE_BRAND_QUEUE} AND data->>'brandId' = ${brandId}
+		WHERE name = ${ANALYZE_BRAND_QUEUE} 
+		  AND state != 'failed' 
+		  AND data->>'brandId' = ${brandId}
 		ORDER BY created_on DESC
 		LIMIT 1
 	`);
@@ -115,8 +117,10 @@ export async function getAnalyzeBrandStatus(brandId: string): Promise<AnalyzeBra
 			brandId,
 			jobId: job.id,
 			state: job.state,
+			output: job.output,
 		});
-		return { status: "failed", error: GENERIC_FAILURE };
+		const rawErr = (job.output as any)?.message || (job.output as any)?.error?.message;
+		return { status: "failed", error: rawErr ? `Analysis Error: ${rawErr}` : GENERIC_FAILURE };
 	}
 	return { status: "pending" };
 }

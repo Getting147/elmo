@@ -23,6 +23,8 @@ import { cn } from "@workspace/ui/lib/utils";
 import { Inbox, ListPlus, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { safeUUID } from "@/lib/uuid";
+
 export interface EditablePrompt {
 	id?: string;
 	_key: string;
@@ -34,7 +36,7 @@ export interface EditablePrompt {
 
 export function newPromptEntry(partial?: Partial<EditablePrompt>): EditablePrompt {
 	return {
-		_key: crypto.randomUUID(),
+		_key: safeUUID(),
 		value: partial?.value ?? "",
 		enabled: partial?.enabled ?? true,
 		tags: partial?.tags ?? [],

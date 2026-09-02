@@ -78,13 +78,14 @@ export async function provisionLocalOrg(input: { userId: string }): Promise<{ or
  * on inputs like `"---"` even though the JS engine handles it linearly.
  */
 export function slugifyOrgName(name: string): string {
-	const cleaned = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+	// 支持英文、数字以及中文字符 URL 友好编码
+	const cleaned = name.toLowerCase().trim().replace(/[\s\/\?#\[\]@!$&'()*+,;=]+/g, "-");
 	let start = 0;
 	while (start < cleaned.length && cleaned[start] === "-") start++;
 	let end = cleaned.length;
 	while (end > start && cleaned[end - 1] === "-") end--;
 	const slug = cleaned.slice(start, end);
-	return slug || "brand";
+	return slug || `brand-${Date.now().toString(36)}`;
 }
 
 /**

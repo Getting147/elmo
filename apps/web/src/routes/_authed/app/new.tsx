@@ -1,13 +1,8 @@
 /**
  * /app/new - Create a new brand (local mode only).
- *
- * Provisions a new organization + admin membership for the current user
- * and seeds the brand row with the supplied name + website. Whitelabel and
- * demo are blocked at both the loader (redirect to /app) and the server
- * function (canCreateBrands policy).
  */
 import { useState } from "react";
-import { createFileRoute, redirect, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
@@ -35,47 +30,69 @@ export const Route = createFileRoute("/_authed/app/new")({
 function NewBrandPage() {
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState("");
+	const [brandName, setBrandName] = useState("");
+	const [website, setWebsite] = useState("");
 	const navigate = useNavigate();
-	const router = useRouter();
 
-	const handleSubmit = async (formData: FormData) => {
+	const handleFormSubmit = async (e: React.FormEvent) => {
+		e.preventDefault();
+		if (!brandName.trim() || !website.trim()) {
+			setError("Please fill in both brand name and website.");
+			return;
+		}
+
 		setIsLoading(true);
 		setError("");
 
 		try {
-			const brandName = (formData.get("brandName") as string)?.trim() ?? "";
-			const website = (formData.get("website") as string)?.trim() ?? "";
-
-			const { brandId } = await createBrandWithOrgFn({
-				data: { brandName, website },
+			const formattedWebsite = website.startsWith("http") ? website : `https://${website}`;
+			const result = await createBrandWithOrgFn({
+				data: { brandName: brandName.trim(), website: formattedWebsite.trim() },
 			});
-			trackEvent("brand_created", { has_website: Boolean(website) });
+			trackEvent("brand_created", { has_website: Boolean(formattedWebsite) });
 
-			await router.invalidate();
-			await navigate({ to: "/app/$brand", params: { brand: brandId } });
+			// 直接进行原生页面跳转到新品牌的看板
+			window.location.href = `/app/${result.brandId}`;
 		} catch (err) {
-			setError(err instanceof Error ? err.message : "An error occurred");
-		} finally {
+			setError(err instanceof Error ? err.message : "An error occurred while creating brand");
 			setIsLoading(false);
 		}
 	};
 
 	return (
 		<FullPageCard title="Create a new brand" subtitle="Set up a brand to start tracking" showBackButton>
-			<form action={handleSubmit} className="space-y-4">
+			<form onSubmit={handleFormSubmit} className="space-y-4">
 				<div className="space-y-2">
 					<Label htmlFor="brandName">Brand name</Label>
-					<Input id="brandName" name="brandName" type="text" placeholder="Acme" required disabled={isLoading} />
+					<Input
+						id="brandName"
+						name="brandName"
+						type="text"
+						value={brandName}
+						onChange={(e) => setBrandName(e.target.value)}
+						placeholder="Acme"
+						required
+						disabled={isLoading}
+					/>
 				</div>
 
 				<div className="space-y-2">
 					<Label htmlFor="website">Website</Label>
-					<Input id="website" name="website" type="text" placeholder="example.com" required disabled={isLoading} />
+					<Input
+						id="website"
+						name="website"
+						type="text"
+						value={website}
+						onChange={(e) => setWebsite(e.target.value)}
+						placeholder="https://example.com"
+						required
+						disabled={isLoading}
+					/>
 				</div>
 
-				{error && <p className="text-sm text-destructive">{error}</p>}
+				{error && <p className="text-sm text-destructive font-medium">{error}</p>}
 
-				<Button type="submit" className="w-full" disabled={isLoading}>
+				<Button type="submit" className="w-full cursor-pointer" disabled={isLoading}>
 					{isLoading ? "Creating..." : "Create brand"}
 				</Button>
 			</form>

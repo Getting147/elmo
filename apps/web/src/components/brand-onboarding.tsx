@@ -41,7 +41,14 @@ export default function BrandOnboarding({ brandId, brandName }: BrandOnboardingP
 
 	return (
 		<FullPageCard title={`Setup ${brandName}`} subtitle="Configure your brand to get started" showBackButton={true}>
-			<form action={handleSubmit} className="space-y-4">
+			<form
+				onSubmit={async (e) => {
+					e.preventDefault();
+					const formData = new FormData(e.currentTarget);
+					await handleSubmit(formData);
+				}}
+				className="space-y-4"
+			>
 				<input type="hidden" name="brandId" value={brandId} />
 				<input type="hidden" name="brandName" value={brandName} />
 

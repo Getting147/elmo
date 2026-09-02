@@ -396,7 +396,13 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 
 	const existing = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	if (!existing) throw new BrandNotFoundError(input.brandId);
-	const websiteHost = new URL(existing.website).hostname.replace(/^www\./, "");
+	let websiteHost = "";
+	try {
+		const rawUrl = existing.website.startsWith("http") ? existing.website : `https://${existing.website}`;
+		websiteHost = new URL(rawUrl).hostname.replace(/^www\./, "");
+	} catch {
+		websiteHost = existing.website.replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+	}
 
 	await insertCompetitors({
 		brandId: input.brandId,

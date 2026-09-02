@@ -8,6 +8,8 @@ import { anthropicApi } from "./registry/anthropic-api";
 import { mistralApi } from "./registry/mistral-api";
 import { dataforseo } from "./registry/dataforseo";
 import { openrouter } from "./registry/openrouter";
+import { perplexityApi } from "./registry/perplexity-api";
+import { geminiApi } from "./registry/gemini-api";
 import { stub } from "./registry/stub";
 
 export type {
@@ -35,6 +37,8 @@ const providerMap: Record<string, Provider> = {
 	"mistral-api": mistralApi,
 	dataforseo,
 	openrouter,
+	"perplexity-api": perplexityApi,
+	"gemini-api": geminiApi,
 	stub,
 };
 
