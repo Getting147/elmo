@@ -20,7 +20,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { db } from "@workspace/lib/db/db";
 import { brandOpportunities, brands, competitors } from "@workspace/lib/db/schema";
 import { runStructuredCompletionPrompt } from "@workspace/lib/onboarding";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
 import { extractDomain } from "@/lib/domain-categories";
@@ -147,7 +147,9 @@ Hard rules — keep every recommendation realistic for a content/marketing team:
 - AFFORDABLE: prefer low-to-moderate-cost actions a content marketer can run — creating content, pitching editors for inclusion in existing roundups, authentic community participation, normal review drives. Do NOT make the primary action something expensive or specialist (clinical/lab testing, hiring experts, hosting expert AMAs, large paid sponsorships, PR retainers).
 - VERIFIABLE: you do not see the contents of any page, so never recommend on-page specifics like adding an FAQ, schema, or headings. Recommend earning or creating presence, not editing internals you can't inspect.
 - GROUNDED & SPECIFIC: tie every opportunity to the brand's actual data, and name the concrete surface (an actual site, roundup, community, or comparison angle) — never a vague "query cluster". Prefer surfaces where competitors are already cited but the brand is not. Never recommend a competitor-owned domain.
-- Queries marked "*" are branded (contain the brand name); unbranded category queries are where net-new visibility is won, so weight them higher.`;
+- Queries marked "*" are branded (contain the brand name); unbranded category queries are where net-new visibility is won, so weight them higher.
+
+OUTPUT LANGUAGE: write every human-readable string in the report (summary bullets, opportunity titles, "why" text, risk caveats) in the language requested in the TASK below. Keep category/surface names and brand/competitor names as-is (do not translate them).`;
 
 const TASK = `Using ONLY the data above, return the structured output:
 - summary: 3-5 bullets, one short sentence each — the competitive gaps, where AI sources its answers, and the through-line of the plan. Don't restate overall/per-platform visibility or define metrics.
@@ -471,17 +473,24 @@ async function generateValidReport(prompt: string): Promise<{ report: RawReport;
 // ============================================================================
 
 export const getOpportunitiesFn = createServerFn({ method: "GET" })
-	.validator(z.object({ brandId: z.string(), timezone: z.string().default("UTC") }))
+	.validator(z.object({ brandId: z.string(), timezone: z.string().default("UTC"), language: z.enum(["en", "zh"]).default("en") }))
 	.handler(async ({ data }): Promise<OpportunitiesResponse> => {
 		const session = await requireAuthSession();
 		await requireOrgAccess(session.user.id, data.brandId);
+		const language = data.language === "zh" ? "zh" : "en";
 
-		// Serve the most recent stored report while it's fresh. Every generation is
-		// kept (append-only); we regenerate only when the latest is stale.
+		// Serve the most recent stored report for THIS language while it's fresh.
+		// Every generation is kept (append-only); we regenerate only when the
+		// latest for that language is stale.
 		const [latest] = await db
 			.select()
 			.from(brandOpportunities)
-			.where(eq(brandOpportunities.brandId, data.brandId))
+			.where(
+				and(
+					eq(brandOpportunities.brandId, data.brandId),
+					eq(brandOpportunities.language, language),
+				),
+			)
 			.orderBy(desc(brandOpportunities.createdAt))
 			.limit(1);
 		const lastEvaluatedAt = latest?.createdAt.toISOString() ?? null;
@@ -497,7 +506,9 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 			return { report: null, reason: "insufficient-data", generatedFor: null, lastEvaluatedAt };
 		}
 
-		const prompt = `${GUIDANCE}\n\n=== BRAND DATA ===\n${digest.text}\n\n=== TASK ===\n${TASK}`;
+		const prompt = `${GUIDANCE}\n\n=== BRAND DATA ===\n${digest.text}\n\n=== TASK ===\n${TASK}\n\nOutput all human-readable text in: ${
+			language === "zh" ? "Simplified Chinese (简体中文)" : "English"
+		}.`;
 		const generated = await generateValidReport(prompt);
 		if (!generated) {
 			// Couldn't get a schema-valid report — serve the last good one if we have it.
@@ -509,7 +520,7 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 		const report = enrichReport(generated.report, digest);
 		const [savedReport] = await db
 			.insert(brandOpportunities)
-			.values({ brandId: data.brandId, report, model: generated.model })
+			.values({ brandId: data.brandId, report, model: generated.model, language })
 			.returning({ createdAt: brandOpportunities.createdAt });
 
 		return {

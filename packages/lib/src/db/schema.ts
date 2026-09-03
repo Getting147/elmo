@@ -186,6 +186,8 @@ export const brandOpportunities = pgTable(
 		report: json("report").notNull(),
 		/** Model/provider that generated it, when known. */
 		model: text("model"),
+		/** Report content language (en/zh) — generated from the UI language at request time. */
+		language: text("language").notNull().default("en"),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 	},
 	(table) => ({
