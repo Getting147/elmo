@@ -1,3 +1,4 @@
+import { analyzePosition } from './analyze-position.js';
 import * as Sentry from "@sentry/node";
 import type { Job } from "pg-boss";
 import { db } from "@workspace/lib/db/db";
@@ -176,65 +177,6 @@ function analyzeMentions(
 		.map((competitor) => competitor.name);
 
 	return { brandMentioned, competitorsMentioned };
-}
-
-/**
- * P0-1: 从 LLM 输出后置提取 answer_rank（品牌出现位次 1..N）+ answer_type（list/comparison/recommendation）。
- * 列举类判定规则（re 测试设计 F1-x）：
- *   - list: raw_output 含编号列表或换行分隔多行
- *   - comparison: raw_output 含对比结构（X vs Y / X 而 Y / compared to）
- *   - recommendation: raw_output 含 recommend / I recommend / Top N / 建议 / 推荐
- *   - 其余 → NULL（非列举类，不入首推率/平均位次分母）
- * answer_rank 计算：遍历 raw_output 文本每个"答案条目"，命中 brand/aliases 词条 → 取首推位次（min，1-indexed）；未命中 → NULL。
- * @param rawOutput LLM 返回的完整输出（JSONB 字段）
- * @param brandName 品牌名
- * @param brandAliases 品牌别名数组
- * @returns { answerRank, answerType }
- */
-function analyzePosition(rawOutput: unknown, brandName: string, brandAliases: string[]): { answerRank: number | null; answerType: 'list' | 'comparison' | 'recommendation' | null } {
-	if (!rawOutput || typeof rawOutput !== 'object' || rawOutput === null) return { answerRank: null, answerType: null };
-	const texts: string[] = [];
-	try {
-		const obj = rawOutput as Record<string, unknown>;
-		if (Array.isArray(obj.content)) {
-			for (const blk of obj.content) {
-				if (blk && typeof blk === 'object' && 'text' in blk && typeof (blk as Record<string, unknown>).text === 'string') texts.push((blk as Record<string, string>).text);
-			}
-		} else if (Array.isArray(obj.choices)) {
-			for (const ch of obj.choices) {
-				if (ch && typeof ch === 'object' && 'message' in ch) {
-					const m = (ch as Record<string, unknown>).message;
-					if (m && typeof m === 'object' && 'content' in m) {
-						const c = (m as Record<string, unknown>).content;
-						if (typeof c === 'string') texts.push(c);
-						else if (Array.isArray(c)) for (const cc of c) if (typeof cc === 'string') texts.push(cc);
-					}
-				}
-			}
-		} else if ('text' in obj && typeof (obj as Record<string, unknown>).text === 'string') {
-			texts.push((obj as Record<string, string>).text);
-		}
-	} catch { /* ignore */ }
-	if (texts.length === 0) return { answerRank: null, answerType: null };
-	const joined = texts.join('
-
-');
-	const lowered = joined.toLowerCase();
-	const aliases = [brandName, ...brandAliases].map((a) => a.toLowerCase());
-	let answerType: 'list' | 'comparison' | 'recommendation' | null = null;
-	if (/(
-\s*\d+[.)、\]])|<ol[\s>]/i.test(joined)) answerType = 'list';
-	else if (/vs\.?|compared to|相比|对比| versus /i.test(joined) || /<table[\s>]/i.test(joined)) answerType = 'comparison';
-	else if (/recommend|i recommend|top \d+|建议|推荐/i.test(joined)) answerType = 'recommendation';
-	if (!answerType) return { answerRank: null, answerType: null };
-	const segments = joined.split(/(?:
-\s*(?:\d+[.)、\]]|[【])|
-{2,})/);
-	let answerRank: number | null = null;
-	for (let i = 0; i < segments.length; i++) {
-		if (aliases.some((a) => segments[i].toLowerCase().includes(a))) { answerRank = i + 1; break; }
-	}
-	return { answerRank, answerType };
 }
 
 async function savePromptRun(
