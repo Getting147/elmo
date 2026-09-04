@@ -58,6 +58,7 @@ import { Route as AuthedAppBrandSettingsBrandRouteImport } from './routes/_authe
 import { Route as AuthedAppBrandSettingsCompetitorsRouteImport } from './routes/_authed/app/$brand/settings/competitors'
 import { Route as AuthedAppBrandSettingsLlmsRouteImport } from './routes/_authed/app/$brand/settings/llms'
 import { Route as AuthedAppBrandSettingsMembersRouteImport } from './routes/_authed/app/$brand/settings/members'
+import { Route as AuthedAppBrandSettingsProfileRouteImport } from './routes/_authed/app/$brand/settings/profile'
 import { Route as AuthedAppBrandSettingsPromptsRouteImport } from './routes/_authed/app/$brand/settings/prompts'
 import { Route as ApiPlausibleJsScriptIndexRouteImport } from './routes/api/plausible/js/script/index'
 import { Route as ApiV1PromptsPromptIdSnapshotRouteImport } from './routes/api/v1/prompts/$promptId/snapshot'
@@ -325,6 +326,12 @@ const AuthedAppBrandSettingsMembersRoute =
     path: '/settings/members',
     getParentRoute: () => AuthedAppBrandRoute,
   } as any)
+const AuthedAppBrandSettingsProfileRoute =
+  AuthedAppBrandSettingsProfileRouteImport.update({
+    id: '/settings/profile',
+    path: '/settings/profile',
+    getParentRoute: () => AuthedAppBrandRoute,
+  } as any)
 const AuthedAppBrandSettingsPromptsRoute =
   AuthedAppBrandSettingsPromptsRouteImport.update({
     id: '/settings/prompts',
@@ -415,6 +422,7 @@ export interface FileRoutesByFullPath {
   '/app/$brand/settings/competitors': typeof AuthedAppBrandSettingsCompetitorsRoute
   '/app/$brand/settings/llms': typeof AuthedAppBrandSettingsLlmsRoute
   '/app/$brand/settings/members': typeof AuthedAppBrandSettingsMembersRoute
+  '/app/$brand/settings/profile': typeof AuthedAppBrandSettingsProfileRoute
   '/app/$brand/settings/prompts': typeof AuthedAppBrandSettingsPromptsRoute
   '/api/v1/prompts/$promptId/snapshot': typeof ApiV1PromptsPromptIdSnapshotRoute
   '/app/$brand/prompts/': typeof AuthedAppBrandPromptsIndexRoute
@@ -469,6 +477,7 @@ export interface FileRoutesByTo {
   '/app/$brand/settings/competitors': typeof AuthedAppBrandSettingsCompetitorsRoute
   '/app/$brand/settings/llms': typeof AuthedAppBrandSettingsLlmsRoute
   '/app/$brand/settings/members': typeof AuthedAppBrandSettingsMembersRoute
+  '/app/$brand/settings/profile': typeof AuthedAppBrandSettingsProfileRoute
   '/app/$brand/settings/prompts': typeof AuthedAppBrandSettingsPromptsRoute
   '/api/v1/prompts/$promptId/snapshot': typeof ApiV1PromptsPromptIdSnapshotRoute
   '/app/$brand/prompts': typeof AuthedAppBrandPromptsIndexRoute
@@ -528,6 +537,7 @@ export interface FileRoutesById {
   '/_authed/app/$brand/settings/competitors': typeof AuthedAppBrandSettingsCompetitorsRoute
   '/_authed/app/$brand/settings/llms': typeof AuthedAppBrandSettingsLlmsRoute
   '/_authed/app/$brand/settings/members': typeof AuthedAppBrandSettingsMembersRoute
+  '/_authed/app/$brand/settings/profile': typeof AuthedAppBrandSettingsProfileRoute
   '/_authed/app/$brand/settings/prompts': typeof AuthedAppBrandSettingsPromptsRoute
   '/api/v1/prompts/$promptId/snapshot': typeof ApiV1PromptsPromptIdSnapshotRoute
   '/_authed/app/$brand/prompts/': typeof AuthedAppBrandPromptsIndexRoute
@@ -587,6 +597,7 @@ export interface FileRouteTypes {
     | '/app/$brand/settings/competitors'
     | '/app/$brand/settings/llms'
     | '/app/$brand/settings/members'
+    | '/app/$brand/settings/profile'
     | '/app/$brand/settings/prompts'
     | '/api/v1/prompts/$promptId/snapshot'
     | '/app/$brand/prompts/'
@@ -641,6 +652,7 @@ export interface FileRouteTypes {
     | '/app/$brand/settings/competitors'
     | '/app/$brand/settings/llms'
     | '/app/$brand/settings/members'
+    | '/app/$brand/settings/profile'
     | '/app/$brand/settings/prompts'
     | '/api/v1/prompts/$promptId/snapshot'
     | '/app/$brand/prompts'
@@ -699,6 +711,7 @@ export interface FileRouteTypes {
     | '/_authed/app/$brand/settings/competitors'
     | '/_authed/app/$brand/settings/llms'
     | '/_authed/app/$brand/settings/members'
+    | '/_authed/app/$brand/settings/profile'
     | '/_authed/app/$brand/settings/prompts'
     | '/api/v1/prompts/$promptId/snapshot'
     | '/_authed/app/$brand/prompts/'
@@ -1081,6 +1094,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAppBrandSettingsMembersRouteImport
       parentRoute: typeof AuthedAppBrandRoute
     }
+    '/_authed/app/$brand/settings/profile': {
+      id: '/_authed/app/$brand/settings/profile'
+      path: '/settings/profile'
+      fullPath: '/app/$brand/settings/profile'
+      preLoaderRoute: typeof AuthedAppBrandSettingsProfileRouteImport
+      parentRoute: typeof AuthedAppBrandRoute
+    }
     '/_authed/app/$brand/settings/prompts': {
       id: '/_authed/app/$brand/settings/prompts'
       path: '/settings/prompts'
@@ -1164,6 +1184,7 @@ interface AuthedAppBrandRouteChildren {
   AuthedAppBrandSettingsCompetitorsRoute: typeof AuthedAppBrandSettingsCompetitorsRoute
   AuthedAppBrandSettingsLlmsRoute: typeof AuthedAppBrandSettingsLlmsRoute
   AuthedAppBrandSettingsMembersRoute: typeof AuthedAppBrandSettingsMembersRoute
+  AuthedAppBrandSettingsProfileRoute: typeof AuthedAppBrandSettingsProfileRoute
   AuthedAppBrandSettingsPromptsRoute: typeof AuthedAppBrandSettingsPromptsRoute
   AuthedAppBrandPromptsIndexRoute: typeof AuthedAppBrandPromptsIndexRoute
   AuthedAppBrandSettingsIndexRoute: typeof AuthedAppBrandSettingsIndexRoute
@@ -1185,6 +1206,7 @@ const AuthedAppBrandRouteChildren: AuthedAppBrandRouteChildren = {
     AuthedAppBrandSettingsCompetitorsRoute,
   AuthedAppBrandSettingsLlmsRoute: AuthedAppBrandSettingsLlmsRoute,
   AuthedAppBrandSettingsMembersRoute: AuthedAppBrandSettingsMembersRoute,
+  AuthedAppBrandSettingsProfileRoute: AuthedAppBrandSettingsProfileRoute,
   AuthedAppBrandSettingsPromptsRoute: AuthedAppBrandSettingsPromptsRoute,
   AuthedAppBrandPromptsIndexRoute: AuthedAppBrandPromptsIndexRoute,
   AuthedAppBrandSettingsIndexRoute: AuthedAppBrandSettingsIndexRoute,

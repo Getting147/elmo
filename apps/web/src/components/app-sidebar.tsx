@@ -9,6 +9,7 @@ import {
 	IconTarget,
 	IconLink,
 	IconBuilding,
+	IconPackage,
 	IconBuildings,
 	IconListDetails,
 	IconCpu,
@@ -162,6 +163,11 @@ export function AppSidebar({
 						title: t?.brandSettings || "品牌档案",
 						url: "/settings/brand",
 						icon: IconBuilding,
+					},
+					{
+						title: t?.profileSettings || "产品线与背书",
+						url: "/settings/profile",
+						icon: IconPackage,
 					},
 					{
 						title: t?.competitorSettings || "竞品对标",
