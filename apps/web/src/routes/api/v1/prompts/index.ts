@@ -8,6 +8,7 @@ import { prompts, brands } from "@workspace/lib/db/schema";
 import { eq, count, desc } from "drizzle-orm";
 import { z } from "zod";
 import { sanitizeUserTags, computeSystemTags } from "@workspace/lib/tag-utils";
+import { TARGET_MARKETS } from "@workspace/lib/markets";
 import { createPromptJobScheduler } from "@/lib/job-scheduler";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
 
@@ -15,6 +16,8 @@ const createPromptBody = z.object({
 	brandId: z.string().trim().min(1, "brandId is required"),
 	value: z.string().trim().min(1, "value must be a non-empty string"),
 	tags: z.array(z.string()).optional(),
+	/** P0-3: target market (V2 海外 7 市场; 不传/传 null = 不限). 不在枚举 → 422. */
+	market: z.enum(TARGET_MARKETS).nullable().optional(),
 });
 
 export const Route = createFileRoute("/api/v1/prompts/")({
@@ -42,6 +45,8 @@ export const Route = createFileRoute("/api/v1/prompts/")({
 							enabled: prompts.enabled,
 							tags: prompts.tags,
 							systemTags: prompts.systemTags,
+							// P0-3: market column included in list response
+							market: prompts.market,
 							createdAt: prompts.createdAt,
 							updatedAt: prompts.updatedAt,
 						})
@@ -62,7 +67,7 @@ export const Route = createFileRoute("/api/v1/prompts/")({
 				body: createPromptBody,
 				status: 201,
 				handle: async ({ body }) => {
-					const { brandId, value, tags } = body;
+					const { brandId, value, tags, market } = body;
 
 					const brandInfo = await db.select().from(brands).where(eq(brands.id, brandId)).limit(1);
 					if (brandInfo.length === 0) {
@@ -75,7 +80,15 @@ export const Route = createFileRoute("/api/v1/prompts/")({
 
 					const [newPrompt] = await db
 						.insert(prompts)
-						.values({ brandId, value, tags: userTags, systemTags, enabled: true })
+						.values({
+							brandId,
+							value,
+							tags: userTags,
+							systemTags,
+							enabled: true,
+							// P0-3: market persisted (null = 不限 default)
+							market: market ?? null,
+						})
 						.returning();
 
 					await createPromptJobScheduler(newPrompt.id);

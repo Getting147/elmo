@@ -14,6 +14,7 @@ import {
 import { eq } from "drizzle-orm";
 import { RUNS_PER_PROMPT, getDefaultDelayHours } from "@workspace/lib/constants";
 import { failureBackoffHours } from "@workspace/lib/run-backoff";
+import { buildInjectedValue } from "@workspace/lib/markets";
 import {
 	getProvider,
 	parseScrapeTargets,
@@ -54,6 +55,10 @@ export const PROMPT_JOB_OPTIONS = {
 	expireInSeconds: 90 * 60,
 } as const;
 
+/**
+ * P0-3: target market → readable label → buildInjectedValue 已迁至 packages/lib/markets
+ * worker 仅 import 共享实现（避免双写漂移）。labels 一处改全处生效。
+ */
 interface PromptContext {
 	prompt: typeof prompts.$inferSelect;
 	brand: Brand;
@@ -192,6 +197,8 @@ async function savePromptRun(
 	competitorsMentioned: string[],
 	brandName: string,
 	brandAliases: string[],
+	market: string | null,
+	injectedValue: string | null,
 ): Promise<{ id: string; createdAt: Date }> {
 	const position = analyzePosition(rawOutput, brandName, brandAliases);
 	const [result] = await db
@@ -209,6 +216,9 @@ async function savePromptRun(
 			competitorsMentioned,
 			answerRank: position.answerRank,
 			answerType: position.answerType,
+			// P0-3: market snapshot + actual prompt string sent to provider
+			market,
+			injectedValue,
 		})
 		.returning({ id: promptRuns.id, createdAt: promptRuns.createdAt });
 
@@ -222,6 +232,7 @@ async function saveCitations(
 	model: string,
 	extracted: Citation[],
 	createdAt: Date,
+	market: string | null,
 ): Promise<void> {
 	if (extracted.length === 0) return;
 
@@ -235,6 +246,8 @@ async function saveCitations(
 			domain: c.domain,
 			title: c.title || null,
 			citationIndex: c.citationIndex,
+			// P0-3: market propagated from prompt_run
+			market,
 			createdAt,
 		})),
 	);
@@ -243,6 +256,8 @@ async function saveCitations(
 async function runModelIteration({
 	promptId,
 	promptValue,
+	market,
+	injectedValue,
 	brand,
 	competitorsList,
 	config,
@@ -251,6 +266,8 @@ async function runModelIteration({
 }: {
 	promptId: string;
 	promptValue: string;
+	market: string | null;
+	injectedValue: string;
 	brand: Brand;
 	competitorsList: Competitor[];
 	config: ModelConfig;
@@ -260,7 +277,8 @@ async function runModelIteration({
 	const logPrefix = `[${config.model}_${runIndex}]`;
 
 	try {
-		const result = await providerImpl.run(config.model, promptValue, {
+		// P0-3: provider 实际收到 injectedValue（含市场前缀），非原始 promptValue
+		const result = await providerImpl.run(config.model, injectedValue, {
 			webSearch: config.webSearch,
 			version: config.version,
 		});
@@ -292,10 +310,12 @@ async function runModelIteration({
 			competitorsMentioned,
 			brand.name,
 			brand.aliases ?? [],
+			market,
+			injectedValue,
 		);
 		console.log(`${logPrefix} Saved prompt run ${promptRunId}`);
 
-		await saveCitations(promptRunId, promptId, brand.id, config.model, extractedCitations, createdAt);
+		await saveCitations(promptRunId, promptId, brand.id, config.model, extractedCitations, createdAt, market);
 	} catch (error) {
 		// A single run's failure doesn't fail the job, so report it here to keep
 		// per-provider failure rates visible.
@@ -336,6 +356,10 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 
 		const { prompt, brand, competitors: competitorsList } = context;
 
+		// P0-3: market snapshot from prompt + injectedValue computed once per cycle
+		const market = prompt.market ?? null;
+		const injectedValue = buildInjectedValue(prompt.value, market);
+
 		// Check if prompt and brand are enabled
 		if (!prompt.enabled || !brand.enabled) {
 			console.log(`Prompt ${promptId} or brand ${brand.id} is disabled, skipping but rescheduling`);
@@ -361,6 +385,8 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 					runModelIteration({
 						promptId,
 						promptValue: prompt.value,
+						market,
+						injectedValue,
 						brand,
 						competitorsList,
 						config,
