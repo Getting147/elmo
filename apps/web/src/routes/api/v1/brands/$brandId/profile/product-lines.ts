@@ -1,13 +1,12 @@
 /**
  * /api/v1/brands/:brandId/profile/product-lines — 产品线逐条 CRUD（Epic A-1）
  *
- * POST  新增产品线
- * PUT   批量更新（body.productLines = [{id, name, category, ...}]，按 id 走）
- * DELETE 批量删除（body.ids = ["bpl_xxx", ...]）
+ * POST   新增（id 自动生成 `bpl_<uuid>`）
+ * PUT    单条更新（body.id 必填；不传 → 422）
+ * DELETE 单条删除（body.id 必填；不传 → 422；行不存在 → 404）
  *
  * 设计：B3 查重 = warning 不 422（B3 评审调整）
- * 字段约束：A1-2（name+differentiators 必填，targetAudience 必填 = 完整定义三件套）
- *          US-A02：name/category/coreParams/differentiators/targetAudience/position
+ * 字段约束：A1-2（name+differentiators 必填，targetAudience 必填）
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
@@ -15,7 +14,7 @@ import {
 	brandProductLines,
 	brands,
 } from "@workspace/lib/db/schema";
-import { eq, inArray, asc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
@@ -29,9 +28,18 @@ const PRODUCT_LINE_BASE = {
 	position: z.number().int().default(0),
 };
 
-const createProductLineBody = z.object({
-	brandId: z.string().trim().min(1).optional(), // 可省略（path 优先）
+const createBody = z.object({
+	brandId: z.string().trim().min(1).optional(),
 	...PRODUCT_LINE_BASE,
+});
+
+const updateBody = z.object({
+	id: z.string().regex(/^bpl_/, "id must start with bpl_"),
+	...PRODUCT_LINE_BASE,
+});
+
+const deleteBody = z.object({
+	id: z.string().regex(/^bpl_/, "id must start with bpl_"),
 });
 
 // B3 查重：lower(trim(differentiators)) 重复检测（warning 不 422）
@@ -39,7 +47,7 @@ async function findDuplicateDifferentiator(
 	brandId: string,
 	differentiators: string,
 	excludeId?: string,
-): Promise<{ id: string; differentiators: string } | null> {
+): Promise<{ id: string } | null> {
 	const norm = differentiators.trim().toLowerCase();
 	const rows = await db
 		.select({ id: brandProductLines.id, differentiators: brandProductLines.differentiators })
@@ -59,20 +67,39 @@ async function ensureBrandExists(brandId: string): Promise<void> {
 	}
 }
 
+async function ensureRowBelongsToBrand(
+	brandId: string,
+	id: string,
+): Promise<void> {
+	const row = await db
+		.select({ id: brandProductLines.id, brandId: brandProductLines.brandId })
+		.from(brandProductLines)
+		.where(eq(brandProductLines.id, id))
+		.limit(1);
+	if (row.length === 0) {
+		throw new ApiError(404, "Not Found", `Product line "${id}" not found.`);
+	}
+	if (row[0].brandId !== brandId) {
+		throw new ApiError(
+			403,
+			"Forbidden",
+			`Product line "${id}" does not belong to brand "${brandId}".`,
+		);
+	}
+}
+
 export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-lines")({
 	server: {
 		handlers: {
 			POST: createApiHandler({
-				body: createProductLineBody,
+				body: createBody,
 				status: 201,
 				handle: async ({ params, body }) => {
 					const { brandId } = params;
 					await ensureBrandExists(brandId);
 
-					// B3 查重 warning（不阻塞，但响应里给警告）
 					const dup = await findDuplicateDifferentiator(brandId, body.differentiators);
 
-					// id 自动生成（PG id text PK 无 default；crypto.randomUUID() 不可预测）
 					const id = `bpl_${randomUUID()}`;
 					const [row] = await db
 						.insert(brandProductLines)
@@ -90,7 +117,6 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 
 					return {
 						...row,
-						// A1-3 同 brand 不同 id 不串 → 直接返回新 id 确认
 						warnings: dup
 							? [
 									{
@@ -100,6 +126,63 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 								]
 							: [],
 					};
+				},
+			}),
+
+			PUT: createApiHandler({
+				body: updateBody,
+				handle: async ({ params, body }) => {
+					const { brandId } = params;
+					await ensureBrandExists(brandId);
+					await ensureRowBelongsToBrand(brandId, body.id);
+
+					const dup = await findDuplicateDifferentiator(
+						brandId,
+						body.differentiators,
+						body.id, // 排除自己
+					);
+
+					const [row] = await db
+						.update(brandProductLines)
+						.set({
+							name: body.name,
+							category: body.category ?? null,
+							coreParams: body.coreParams ?? null,
+							differentiators: body.differentiators,
+							targetAudience: body.targetAudience,
+							position: body.position,
+							// updated_at 自动通过 Drizzle .$onUpdate 维护（A1-10 断言）
+						})
+						.where(eq(brandProductLines.id, body.id))
+						.returning();
+
+					return {
+						...row,
+						warnings: dup
+							? [
+									{
+										field: "differentiators",
+										message: `Duplicate differentiators detected (existing id=${dup.id})`,
+									},
+								]
+							: [],
+					};
+				},
+			}),
+
+			DELETE: createApiHandler({
+				body: deleteBody,
+				handle: async ({ params, body }) => {
+					const { brandId } = params;
+					await ensureBrandExists(brandId);
+					await ensureRowBelongsToBrand(brandId, body.id);
+
+					const [row] = await db
+						.delete(brandProductLines)
+						.where(eq(brandProductLines.id, body.id))
+						.returning({ id: brandProductLines.id });
+
+					return { deleted: row[0].id };
 				},
 			}),
 		},
