@@ -171,6 +171,7 @@
     "on average to track changes in AI model responses over time.": "自动评估一次，以跟踪 AI 模型回答随时间的变化。",
     "No evaluations have been run yet.": "尚未执行任何评估。",
     "avg": "均值",
+    "Reports": "诊断报告",
     "Top cited subreddits — which Reddit communities AI models reference when answering your prompts": "被引最多的 Reddit 社区 —— AI 回答您的提示词时参考了哪些论坛讨论"
   };
 
