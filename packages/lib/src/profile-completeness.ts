@@ -78,11 +78,15 @@ export function computeCompleteness(input: CompletenessInput): CompletenessResul
 		: 0;
 	const credentialScore = isCredentialComplete(input.credentials) ? 1 : 0;
 
-	// 缺类识别
+	// 缺类识别：credential 无有效第三方公开背书（0 行或全自证）= 该类缺失
+	// （全自证背书对 E-E-A-T 无价值，与 0 行同语义——测试 A1-7 口径）
+	const tpCredentialCount = input.credentials.filter(
+		(c) => c.isThirdPartyPublic === true,
+	).length;
 	const missing: string[] = [];
 	if (input.brand.competitorCount === 0 && !input.brand.website) missing.push("brand");
 	if (input.productLines.length === 0) missing.push("product_line");
-	if (input.credentials.length === 0) missing.push("credential");
+	if (input.credentials.length === 0 || tpCredentialCount === 0) missing.push("credential");
 
 	// 缺类归一化：缺失类的权重 = 0；分母 = present weights
 	const presentWeights: Array<[number, number]> = [];
