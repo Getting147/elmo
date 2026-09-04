@@ -11,21 +11,21 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"@sentry/node": "^10.69.0",
+		"@sentry/node": "^10.72.0",
 		"@workspace/deployment": "workspace:*",
 		"@workspace/lib": "workspace:*",
 		"@workspace/whitelabel": "workspace:*",
-		"auth0": "^6.1.0",
+		"auth0": "^6.3.0",
 		"drizzle-orm": "^0.45.2",
-		"pg": "^8.22.0",
-		"pg-boss": "^12.26.4",
-		"posthog-node": "^5.47.3"
+		"pg": "^8.23.0",
+		"pg-boss": "^12.29.0",
+		"posthog-node": "^5.51.4"
 	},
 	"devDependencies": {
-		"@types/node": "^26.1.2",
-		"@types/pg": "^8.20.3",
-		"tsx": "^4.23.1",
+		"@types/node": "^26.4.0",
+		"@types/pg": "^8.23.1",
+		"tsx": "^4.23.13",
 		"typescript": "^7.0.2",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	}
 }
