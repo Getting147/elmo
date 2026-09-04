@@ -34,8 +34,7 @@ const credentialBase = {
 		.regex(yearPattern, "year must be YYYY or YYYY-YYYY (optional 年/至今)")
 		.optional(),
 	isThirdPartyPublic: z.boolean({
-		required_error: "is_third_party_public is required (A1-6)",
-		invalid_type_error: "is_third_party_public must be boolean (A1-6)",
+		message: "is_third_party_public is required and must be boolean (A1-6)",
 	}),
 	url: z.string().url("url must be valid URL").optional(),
 	position: z.number().int().default(0),
@@ -144,12 +143,15 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/credential
 					await ensureBrandExists(brandId);
 					await ensureRowBelongsToBrand(brandId, body.id);
 
-					const [row] = await db
+					const deleted = await db
 						.delete(brandCredentials)
 						.where(eq(brandCredentials.id, body.id))
 						.returning({ id: brandCredentials.id });
 
-					return { deleted: row[0].id };
+					if (deleted.length === 0 || !deleted[0]) {
+						throw new ApiError(500, "Internal Error", "Delete returned no row.");
+					}
+					return { deleted: deleted[0].id };
 				},
 			}),
 		},

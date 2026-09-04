@@ -56,8 +56,7 @@ const credentialBase = {
 		.regex(yearPattern, "year must be YYYY or YYYY-YYYY (optional 年/至今)")
 		.optional(),
 	isThirdPartyPublic: z.boolean({
-		required_error: "is_third_party_public is required (A1-6)",
-		invalid_type_error: "is_third_party_public must be boolean (A1-6)",
+		message: "is_third_party_public is required and must be boolean (A1-6)",
 	}),
 	url: z.string().url("url must be valid URL").optional(),
 	position: z.number().int().default(0),

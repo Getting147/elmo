@@ -177,12 +177,15 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 					await ensureBrandExists(brandId);
 					await ensureRowBelongsToBrand(brandId, body.id);
 
-					const [row] = await db
+					const deleted = await db
 						.delete(brandProductLines)
 						.where(eq(brandProductLines.id, body.id))
 						.returning({ id: brandProductLines.id });
 
-					return { deleted: row[0].id };
+					if (deleted.length === 0 || !deleted[0]) {
+						throw new ApiError(500, "Internal Error", "Delete returned no row.");
+					}
+					return { deleted: deleted[0].id };
 				},
 			}),
 		},
