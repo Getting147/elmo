@@ -3,8 +3,8 @@
     // 基础导航
     "Overview": "概览总览",
     "Visibility": "AI 可见度",
-    "Share of Voice": "声量份额 (SOV)",
-    "Query Fan-Out": "Query 联网检索",
+    "Share of Voice": "声量份额（SOV）",
+    "Query Fan-Out": "联网检索发散",
     "Citations": "信源引用分析",
     "Opportunities": "增长机会地图",
     "Diagnostic Reports": "9章诊断报告",
@@ -69,7 +69,7 @@
     "All models": "全部 AI 引擎",
     "Tags": "全部标签",
     "Last 30 days": "最近30天",
-    "Export (PNG)": "导出 (PNG)",
+    "Export (PNG)": "导出（PNG）",
     "Mentions": "提及次数",
     "Share": "声量占比",
     "New Pages": "新增页面",
@@ -133,12 +133,80 @@
     "Total Citations": "总引用数",
     "The percentage of all citations that link to your brand's domain. A higher share means AI models are more likely to reference your content.": "所有引用中链接到品牌自身域名的占比。占比越高，说明 AI 越倾向于引用您的内容。",
     "The number of distinct domains cited across all prompt evaluations in this period.": "本周期内所有提示词评估中被引用的不同域名数量。",
-    "The total external websites cited by AI models across prompt evaluations.": "AI 在提示词评估中引用的外部网站总数。"
+    "The total external websites cited by AI models across prompt evaluations.": "AI 在提示词评估中引用的外部网站总数。",
+    // ===== #114 追加：图表页/看板残留清零（2026-09-04）=====
+    "prompts tracked": "追踪中的提示词",
+    "evaluations (30d)": "评估次数（近 30 天）",
+    "run frequency": "采样频率",
+    "last updated": "最后更新",
+    "Just now": "刚刚",
+    "Never": "从未",
+    "View Details": "查看详情",
+    "% Visibility": "% 可见度",
+    "prompts": "个提示词",
+    "runs": "次采样",
+    "citations": "条引用",
+    "across": "在",
+    "month": "1 个月",
+    "week": "1 周",
+    "2 weeks": "2 周",
+    "2 months": "2 个月",
+    "3 months": "3 个月",
+    "24 hours": "24 小时",
+    "How AI citations have shifted over the past": "过去",
+    "See how LLMs are evaluating prompts related to your brand.": "了解各 AI 引擎如何评估与您品牌相关的提示词。",
+    "How often AI engines mention you versus your competitors.": "AI 引擎提及您与竞品的频率对比。",
+    "See which sources LLMs cite when responding to your prompts.": "查看 AI 回答您的提示词时引用了哪些来源。",
+    "What to create, pitch, and seed to earn more AI citations — generated from your tracked answer data.": "该创造、争取与布点哪些内容以赢得更多 AI 引用 —— 由您的引用监测数据生成。",
+    "Recent Changes": "近期变化",
+    "Citation Categories": "引用类型分布",
+    "Citation Page Types": "引用页面类型分布",
+    "Top Cited Domains": "被引最多的域名",
+    "Top Cited URLs": "被引最多的页面",
+    "Which domains LLMs reference most when responding to your prompts": "回答您的提示词时，AI 最常参考的域名",
+    "Individual pages cited by LLMs": "AI 实际逐条引用的页面",
+    "Total number of unique prompts being monitored for AI visibility across ChatGPT, Claude, and Gemini.": "正在监控的独立提示词总数，覆盖 ChatGPT、Claude 与 Gemini 等 AI 引擎。",
+    "Total number of times we have evaluated prompts against LLMs in the last 30 days. Each prompt is evaluated multiple times across different AI models.": "近 30 天对提示词执行的评估总次数。每个提示词都会在不同 AI 模型上多次评估。",
+    "Prompts are automatically evaluated every": "提示词将每",
+    "on average to track changes in AI model responses over time.": "自动评估一次，以跟踪 AI 模型回答随时间的变化。",
+    "No evaluations have been run yet.": "尚未执行任何评估。"
   };
 
   const EN_DICT = {};
   for (let k in ZH_DICT) {
     EN_DICT[ZH_DICT[k]] = k;
+  }
+
+  const MONTH_MAP = { Jan: "1月", Feb: "2月", Mar: "3月", Apr: "4月", May: "5月", Jun: "6月", Jul: "7月", Aug: "8月", Sep: "9月", Oct: "10月", Nov: "11月", Dec: "12月" };
+
+  // 动态文本通道：日期轴 / 相对时间 / 采样频率 / 计数句（zh 方向，en 时按 __geoOrig 还原）
+  function applyPatterns(text) {
+    let t = text;
+    // 采样频率：~1w 2d 3h / ~2d / ~24h / 24h（先组合后单形式）
+    t = t.replace(/~(\d+)w(?:\s+(\d+)d)?(?:\s+(\d+)h)?/g, (m, w, d, h) => "约 " + w + " 周" + (d ? " " + d + " 天" : "") + (h ? " " + h + " 小时" : ""));
+    t = t.replace(/~(\d+)d/g, "约 $1 天");
+    t = t.replace(/~(\d+)h/g, "约 $1 小时");
+    // 相对时间：5m ago / 3h ago / 2d ago（必须先于裸小时替换）
+    t = t.replace(/\b(\d+)m ago\b/g, "$1 分钟前");
+    t = t.replace(/\b(\d+)h ago\b/g, "$1 小时前");
+    t = t.replace(/\b(\d+)d ago\b/g, "$1 天前");
+    t = t.replace(/(?<!\d)(\d+)h(?!\d)/g, "$1 小时");
+    // 计数句：X → Y citations across N prompts / citations across N prompts / X → Y citations
+    t = t.replace(/(\d+(?:,\d+)*)\s*→\s*(\d+(?:,\d+)*) citations? across (\d+) prompts?/g, "$1 → $2 条引用（覆盖 $3 个提示词）");
+    t = t.replace(/^citations across (\d+) prompts?$/g, "共 $1 个提示词的引用");
+    t = t.replace(/(\d+(?:,\d+)*)\s*→\s*(\d+(?:,\d+)*) citations?/g, "$1 → $2 条引用");
+    // 引用占比句：X accounts for Y% of all citations（跨节点片段）
+    t = t.replace(/\baccounts for\b/g, "贡献了");
+    t = t.replace(/\bof all citations\b/g, "的全部引用");
+    // 与 N 家竞品对比（SoV 概览行）
+    t = t.replace(/\band (\d+) competitors?\.?/g, "，与 $1 家竞品。");
+    // 动态天数周期：45 days
+    t = t.replace(/\b(\d+) days\b/g, "$1 天");
+    // 图表日期轴：Aug 5 / Aug 5, 2026 / Sep 4 2026
+    t = t.replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? (\d{1,2})(?:,? (\d{4}))?\b/g, (m, mo, d, y) => y ? y + "年" + MONTH_MAP[mo] + Number(d) + "日" : MONTH_MAP[mo] + Number(d) + "日");
+    // 同节点百分比可见度：32% Visibility
+    t = t.replace(/(\d+(?:\.\d+)?%) Visibility/g, "$1 可见度");
+    return t;
   }
 
   function getLang() {
@@ -154,6 +222,7 @@
       const txt = node.nodeValue.trim();
       if (txt && dict[txt] && node.nodeValue !== dict[txt]) {
         node.nodeValue = node.nodeValue.replace(txt, dict[txt]);
+        node.__geoDict = true;
       }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       // 避免修改表单输入框内部值
@@ -172,11 +241,37 @@
     }
   }
 
+  // 动态 pattern 通道：zh 时基于首次原文换算（防重复叠加）；en 时还原首次原文
+  function patternPass(root, lang) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.__geoDict) continue;
+      if (lang === "zh") {
+        if (node.__geoOrig === undefined) {
+          node.__geoOrig = node.nodeValue;
+        } else if (node.nodeValue !== node.__geoOrig && /[A-Za-z]/.test(node.nodeValue)) {
+          // React 复用文本节点更新过原文（characterData），重新锚定防陈旧覆盖
+          node.__geoOrig = node.nodeValue;
+        }
+        const base = node.__geoOrig;
+        const out = applyPatterns(base);
+        if (out !== node.nodeValue) node.nodeValue = out;
+      } else {
+        if (node.__geoOrig !== undefined && node.nodeValue !== node.__geoOrig) {
+          node.nodeValue = node.__geoOrig;
+        }
+        delete node.__geoOrig;
+      }
+    }
+  }
+
   function renderAll(targetLang) {
     if (document.body && !isTranslating) {
       isTranslating = true;
       try {
         translateNode(document.body, targetLang);
+        patternPass(document.body, targetLang);
       } finally {
         setTimeout(() => { isTranslating = false; }, 50);
       }
@@ -206,14 +301,14 @@
     observer.observe(document.body, {
       childList: true,
       subtree: true,
-      characterData: false
+      characterData: true
     });
   } else {
     document.addEventListener("DOMContentLoaded", () => {
       observer.observe(document.body, {
         childList: true,
         subtree: true,
-        characterData: false
+        characterData: true
       });
     });
   }
