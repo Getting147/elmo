@@ -55,6 +55,8 @@ export const prompts = pgTable(
 		enabled: boolean("enabled").default(true).notNull(),
 		tags: text("tags").array().notNull().default([]),
 		systemTags: text("system_tags").array().notNull().default([]),
+		/** P0-3: target market snapshot (us/uk/de/fr/jp/ca/au or NULL=不限). DB-level free-form, zod enum enforced at API boundary. */
+		market: text("market"),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
@@ -64,6 +66,7 @@ export const prompts = pgTable(
 	(table) => ({
 		brandIdIdx: index("prompts_brand_id_idx").on(table.brandId),
 		brandIdEnabledIdx: index("prompts_brand_id_enabled_idx").on(table.brandId, table.enabled),
+		brandIdMarketIdx: index("prompts_brand_id_market_idx").on(table.brandId, table.market),
 	}),
 ).enableRLS();
 
@@ -102,6 +105,10 @@ export const promptRuns = pgTable(
 		competitorsMentioned: text("competitors_mentioned").array().notNull().default([]),
 		answerRank: smallint("answer_rank"),
 		answerType: text("answer_type"),
+		/** P0-3: market snapshot (NULL=不限). Snapshot from prompts.market at run creation time. */
+		market: text("market"),
+		/** P0-3: actual prompt string sent to provider (with market prefix if applicable). NULL = same as prompt.value (no market). */
+		injectedValue: text("injected_value"),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 	},
 	(table) => ({
@@ -115,6 +122,8 @@ export const promptRuns = pgTable(
 		),
 		providerIdx: index("prompt_runs_provider_idx").on(table.provider),
 		modelCreatedAtIdx: index("prompt_runs_model_created_at_idx").on(table.model, table.createdAt),
+		brandIdMarketIdx: index("prompt_runs_brand_id_market_idx").on(table.brandId, table.market, table.createdAt),
+		promptIdMarketIdx: index("prompt_runs_prompt_id_market_idx").on(table.promptId, table.market),
 	}),
 ).enableRLS();
 
@@ -136,6 +145,8 @@ export const citations = pgTable(
 		domain: text("domain").notNull(),
 		title: text("title"),
 		citationIndex: smallint("citation_index").notNull(),
+		/** P0-3: market snapshot propagated from prompt_run. */
+		market: text("market"),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 	},
 	(table) => ({
@@ -150,6 +161,7 @@ export const citations = pgTable(
 		),
 		promptCreatedIdx: index("citations_prompt_id_created_at_idx").on(table.promptId, table.createdAt),
 		domainIdx: index("citations_domain_idx").on(table.domain),
+		brandIdMarketIdx: index("citations_brand_id_market_idx").on(table.brandId, table.market, table.createdAt),
 	}),
 ).enableRLS();
 
