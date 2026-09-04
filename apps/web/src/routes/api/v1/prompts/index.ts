@@ -8,11 +8,9 @@ import { prompts, brands } from "@workspace/lib/db/schema";
 import { eq, count, desc } from "drizzle-orm";
 import { z } from "zod";
 import { sanitizeUserTags, computeSystemTags } from "@workspace/lib/tag-utils";
+import { TARGET_MARKETS } from "@workspace/lib/markets";
 import { createPromptJobScheduler } from "@/lib/job-scheduler";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
-
-// P0-3: target market enum (V2 = 海外 7 市场; cn 显式排除)
-const TARGET_MARKETS = ["us", "uk", "de", "fr", "jp", "ca", "au"] as const;
 
 const createPromptBody = z.object({
 	brandId: z.string().trim().min(1, "brandId is required"),

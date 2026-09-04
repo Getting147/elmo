@@ -14,6 +14,7 @@ import {
 import { eq } from "drizzle-orm";
 import { RUNS_PER_PROMPT, getDefaultDelayHours } from "@workspace/lib/constants";
 import { failureBackoffHours } from "@workspace/lib/run-backoff";
+import { buildInjectedValue } from "@workspace/lib/markets";
 import {
 	getProvider,
 	parseScrapeTargets,
@@ -55,35 +56,9 @@ export const PROMPT_JOB_OPTIONS = {
 } as const;
 
 /**
- * P0-3: market → readable label for prompt injection.
- * 市场枚举：us/uk/de/fr/jp/ca/au + NULL=不限（DB 层 free-form, zod 校验层锁定）。
+ * P0-3: target market → readable label → buildInjectedValue 已迁至 packages/lib/markets
+ * worker 仅 import 共享实现（避免双写漂移）。labels 一处改全处生效。
  */
-const MARKET_LABELS: Record<string, string> = {
-	us: "United States",
-	uk: "United Kingdom",
-	de: "Germany",
-	fr: "France",
-	jp: "Japan",
-	ca: "Canada",
-	au: "Australia",
-};
-
-/**
- * P0-3: Build the actual prompt string sent to provider.
- *
- * - market = NULL → return original value (no prefix, no schema change)
- * - market ∈ {us/uk/de/fr/jp/ca/au} → prefix `For the {label} market: {value}`
- * - market = unknown string → still prefix with the literal value (graceful)
- *
- * prompts.value 库值保持不变（market 是运行时参数不是模板内容）。
- * prompt_runs.injected_value 存注入后完整串供追溯。
- */
-function buildInjectedValue(value: string, market: string | null): string {
-	if (!market) return value;
-	const label = MARKET_LABELS[market] ?? market;
-	return `For the ${label} market: ${value}`;
-}
-
 interface PromptContext {
 	prompt: typeof prompts.$inferSelect;
 	brand: Brand;
