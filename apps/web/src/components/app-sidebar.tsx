@@ -123,12 +123,12 @@ export function AppSidebar({
 					icon: IconChartBar,
 				},
 				{
-					title: t?.shareOfVoice || "声量份额 (SOV)",
+					title: t?.shareOfVoice || "声量份额（SOV）",
 					url: "/share-of-voice",
 					icon: IconSpeakerphone,
 				},
 				{
-					title: t?.queryFanOut || "Query 联网检索",
+					title: t?.queryFanOut || "联网检索发散",
 					url: "/query-fan-out",
 					icon: IconSitemap,
 				},
