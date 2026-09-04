@@ -1,5 +1,5 @@
-import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, index, integer, smallint } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, index, integer, smallint } from "drizzle-orm/pg-core";
 // `organization` is referenced by the brands FK below; the re-export makes it
 // (and the rest of the auth schema) visible to `import * as schema` consumers.
 import { organization } from "./schema-auth";
