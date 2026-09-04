@@ -87,7 +87,7 @@ describe("computeCompleteness — missing-class normalization (A1-7 防除 0)", 
 		const r = computeCompleteness({
 			brand: PERFECT_BRAND,
 			productLines: PERFECT_PL,
-			credentials: EMPTY_PL, // type hack: pass empty to test missing-detect path
+			credentials: [], // empty credentials -> missing-detect path
 		});
 		// brand=1, product_line=1, credential=missing
 		// overall = (1*0.3 + 1*0.4) / (0.3 + 0.4) = 0.7/0.7 = 1.0

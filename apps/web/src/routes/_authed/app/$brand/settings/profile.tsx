@@ -64,6 +64,12 @@ const CRED_TYPE_LABELS: Record<string, string> = {
 	media: "Media Coverage",
 };
 
+const MISSING_LABELS: Record<string, string> = {
+	brand: "brand profile",
+	product_line: "product lines",
+	credential: "third-party credentials",
+};
+
 interface ProfileData {
 	productLines: BrandProductLine[];
 	credentials: BrandCredential[];
@@ -166,7 +172,7 @@ function BrandProfilePage() {
 				{completenessPct < 60 && (
 					<p className="mt-2 text-sm text-amber-600">
 						Profile completeness below 60% — reports will note limited fact-check confidence. Missing:{" "}
-						{(completeness?.missing ?? []).join(", ") || "n/a"}
+						{((completeness?.missing ?? []).map((m) => MISSING_LABELS[m] ?? m).join(", ")) || "n/a"}
 					</p>
 				)}
 			</div>

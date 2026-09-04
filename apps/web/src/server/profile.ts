@@ -13,7 +13,10 @@ import { db } from "@workspace/lib/db/db";
 import {
 	brandProductLines,
 	brandCredentials,
+	brands,
+	competitors,
 } from "@workspace/lib/db/schema";
+import { computeCompleteness } from "@workspace/lib/profile-completeness";
 import { eq, and } from "drizzle-orm";
 
 const CRED_TYPES = [
@@ -202,50 +205,44 @@ export const deleteCredentialFn = createServerFn({ method: "POST" })
 	});
 
 /**
- * Completeness (US-A05): three buckets, weighted 30/40/30.
- * product line complete = name + differentiators + targetAudience non-empty.
- * credential complete = name non-empty (+ thirdParty flag always set by schema).
- * overall = Σ(w_i × s_i) / Σ(present w_i); empty table = missing bucket (renormalize).
+ * Completeness (US-A05): formula single-sourced in @workspace/lib/profile-completeness
+ * (weights 30/40/30 + missing-class renormalization + tier thresholds).
+ * Response contract (0-100 + buckets + missing) is kept for the UI; math delegates to lib.
  */
 export const getProfileCompletenessFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
 		await requireOrgAccess(session.user.id, data.brandId);
-		const [productLines, credentials] = await Promise.all([
+		const [brand, productLines, credentials, competitorRows] = await Promise.all([
+			db.query.brands.findFirst({ where: eq(brands.id, data.brandId) }),
 			db.query.brandProductLines.findMany({
 				where: eq(brandProductLines.brandId, data.brandId),
 			}),
 			db.query.brandCredentials.findMany({
 				where: eq(brandCredentials.brandId, data.brandId),
 			}),
+			db.query.competitors.findMany({ where: eq(competitors.brandId, data.brandId) }),
 		]);
+		if (!brand) throw new Error("Brand not found");
 
-		const brandScore = 1; // brand basics (name/website/aliases) assumed present once brand exists
-		const plComplete = productLines.filter(
-			(p) => p.name && p.differentiators && p.targetAudience,
-		).length;
-		const plScore = productLines.length ? plComplete / productLines.length : null;
-		const credScore = credentials.length ? 1 : null; // any credential row counts (schema enforces fields)
-
-		const present: { w: number; s: number }[] = [];
-		present.push({ w: 0.3, s: brandScore });
-		if (plScore !== null) present.push({ w: 0.4, s: plScore });
-		if (credScore !== null) present.push({ w: 0.3, s: credScore });
-		const overall = present.length
-			? Math.round((present.reduce((a, b) => a + b.w * b.s, 0) / present.reduce((a, b) => a + b.w, 0)) * 100)
-			: 0;
-
-		const missing: string[] = [];
-		if (productLines.length === 0) missing.push("product_lines");
-		if (credentials.length === 0) missing.push("credentials");
+		const r = computeCompleteness({
+			brand: {
+				name: brand.name,
+				website: brand.website ?? null,
+				aliases: brand.aliases ?? [],
+				competitorCount: competitorRows.length,
+			},
+			productLines,
+			credentials,
+		});
 
 		return {
-			overall,
+			overall: Math.round(r.overall * 100),
 			buckets: {
-				productLines: plScore === null ? null : Math.round(plScore * 100),
-				credentials: credScore === null ? null : Math.round(credScore * 100),
+				productLines: Math.round(r.product_line * 100),
+				credentials: Math.round(r.credential * 100),
 			},
-			missing,
+			missing: r.missing,
 		};
 	});
