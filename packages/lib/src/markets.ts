@@ -36,6 +36,9 @@ export const MARKET_DISPLAY: Record<string, string> = {
 /** 「不限」(NULL) option shown first in dropdowns. */
 export const MARKET_UNLIMITED_LABEL = "No specific market (不限)";
 
+/** Prefix template for injected prompt value (kept as a named constant for testability). */
+export const BUILD_INJECTED_PREFIX = "For the ";
+
 /**
  * P0-3: Build the actual prompt string sent to provider.
  *
@@ -49,5 +52,5 @@ export const MARKET_UNLIMITED_LABEL = "No specific market (不限)";
 export function buildInjectedValue(value: string, market: string | null): string {
 	if (!market) return value;
 	const label = MARKET_LABELS[market] ?? market;
-	return `For the ${label} market: ${value}`;
+	return `${BUILD_INJECTED_PREFIX}${label} market: ${value}`;
 }
