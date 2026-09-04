@@ -269,6 +269,8 @@ async function insertPrompts(args: {
 		enabled: boolean;
 		tags: string[];
 		systemTags: string[];
+		// P0-3: onboarding 批量建 prompt 默认 market=null（不限）；按市场分桶走 API/UI 入口
+		market: string | null;
 	}> = [];
 	for (const p of args.source) {
 		const value = p.value.trim();
@@ -282,6 +284,7 @@ async function insertPrompts(args: {
 			enabled: p.enabled,
 			tags: p.tags,
 			systemTags: computeSystemTags(value, args.brandName, args.website),
+			market: null,
 		});
 	}
 	if (rows.length === 0) return 0;
