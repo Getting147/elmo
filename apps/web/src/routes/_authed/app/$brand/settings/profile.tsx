@@ -39,7 +39,7 @@ import {
 	deleteCredentialFn,
 	getProfileCompletenessFn,
 } from "@/server/profile";
-import type { ProductLine, Credential } from "@workspace/lib/db/schema";
+import type { BrandProductLine, BrandCredential } from "@workspace/lib/db/schema";
 
 export const Route = createFileRoute("/_authed/app/$brand/settings/profile")({
 	head: ({ matches, match }) => {
@@ -65,8 +65,8 @@ const CRED_TYPE_LABELS: Record<string, string> = {
 };
 
 interface ProfileData {
-	productLines: ProductLine[];
-	credentials: Credential[];
+	productLines: BrandProductLine[];
+	credentials: BrandCredential[];
 }
 
 function BrandProfilePage() {
@@ -106,7 +106,6 @@ function BrandProfilePage() {
 		setBusy(true);
 		try {
 			const payload = {
-				brandId: brand.id,
 				name: plEditor.name.trim(),
 				category: plEditor.category || null,
 				coreParams: plEditor.coreParams || null,
@@ -114,8 +113,9 @@ function BrandProfilePage() {
 				targetAudience: plEditor.targetAudience || null,
 				position: 0,
 			};
-			if (plEditor.id) await updateProductLineFn({ data: { brandId: brand.id, productLineId: plEditor.id, ...payload } });
-			else await createProductLineFn({ data: payload });
+			if (plEditor.id)
+				await updateProductLineFn({ data: { brandId: brand.id, productLineId: plEditor.id, ...payload } });
+			else await createProductLineFn({ data: { brandId: brand.id, ...payload } });
 			setPlEditor(null);
 			await refresh();
 		} finally {
@@ -128,7 +128,6 @@ function BrandProfilePage() {
 		setBusy(true);
 		try {
 			const payload = {
-				brandId: brand.id,
 				credType: crEditor.credType as never,
 				name: crEditor.name.trim(),
 				year: crEditor.year || null,
@@ -136,8 +135,9 @@ function BrandProfilePage() {
 				url: crEditor.url || null,
 				position: 0,
 			};
-			if (crEditor.id) await updateCredentialFn({ data: { brandId: brand.id, credentialId: crEditor.id, ...payload } });
-			else await createCredentialFn({ data: payload });
+			if (crEditor.id)
+				await updateCredentialFn({ data: { brandId: brand.id, credentialId: crEditor.id, ...payload } });
+			else await createCredentialFn({ data: { brandId: brand.id, ...payload } });
 			setCrEditor(null);
 			await refresh();
 		} finally {

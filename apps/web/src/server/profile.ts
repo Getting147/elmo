@@ -13,9 +13,8 @@ import { db } from "@workspace/lib/db/db";
 import {
 	brandProductLines,
 	brandCredentials,
-	brands,
 } from "@workspace/lib/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 
 const CRED_TYPES = [
 	"certification",
@@ -44,53 +43,46 @@ const credentialSchema = z.object({
 	position: z.number().int().min(0).optional().default(0),
 });
 
-async function requireBrand(brandId: string) {
-	const session = await requireAuthSession();
-	const brand = await db.query.brands.findFirst({
-		where: and(eq(brands.id, brandId), eq(brands.organizationId, session.organizationId)),
-	});
-	if (!brand) throw new Error("Brand not found or no access");
-	return brand;
-}
-
-export const getBrandProfileFn = createServerFn()
-	.input(z.object({ brandId: z.string() }))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const getBrandProfileFn = createServerFn({ method: "GET" })
+	.validator(z.object({ brandId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [productLines, credentials] = await Promise.all([
 			db.query.brandProductLines.findMany({
-				where: eq(brandProductLines.brandId, input.brandId),
+				where: eq(brandProductLines.brandId, data.brandId),
 				orderBy: [brandProductLines.position],
 			}),
 			db.query.brandCredentials.findMany({
-				where: eq(brandCredentials.brandId, input.brandId),
+				where: eq(brandCredentials.brandId, data.brandId),
 				orderBy: [brandCredentials.position],
 			}),
 		]);
 		return { productLines, credentials };
 	});
 
-export const createProductLineFn = createServerFn()
-	.input(z.object({ brandId: z.string() }).merge(productLineSchema))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const createProductLineFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string() }).merge(productLineSchema))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.insert(brandProductLines)
 			.values({
-				brandId: input.brandId,
-				name: input.name,
-				category: input.category ?? null,
-				coreParams: input.coreParams ?? null,
-				differentiators: input.differentiators,
-				targetAudience: input.targetAudience ?? null,
-				position: input.position ?? 0,
+				brandId: data.brandId,
+				name: data.name,
+				category: data.category ?? null,
+				coreParams: data.coreParams ?? null,
+				differentiators: data.differentiators,
+				targetAudience: data.targetAudience ?? null,
+				position: data.position ?? 0,
 			})
 			.returning();
 		return row;
 	});
 
-export const updateProductLineFn = createServerFn()
-	.input(
+export const updateProductLineFn = createServerFn({ method: "POST" })
+	.validator(
 		z
 			.object({
 				brandId: z.string(),
@@ -98,22 +90,23 @@ export const updateProductLineFn = createServerFn()
 			})
 			.merge(productLineSchema.partial()),
 	)
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.update(brandProductLines)
 			.set({
-				name: input.name,
-				category: input.category ?? null,
-				coreParams: input.coreParams ?? null,
-				differentiators: input.differentiators,
-				targetAudience: input.targetAudience ?? null,
-				position: input.position,
+				name: data.name,
+				category: data.category ?? null,
+				coreParams: data.coreParams ?? null,
+				differentiators: data.differentiators,
+				targetAudience: data.targetAudience ?? null,
+				position: data.position,
 			})
 			.where(
 				and(
-					eq(brandProductLines.id, input.productLineId),
-					eq(brandProductLines.brandId, input.brandId),
+					eq(brandProductLines.id, data.productLineId),
+					eq(brandProductLines.brandId, data.brandId),
 				),
 			)
 			.returning();
@@ -121,42 +114,44 @@ export const updateProductLineFn = createServerFn()
 		return row;
 	});
 
-export const deleteProductLineFn = createServerFn()
-	.input(z.object({ brandId: z.string(), productLineId: z.string() }))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const deleteProductLineFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string(), productLineId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		await db
 			.delete(brandProductLines)
 			.where(
 				and(
-					eq(brandProductLines.id, input.productLineId),
-					eq(brandProductLines.brandId, input.brandId),
+					eq(brandProductLines.id, data.productLineId),
+					eq(brandProductLines.brandId, data.brandId),
 				),
 			);
 		return { ok: true };
 	});
 
-export const createCredentialFn = createServerFn()
-	.input(z.object({ brandId: z.string() }).merge(credentialSchema))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const createCredentialFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string() }).merge(credentialSchema))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.insert(brandCredentials)
 			.values({
-				brandId: input.brandId,
-				credType: input.credType,
-				name: input.name,
-				year: input.year ?? null,
-				isThirdPartyPublic: input.isThirdPartyPublic,
-				url: input.url ?? null,
-				position: input.position ?? 0,
+				brandId: data.brandId,
+				credType: data.credType,
+				name: data.name,
+				year: data.year ?? null,
+				isThirdPartyPublic: data.isThirdPartyPublic,
+				url: data.url ?? null,
+				position: data.position ?? 0,
 			})
 			.returning();
 		return row;
 	});
 
-export const updateCredentialFn = createServerFn()
-	.input(
+export const updateCredentialFn = createServerFn({ method: "POST" })
+	.validator(
 		z
 			.object({
 				brandId: z.string(),
@@ -164,22 +159,23 @@ export const updateCredentialFn = createServerFn()
 			})
 			.merge(credentialSchema.partial()),
 	)
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.update(brandCredentials)
 			.set({
-				credType: input.credType,
-				name: input.name,
-				year: input.year ?? null,
-				isThirdPartyPublic: input.isThirdPartyPublic,
-				url: input.url ?? null,
-				position: input.position,
+				credType: data.credType,
+				name: data.name,
+				year: data.year ?? null,
+				isThirdPartyPublic: data.isThirdPartyPublic,
+				url: data.url ?? null,
+				position: data.position,
 			})
 			.where(
 				and(
-					eq(brandCredentials.id, input.credentialId),
-					eq(brandCredentials.brandId, input.brandId),
+					eq(brandCredentials.id, data.credentialId),
+					eq(brandCredentials.brandId, data.brandId),
 				),
 			)
 			.returning();
@@ -187,16 +183,17 @@ export const updateCredentialFn = createServerFn()
 		return row;
 	});
 
-export const deleteCredentialFn = createServerFn()
-	.input(z.object({ brandId: z.string(), credentialId: z.string() }))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const deleteCredentialFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string(), credentialId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		await db
 			.delete(brandCredentials)
 			.where(
 				and(
-					eq(brandCredentials.id, input.credentialId),
-					eq(brandCredentials.brandId, input.brandId),
+					eq(brandCredentials.id, data.credentialId),
+					eq(brandCredentials.brandId, data.brandId),
 				),
 			);
 		return { ok: true };
@@ -208,16 +205,17 @@ export const deleteCredentialFn = createServerFn()
  * credential complete = name non-empty (+ thirdParty flag always set by schema).
  * overall = Σ(w_i × s_i) / Σ(present w_i); empty table = missing bucket (renormalize).
  */
-export const getProfileCompletenessFn = createServerFn()
-	.input(z.object({ brandId: z.string() }))
-	.handler(async ({ input }) => {
-		await requireBrand(input.brandId);
+export const getProfileCompletenessFn = createServerFn({ method: "GET" })
+	.validator(z.object({ brandId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
 		const [productLines, credentials] = await Promise.all([
 			db.query.brandProductLines.findMany({
-				where: eq(brandProductLines.brandId, input.brandId),
+				where: eq(brandProductLines.brandId, data.brandId),
 			}),
 			db.query.brandCredentials.findMany({
-				where: eq(brandCredentials.brandId, input.brandId),
+				where: eq(brandCredentials.brandId, data.brandId),
 			}),
 		]);
 
