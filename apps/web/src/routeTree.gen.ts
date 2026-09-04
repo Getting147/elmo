@@ -26,7 +26,6 @@ import { Route as AuthedAdminWorkflowsRouteImport } from './routes/_authed/admin
 import { Route as AuthedAppIndexRouteImport } from './routes/_authed/app/index'
 import { Route as AuthedAppBrandRouteImport } from './routes/_authed/app/$brand'
 import { Route as AuthedAppNewRouteImport } from './routes/_authed/app/new'
-import { Route as AuthedReportsIndexRouteImport } from './routes/_authed/reports/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiManifestIndexRouteImport } from './routes/api/manifest/index'
 import { Route as ApiOgIndexRouteImport } from './routes/api/og/index'
@@ -36,6 +35,7 @@ import { Route as AuthedAppBrandSplatRouteImport } from './routes/_authed/app/$b
 import { Route as AuthedAppBrandCitationsRouteImport } from './routes/_authed/app/$brand/citations'
 import { Route as AuthedAppBrandOpportunitiesRouteImport } from './routes/_authed/app/$brand/opportunities'
 import { Route as AuthedAppBrandQueryFanOutRouteImport } from './routes/_authed/app/$brand/query-fan-out'
+import { Route as AuthedAppBrandReportsRouteImport } from './routes/_authed/app/$brand/reports'
 import { Route as AuthedAppBrandShareOfVoiceRouteImport } from './routes/_authed/app/$brand/share-of-voice'
 import { Route as AuthedAppBrandVisibilityRouteImport } from './routes/_authed/app/$brand/visibility'
 import { Route as AuthedReportsRenderReportIdRouteImport } from './routes/_authed/reports/render/$reportId'
@@ -61,6 +61,10 @@ import { Route as AuthedAppBrandSettingsMembersRouteImport } from './routes/_aut
 import { Route as AuthedAppBrandSettingsPromptsRouteImport } from './routes/_authed/app/$brand/settings/prompts'
 import { Route as ApiPlausibleJsScriptIndexRouteImport } from './routes/api/plausible/js/script/index'
 import { Route as ApiV1PromptsPromptIdSnapshotRouteImport } from './routes/api/v1/prompts/$promptId/snapshot'
+import { Route as ApiV1BrandsBrandIdProfileIndexRouteImport } from './routes/api/v1/brands/$brandId/profile/index'
+import { Route as ApiV1BrandsBrandIdProfileCompletenessRouteImport } from './routes/api/v1/brands/$brandId/profile/completeness'
+import { Route as ApiV1BrandsBrandIdProfileCredentialsRouteImport } from './routes/api/v1/brands/$brandId/profile/credentials'
+import { Route as ApiV1BrandsBrandIdProfileProductLinesRouteImport } from './routes/api/v1/brands/$brandId/profile/product-lines'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -147,11 +151,6 @@ const AuthedAppNewRoute = AuthedAppNewRouteImport.update({
   path: '/new',
   getParentRoute: () => AuthedAppRoute,
 } as any)
-const AuthedReportsIndexRoute = AuthedReportsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AuthedReportsRoute,
-} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -199,6 +198,11 @@ const AuthedAppBrandQueryFanOutRoute =
     path: '/query-fan-out',
     getParentRoute: () => AuthedAppBrandRoute,
   } as any)
+const AuthedAppBrandReportsRoute = AuthedAppBrandReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AuthedAppBrandRoute,
+} as any)
 const AuthedAppBrandShareOfVoiceRoute =
   AuthedAppBrandShareOfVoiceRouteImport.update({
     id: '/share-of-voice',
@@ -339,6 +343,30 @@ const ApiV1PromptsPromptIdSnapshotRoute =
     path: '/snapshot',
     getParentRoute: () => ApiV1PromptsPromptIdRoute,
   } as any)
+const ApiV1BrandsBrandIdProfileIndexRoute =
+  ApiV1BrandsBrandIdProfileIndexRouteImport.update({
+    id: '/profile/',
+    path: '/profile/',
+    getParentRoute: () => ApiV1BrandsBrandIdRoute,
+  } as any)
+const ApiV1BrandsBrandIdProfileCompletenessRoute =
+  ApiV1BrandsBrandIdProfileCompletenessRouteImport.update({
+    id: '/profile/completeness',
+    path: '/profile/completeness',
+    getParentRoute: () => ApiV1BrandsBrandIdRoute,
+  } as any)
+const ApiV1BrandsBrandIdProfileCredentialsRoute =
+  ApiV1BrandsBrandIdProfileCredentialsRouteImport.update({
+    id: '/profile/credentials',
+    path: '/profile/credentials',
+    getParentRoute: () => ApiV1BrandsBrandIdRoute,
+  } as any)
+const ApiV1BrandsBrandIdProfileProductLinesRoute =
+  ApiV1BrandsBrandIdProfileProductLinesRouteImport.update({
+    id: '/profile/product-lines',
+    path: '/profile/product-lines',
+    getParentRoute: () => ApiV1BrandsBrandIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -358,7 +386,6 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/': typeof AuthedAdminIndexRoute
   '/app/': typeof AuthedAppIndexRoute
-  '/reports/': typeof AuthedReportsIndexRoute
   '/api/manifest/': typeof ApiManifestIndexRoute
   '/api/og/': typeof ApiOgIndexRoute
   '/api/setup-status/': typeof ApiSetupStatusIndexRoute
@@ -366,10 +393,11 @@ export interface FileRoutesByFullPath {
   '/app/$brand/citations': typeof AuthedAppBrandCitationsRoute
   '/app/$brand/opportunities': typeof AuthedAppBrandOpportunitiesRoute
   '/app/$brand/query-fan-out': typeof AuthedAppBrandQueryFanOutRoute
+  '/app/$brand/reports': typeof AuthedAppBrandReportsRoute
   '/app/$brand/share-of-voice': typeof AuthedAppBrandShareOfVoiceRoute
   '/app/$brand/visibility': typeof AuthedAppBrandVisibilityRoute
   '/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
-  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRoute
+  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
@@ -392,9 +420,14 @@ export interface FileRoutesByFullPath {
   '/app/$brand/prompts/': typeof AuthedAppBrandPromptsIndexRoute
   '/app/$brand/settings/': typeof AuthedAppBrandSettingsIndexRoute
   '/api/plausible/js/script/': typeof ApiPlausibleJsScriptIndexRoute
+  '/api/v1/brands/$brandId/profile/completeness': typeof ApiV1BrandsBrandIdProfileCompletenessRoute
+  '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
+  '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
+  '/api/v1/brands/$brandId/profile/': typeof ApiV1BrandsBrandIdProfileIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/reports': typeof AuthedReportsRouteWithChildren
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/logout': typeof AuthLogoutRoute
@@ -407,7 +440,6 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin': typeof AuthedAdminIndexRoute
   '/app': typeof AuthedAppIndexRoute
-  '/reports': typeof AuthedReportsIndexRoute
   '/api/manifest': typeof ApiManifestIndexRoute
   '/api/og': typeof ApiOgIndexRoute
   '/api/setup-status': typeof ApiSetupStatusIndexRoute
@@ -415,10 +447,11 @@ export interface FileRoutesByTo {
   '/app/$brand/citations': typeof AuthedAppBrandCitationsRoute
   '/app/$brand/opportunities': typeof AuthedAppBrandOpportunitiesRoute
   '/app/$brand/query-fan-out': typeof AuthedAppBrandQueryFanOutRoute
+  '/app/$brand/reports': typeof AuthedAppBrandReportsRoute
   '/app/$brand/share-of-voice': typeof AuthedAppBrandShareOfVoiceRoute
   '/app/$brand/visibility': typeof AuthedAppBrandVisibilityRoute
   '/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
-  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRoute
+  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
@@ -441,6 +474,10 @@ export interface FileRoutesByTo {
   '/app/$brand/prompts': typeof AuthedAppBrandPromptsIndexRoute
   '/app/$brand/settings': typeof AuthedAppBrandSettingsIndexRoute
   '/api/plausible/js/script': typeof ApiPlausibleJsScriptIndexRoute
+  '/api/v1/brands/$brandId/profile/completeness': typeof ApiV1BrandsBrandIdProfileCompletenessRoute
+  '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
+  '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
+  '/api/v1/brands/$brandId/profile': typeof ApiV1BrandsBrandIdProfileIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -462,7 +499,6 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/_authed/admin/': typeof AuthedAdminIndexRoute
   '/_authed/app/': typeof AuthedAppIndexRoute
-  '/_authed/reports/': typeof AuthedReportsIndexRoute
   '/api/manifest/': typeof ApiManifestIndexRoute
   '/api/og/': typeof ApiOgIndexRoute
   '/api/setup-status/': typeof ApiSetupStatusIndexRoute
@@ -470,10 +506,11 @@ export interface FileRoutesById {
   '/_authed/app/$brand/citations': typeof AuthedAppBrandCitationsRoute
   '/_authed/app/$brand/opportunities': typeof AuthedAppBrandOpportunitiesRoute
   '/_authed/app/$brand/query-fan-out': typeof AuthedAppBrandQueryFanOutRoute
+  '/_authed/app/$brand/reports': typeof AuthedAppBrandReportsRoute
   '/_authed/app/$brand/share-of-voice': typeof AuthedAppBrandShareOfVoiceRoute
   '/_authed/app/$brand/visibility': typeof AuthedAppBrandVisibilityRoute
   '/_authed/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
-  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRoute
+  '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
@@ -496,6 +533,10 @@ export interface FileRoutesById {
   '/_authed/app/$brand/prompts/': typeof AuthedAppBrandPromptsIndexRoute
   '/_authed/app/$brand/settings/': typeof AuthedAppBrandSettingsIndexRoute
   '/api/plausible/js/script/': typeof ApiPlausibleJsScriptIndexRoute
+  '/api/v1/brands/$brandId/profile/completeness': typeof ApiV1BrandsBrandIdProfileCompletenessRoute
+  '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
+  '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
+  '/api/v1/brands/$brandId/profile/': typeof ApiV1BrandsBrandIdProfileIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -517,7 +558,6 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/admin/'
     | '/app/'
-    | '/reports/'
     | '/api/manifest/'
     | '/api/og/'
     | '/api/setup-status/'
@@ -525,6 +565,7 @@ export interface FileRouteTypes {
     | '/app/$brand/citations'
     | '/app/$brand/opportunities'
     | '/app/$brand/query-fan-out'
+    | '/app/$brand/reports'
     | '/app/$brand/share-of-voice'
     | '/app/$brand/visibility'
     | '/reports/render/$reportId'
@@ -551,9 +592,14 @@ export interface FileRouteTypes {
     | '/app/$brand/prompts/'
     | '/app/$brand/settings/'
     | '/api/plausible/js/script/'
+    | '/api/v1/brands/$brandId/profile/completeness'
+    | '/api/v1/brands/$brandId/profile/credentials'
+    | '/api/v1/brands/$brandId/profile/product-lines'
+    | '/api/v1/brands/$brandId/profile/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/reports'
     | '/auth/forgot-password'
     | '/auth/login'
     | '/auth/logout'
@@ -566,7 +612,6 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/admin'
     | '/app'
-    | '/reports'
     | '/api/manifest'
     | '/api/og'
     | '/api/setup-status'
@@ -574,6 +619,7 @@ export interface FileRouteTypes {
     | '/app/$brand/citations'
     | '/app/$brand/opportunities'
     | '/app/$brand/query-fan-out'
+    | '/app/$brand/reports'
     | '/app/$brand/share-of-voice'
     | '/app/$brand/visibility'
     | '/reports/render/$reportId'
@@ -600,6 +646,10 @@ export interface FileRouteTypes {
     | '/app/$brand/prompts'
     | '/app/$brand/settings'
     | '/api/plausible/js/script'
+    | '/api/v1/brands/$brandId/profile/completeness'
+    | '/api/v1/brands/$brandId/profile/credentials'
+    | '/api/v1/brands/$brandId/profile/product-lines'
+    | '/api/v1/brands/$brandId/profile'
   id:
     | '__root__'
     | '/'
@@ -620,7 +670,6 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/_authed/admin/'
     | '/_authed/app/'
-    | '/_authed/reports/'
     | '/api/manifest/'
     | '/api/og/'
     | '/api/setup-status/'
@@ -628,6 +677,7 @@ export interface FileRouteTypes {
     | '/_authed/app/$brand/citations'
     | '/_authed/app/$brand/opportunities'
     | '/_authed/app/$brand/query-fan-out'
+    | '/_authed/app/$brand/reports'
     | '/_authed/app/$brand/share-of-voice'
     | '/_authed/app/$brand/visibility'
     | '/_authed/reports/render/$reportId'
@@ -654,6 +704,10 @@ export interface FileRouteTypes {
     | '/_authed/app/$brand/prompts/'
     | '/_authed/app/$brand/settings/'
     | '/api/plausible/js/script/'
+    | '/api/v1/brands/$brandId/profile/completeness'
+    | '/api/v1/brands/$brandId/profile/credentials'
+    | '/api/v1/brands/$brandId/profile/product-lines'
+    | '/api/v1/brands/$brandId/profile/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -668,7 +722,7 @@ export interface RootRouteChildren {
   ApiManifestIndexRoute: typeof ApiManifestIndexRoute
   ApiOgIndexRoute: typeof ApiOgIndexRoute
   ApiSetupStatusIndexRoute: typeof ApiSetupStatusIndexRoute
-  ApiV1BrandsBrandIdRoute: typeof ApiV1BrandsBrandIdRoute
+  ApiV1BrandsBrandIdRoute: typeof ApiV1BrandsBrandIdRouteWithChildren
   ApiV1CompetitorsCompetitorIdRoute: typeof ApiV1CompetitorsCompetitorIdRoute
   ApiV1PromptsPromptIdRoute: typeof ApiV1PromptsPromptIdRouteWithChildren
   ApiV1ReportsReportIdRoute: typeof ApiV1ReportsReportIdRoute
@@ -803,13 +857,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAppNewRouteImport
       parentRoute: typeof AuthedAppRoute
     }
-    '/_authed/reports/': {
-      id: '/_authed/reports/'
-      path: '/'
-      fullPath: '/reports/'
-      preLoaderRoute: typeof AuthedReportsIndexRouteImport
-      parentRoute: typeof AuthedReportsRoute
-    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -871,6 +918,13 @@ declare module '@tanstack/react-router' {
       path: '/query-fan-out'
       fullPath: '/app/$brand/query-fan-out'
       preLoaderRoute: typeof AuthedAppBrandQueryFanOutRouteImport
+      parentRoute: typeof AuthedAppBrandRoute
+    }
+    '/_authed/app/$brand/reports': {
+      id: '/_authed/app/$brand/reports'
+      path: '/reports'
+      fullPath: '/app/$brand/reports'
+      preLoaderRoute: typeof AuthedAppBrandReportsRouteImport
       parentRoute: typeof AuthedAppBrandRoute
     }
     '/_authed/app/$brand/share-of-voice': {
@@ -1048,6 +1102,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1PromptsPromptIdSnapshotRouteImport
       parentRoute: typeof ApiV1PromptsPromptIdRoute
     }
+    '/api/v1/brands/$brandId/profile/': {
+      id: '/api/v1/brands/$brandId/profile/'
+      path: '/profile'
+      fullPath: '/api/v1/brands/$brandId/profile/'
+      preLoaderRoute: typeof ApiV1BrandsBrandIdProfileIndexRouteImport
+      parentRoute: typeof ApiV1BrandsBrandIdRoute
+    }
+    '/api/v1/brands/$brandId/profile/completeness': {
+      id: '/api/v1/brands/$brandId/profile/completeness'
+      path: '/profile/completeness'
+      fullPath: '/api/v1/brands/$brandId/profile/completeness'
+      preLoaderRoute: typeof ApiV1BrandsBrandIdProfileCompletenessRouteImport
+      parentRoute: typeof ApiV1BrandsBrandIdRoute
+    }
+    '/api/v1/brands/$brandId/profile/credentials': {
+      id: '/api/v1/brands/$brandId/profile/credentials'
+      path: '/profile/credentials'
+      fullPath: '/api/v1/brands/$brandId/profile/credentials'
+      preLoaderRoute: typeof ApiV1BrandsBrandIdProfileCredentialsRouteImport
+      parentRoute: typeof ApiV1BrandsBrandIdRoute
+    }
+    '/api/v1/brands/$brandId/profile/product-lines': {
+      id: '/api/v1/brands/$brandId/profile/product-lines'
+      path: '/profile/product-lines'
+      fullPath: '/api/v1/brands/$brandId/profile/product-lines'
+      preLoaderRoute: typeof ApiV1BrandsBrandIdProfileProductLinesRouteImport
+      parentRoute: typeof ApiV1BrandsBrandIdRoute
+    }
   }
 }
 
@@ -1072,6 +1154,7 @@ interface AuthedAppBrandRouteChildren {
   AuthedAppBrandCitationsRoute: typeof AuthedAppBrandCitationsRoute
   AuthedAppBrandOpportunitiesRoute: typeof AuthedAppBrandOpportunitiesRoute
   AuthedAppBrandQueryFanOutRoute: typeof AuthedAppBrandQueryFanOutRoute
+  AuthedAppBrandReportsRoute: typeof AuthedAppBrandReportsRoute
   AuthedAppBrandShareOfVoiceRoute: typeof AuthedAppBrandShareOfVoiceRoute
   AuthedAppBrandVisibilityRoute: typeof AuthedAppBrandVisibilityRoute
   AuthedAppBrandIndexRoute: typeof AuthedAppBrandIndexRoute
@@ -1091,6 +1174,7 @@ const AuthedAppBrandRouteChildren: AuthedAppBrandRouteChildren = {
   AuthedAppBrandCitationsRoute: AuthedAppBrandCitationsRoute,
   AuthedAppBrandOpportunitiesRoute: AuthedAppBrandOpportunitiesRoute,
   AuthedAppBrandQueryFanOutRoute: AuthedAppBrandQueryFanOutRoute,
+  AuthedAppBrandReportsRoute: AuthedAppBrandReportsRoute,
   AuthedAppBrandShareOfVoiceRoute: AuthedAppBrandShareOfVoiceRoute,
   AuthedAppBrandVisibilityRoute: AuthedAppBrandVisibilityRoute,
   AuthedAppBrandIndexRoute: AuthedAppBrandIndexRoute,
@@ -1127,12 +1211,10 @@ const AuthedAppRouteWithChildren = AuthedAppRoute._addFileChildren(
 )
 
 interface AuthedReportsRouteChildren {
-  AuthedReportsIndexRoute: typeof AuthedReportsIndexRoute
   AuthedReportsRenderReportIdRoute: typeof AuthedReportsRenderReportIdRoute
 }
 
 const AuthedReportsRouteChildren: AuthedReportsRouteChildren = {
-  AuthedReportsIndexRoute: AuthedReportsIndexRoute,
   AuthedReportsRenderReportIdRoute: AuthedReportsRenderReportIdRoute,
 }
 
@@ -1158,6 +1240,26 @@ const AuthedRouteChildren: AuthedRouteChildren = {
 const AuthedRouteWithChildren =
   AuthedRoute._addFileChildren(AuthedRouteChildren)
 
+interface ApiV1BrandsBrandIdRouteChildren {
+  ApiV1BrandsBrandIdProfileCompletenessRoute: typeof ApiV1BrandsBrandIdProfileCompletenessRoute
+  ApiV1BrandsBrandIdProfileCredentialsRoute: typeof ApiV1BrandsBrandIdProfileCredentialsRoute
+  ApiV1BrandsBrandIdProfileProductLinesRoute: typeof ApiV1BrandsBrandIdProfileProductLinesRoute
+  ApiV1BrandsBrandIdProfileIndexRoute: typeof ApiV1BrandsBrandIdProfileIndexRoute
+}
+
+const ApiV1BrandsBrandIdRouteChildren: ApiV1BrandsBrandIdRouteChildren = {
+  ApiV1BrandsBrandIdProfileCompletenessRoute:
+    ApiV1BrandsBrandIdProfileCompletenessRoute,
+  ApiV1BrandsBrandIdProfileCredentialsRoute:
+    ApiV1BrandsBrandIdProfileCredentialsRoute,
+  ApiV1BrandsBrandIdProfileProductLinesRoute:
+    ApiV1BrandsBrandIdProfileProductLinesRoute,
+  ApiV1BrandsBrandIdProfileIndexRoute: ApiV1BrandsBrandIdProfileIndexRoute,
+}
+
+const ApiV1BrandsBrandIdRouteWithChildren =
+  ApiV1BrandsBrandIdRoute._addFileChildren(ApiV1BrandsBrandIdRouteChildren)
+
 interface ApiV1PromptsPromptIdRouteChildren {
   ApiV1PromptsPromptIdSnapshotRoute: typeof ApiV1PromptsPromptIdSnapshotRoute
 }
@@ -1181,7 +1283,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiManifestIndexRoute: ApiManifestIndexRoute,
   ApiOgIndexRoute: ApiOgIndexRoute,
   ApiSetupStatusIndexRoute: ApiSetupStatusIndexRoute,
-  ApiV1BrandsBrandIdRoute: ApiV1BrandsBrandIdRoute,
+  ApiV1BrandsBrandIdRoute: ApiV1BrandsBrandIdRouteWithChildren,
   ApiV1CompetitorsCompetitorIdRoute: ApiV1CompetitorsCompetitorIdRoute,
   ApiV1PromptsPromptIdRoute: ApiV1PromptsPromptIdRouteWithChildren,
   ApiV1ReportsReportIdRoute: ApiV1ReportsReportIdRoute,

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, index, integer, smallint } from "drizzle-orm/pg-core";
 // `organization` is referenced by the brands FK below; the re-export makes it
 // (and the rest of the auth schema) visible to `import * as schema` consumers.
@@ -211,6 +212,77 @@ export const brandOpportunities = pgTable(
 
 export type BrandOpportunity = typeof brandOpportunities.$inferSelect;
 export type NewBrandOpportunity = typeof brandOpportunities.$inferInsert;
+
+// =============================================================================
+// Epic A-1 品牌档案（US-A02 产品线 + US-A03 资质背书）
+// 设计：EPIC-A-BRAND-PROFILE-DESIGN-v1.md（hill 2026-09-04 拍板）
+// 不同iators 必填（事实校验基准主体）；year TEXT 兼容 "2023-2024"；is_third_party_public 必填布尔。
+// =============================================================================
+
+export const CRED_TYPES = [
+	"certification",
+	"patent",
+	"award",
+	"membership",
+	"case_study",
+	"media",
+] as const;
+
+export const brandProductLines = pgTable(
+	"brand_product_lines",
+	{
+		id: text("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		name: text("name").notNull(),
+		category: text("category"),
+		coreParams: text("core_params"),
+		differentiators: text("differentiators").notNull(),
+		targetAudience: text("target_audience"),
+		position: smallint("position").default(0).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => ({
+		brandIdIdx: index("brand_product_lines_brand_id_idx").on(table.brandId, table.position),
+	}),
+).enableRLS();
+
+export const brandCredentials = pgTable(
+	"brand_credentials",
+	{
+		id: text("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		credType: text("cred_type").notNull(),
+		name: text("name").notNull(),
+		year: text("year"),
+		isThirdPartyPublic: boolean("is_third_party_public").default(false).notNull(),
+		url: text("url"),
+		position: smallint("position").default(0).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => ({
+		brandIdIdx: index("brand_credentials_brand_id_idx").on(table.brandId, table.position),
+		thirdPartyIdx: index("brand_credentials_third_party_idx")
+			.on(table.brandId)
+			.where(sql`${table.isThirdPartyPublic} = true`),
+	}),
+).enableRLS();
+
+export type BrandProductLine = typeof brandProductLines.$inferSelect;
+export type NewBrandProductLine = typeof brandProductLines.$inferInsert;
+export type BrandCredential = typeof brandCredentials.$inferSelect;
+export type NewBrandCredential = typeof brandCredentials.$inferInsert;
 
 export type Brand = typeof brands.$inferSelect;
 export type NewBrand = typeof brands.$inferInsert;
