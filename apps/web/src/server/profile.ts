@@ -69,6 +69,7 @@ export const createProductLineFn = createServerFn({ method: "POST" })
 		const [row] = await db
 			.insert(brandProductLines)
 			.values({
+				id: crypto.randomUUID(),
 				brandId: data.brandId,
 				name: data.name,
 				category: data.category ?? null,
@@ -138,6 +139,7 @@ export const createCredentialFn = createServerFn({ method: "POST" })
 		const [row] = await db
 			.insert(brandCredentials)
 			.values({
+				id: crypto.randomUUID(),
 				brandId: data.brandId,
 				credType: data.credType,
 				name: data.name,

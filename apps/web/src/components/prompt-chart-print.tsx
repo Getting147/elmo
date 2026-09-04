@@ -4,7 +4,7 @@ import { Badge } from "@workspace/ui/components/badge";
 import { BaseChartPrint } from "./base-chart-print";
 import { ChartDownloadFooter } from "./chart-download-footer";
 import { useChartDownload } from "@/hooks/use-chart-download";
-import type { Brand, Competitor } from "@workspace/lib/db/schema";
+import type { Brand, Competitor, PromptRun } from "@workspace/lib/db/schema";
 import {
 	LookbackPeriod,
 	getBadgeVariant,
@@ -15,28 +15,13 @@ import {
 } from "@/lib/chart-utils";
 import { getSoVBadgeClasses, type PromptCategory } from "@workspace/lib/report-metrics";
 
-interface PromptRunData {
-	id: string;
-	promptId: string;
-	brandId: string;
-	brandMentioned: boolean;
-	competitorsMentioned: string[];
-	createdAt: Date;
-	model: string;
-	provider: string | null;
-	version: string;
-	webSearchEnabled: boolean;
-	rawOutput: any;
-	webQueries: string[];
-}
-
 interface PromptChartPrintProps {
 	lookback: LookbackPeriod;
 	promptName: string;
 	promptId: string;
 	brand: Brand;
 	competitors: Competitor[];
-	promptRuns: PromptRunData[];
+	promptRuns: PromptRun[];
 	// Whether this prompt has ever been evaluated (all-time)
 	// Used to distinguish "never evaluated" vs "no data in selected window"
 	hasEverBeenEvaluated?: boolean;
@@ -48,7 +33,7 @@ interface PromptChartPrintProps {
  * Compute SoV for each entity (brand + competitors) from prompt runs.
  * Returns data shaped for BaseChartPrint: one data point with entity IDs as keys.
  */
-function computeSoVChartData(runs: PromptRunData[], brand: Brand, competitors: Competitor[]): ChartDataPoint[] | null {
+function computeSoVChartData(runs: PromptRun[], brand: Brand, competitors: Competitor[]): ChartDataPoint[] | null {
 	if (runs.length === 0) return null;
 
 	// Count mentions

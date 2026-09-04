@@ -42,7 +42,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 	head: ({ match }) => {
 		const branding = match.context?.clientConfig?.branding;
 		const analytics = match.context?.clientConfig?.analytics;
-		const scripts = [
+		const scripts: { src: string; defer?: boolean; async?: boolean; "data-domain"?: string; "data-api"?: string }[] = [
 			{
 				src: "/i18n-global.js",
 				defer: true,
