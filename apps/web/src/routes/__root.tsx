@@ -163,8 +163,9 @@ function RootComponent() {
 		<html lang="en">
 			<head>
 				{clarityProjectId && <ScriptOnce>{clarityQueueScript}</ScriptOnce>}
-				{/* i18n-global: 组件级注入（TanStack head scripts 在 SSR 构建中不输出，实测丢失） */}
-				<script src="/i18n-global.js" defer />
+				{/* i18n-global: 组件级注入（TanStack head scripts 在 SSR 构建中不输出，实测丢失）。
+				    ?v= 为缓存破坏版本号——每次更新 public/i18n-global.js 必须同步 +1，否则浏览器缓存旧词表 */ }
+				<script src="/i18n-global.js?v=2" defer />
 				<HeadContent />
 			</head>
 			<body className="font-sans antialiased">

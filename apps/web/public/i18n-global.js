@@ -169,7 +169,9 @@
     "Total number of times we have evaluated prompts against LLMs in the last 30 days. Each prompt is evaluated multiple times across different AI models.": "近 30 天对提示词执行的评估总次数。每个提示词都会在不同 AI 模型上多次评估。",
     "Prompts are automatically evaluated every": "提示词将每",
     "on average to track changes in AI model responses over time.": "自动评估一次，以跟踪 AI 模型回答随时间的变化。",
-    "No evaluations have been run yet.": "尚未执行任何评估。"
+    "No evaluations have been run yet.": "尚未执行任何评估。",
+    "avg": "均值",
+    "Top cited subreddits — which Reddit communities AI models reference when answering your prompts": "被引最多的 Reddit 社区 —— AI 回答您的提示词时参考了哪些论坛讨论"
   };
 
   const EN_DICT = {};
