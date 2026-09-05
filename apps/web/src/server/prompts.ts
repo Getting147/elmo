@@ -394,7 +394,7 @@ export const getPromptStatsFn = createServerFn({ method: "GET" })
 
 			const urlCounts = new Map<
 				string,
-				{ count: number; title?: string; domain: string; positionSum: number; positionCount: number }
+				{ rawUrl: string; count: number; title?: string; domain: string; positionSum: number; positionCount: number }
 			>();
 			for (const { url, domain, title, count: cnt, avg_position } of urlStats) {
 				if (isGoogleSurfaceUrl(url)) continue;
@@ -409,20 +409,20 @@ export const getPromptStatsFn = createServerFn({ method: "GET" })
 					existing.positionCount += positionCount;
 					if (!existing.title && title) existing.title = title;
 				} else {
-					urlCounts.set(normalized, { count: c, title: title || undefined, domain, positionSum, positionCount });
+					urlCounts.set(normalized, { rawUrl: url, count: c, title: title || undefined, domain, positionSum, positionCount });
 				}
 			}
 
 			const specificUrls = Array.from(urlCounts.entries())
-				.map(([url, { count: cnt, title, domain, positionSum, positionCount }]) => {
-					const category = classifyUrl(domain, url, title, brandDomains, competitorDomains);
+				.map(([_, { rawUrl, count: cnt, title, domain, positionSum, positionCount }]) => {
+					const category = classifyUrl(domain, rawUrl, title, brandDomains, competitorDomains);
 					return {
-						url,
+						url: rawUrl,
 						title,
 						domain,
 						count: cnt,
 						category,
-						pageType: resolvePageType(url, title, category),
+						pageType: resolvePageType(rawUrl, title, category),
 						avgPosition: positionCount > 0 ? Math.round((positionSum / positionCount) * 10) / 10 : null,
 					};
 				})

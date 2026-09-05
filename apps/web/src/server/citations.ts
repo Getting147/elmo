@@ -216,7 +216,7 @@ export const getCitationsFn = createServerFn({ method: "GET" })
 		// Categorize and normalize specific URLs with new fields
 		const urlCounts = new Map<
 			string,
-			{ count: number; title?: string; domain: string; positionSum: number; positionCount: number; promptCount: number }
+			{ rawUrl: string; count: number; title?: string; domain: string; positionSum: number; positionCount: number; promptCount: number }
 		>();
 		for (const { url, domain, title, count, avg_position, prompt_count } of urlStats) {
 			if (isGoogleSurfaceUrl(url)) continue;
@@ -233,6 +233,7 @@ export const getCitationsFn = createServerFn({ method: "GET" })
 				if (!existing.title && title) existing.title = title;
 			} else {
 				urlCounts.set(normalizedUrl, {
+					rawUrl: url,
 					count: c,
 					title: title || undefined,
 					domain,
@@ -244,18 +245,18 @@ export const getCitationsFn = createServerFn({ method: "GET" })
 		}
 
 		const specificUrls = Array.from(urlCounts.entries())
-			.map(([url, { count, title, domain, positionSum, positionCount, promptCount }]) => {
-				const category = classify(domain, url, title);
+			.map(([normalizedUrl, { rawUrl, count, title, domain, positionSum, positionCount, promptCount }]) => {
+				const category = classify(domain, rawUrl, title);
 				return {
-					url,
+					url: rawUrl,
 					title,
 					domain,
 					count,
 					category,
-					pageType: resolvePageType(url, title, category),
+					pageType: resolvePageType(rawUrl, title, category),
 					avgPosition: positionCount > 0 ? Math.round((positionSum / positionCount) * 10) / 10 : null,
 					promptCount,
-					isNew: !prevUrlMap.has(url),
+					isNew: !prevUrlMap.has(normalizedUrl),
 				};
 			})
 			.sort((a, b) => b.count - a.count);

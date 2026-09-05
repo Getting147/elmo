@@ -169,6 +169,11 @@ export function TopUrlsCard({
 												NEW
 											</Badge>
 										)}
+										{citation.url.includes("web.mixosense.com.cn") && (
+											<Badge className="text-[10px] px-1.5 py-0 h-[18px] border-0 shadow-none bg-amber-100 text-amber-800">
+												链接已失效
+											</Badge>
+										)}
 										<span className="text-sm font-medium truncate group-hover:underline">
 											{citation.title || extractFilenameFromUrl(citation.url)}
 										</span>

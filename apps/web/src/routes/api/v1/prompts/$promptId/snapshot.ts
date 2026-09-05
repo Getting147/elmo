@@ -103,7 +103,7 @@ export const Route = createFileRoute("/api/v1/prompts/$promptId/snapshot")({
 						count: Number(row.mention_count),
 					}));
 
-					const urlCounts = new Map<string, { count: number; title?: string; domain: string }>();
+					const urlCounts = new Map<string, { rawUrl: string; count: number; title?: string; domain: string }>();
 					for (const { url, domain, title, count } of citationUrlStats) {
 						const normalizedUrl = normalizeUrl(url);
 						const existing = urlCounts.get(normalizedUrl);
@@ -111,7 +111,7 @@ export const Route = createFileRoute("/api/v1/prompts/$promptId/snapshot")({
 							existing.count += Number(count);
 							if (!existing.title && title) existing.title = title;
 						} else {
-							urlCounts.set(normalizedUrl, { count: Number(count), title: title || undefined, domain });
+							urlCounts.set(normalizedUrl, { rawUrl: url, count: Number(count), title: title || undefined, domain });
 						}
 					}
 
@@ -119,14 +119,14 @@ export const Route = createFileRoute("/api/v1/prompts/$promptId/snapshot")({
 					let competitorCitationsTotal = 0;
 					let citationsTotal = 0;
 					const allCitationUrls = Array.from(urlCounts.entries())
-						.map(([url, { count, title, domain }]) => {
+						.map(([_, { rawUrl, count, title, domain }]) => {
 							citationsTotal += count;
 							if (isMatchingDomain(domain, brandDomains)) {
 								brandCitationsTotal += count;
 							} else if (isMatchingDomain(domain, competitorDomains)) {
 								competitorCitationsTotal += count;
 							}
-							return { url, title, count };
+							return { url: rawUrl, title, count };
 						})
 						.sort((a, b) => b.count - a.count);
 
