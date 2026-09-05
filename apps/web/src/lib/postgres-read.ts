@@ -947,6 +947,41 @@ export async function getPerPromptDailyCompetitorMentions(
 	return rows;
 }
 
+export interface CompetitorMentionTotalRow {
+	competitor: string;
+	mentions: number;
+	prompts: number;
+}
+
+/**
+ * Whole-window, per-competitor mention and distinct prompt counts.
+ * Matches the reporting layer (raw unnest aggregate) to ensure consistency across the platform.
+ */
+export async function getCompetitorMentionTotals(
+	brandId: string,
+	fromDate: string,
+	toDate: string,
+	timezone: string,
+	enabledPromptIds?: string[],
+	model?: string,
+): Promise<CompetitorMentionTotalRow[]> {
+	if (!enabledPromptIds?.length) return [];
+	const rows = await queryPg<CompetitorMentionTotalRow>(sql`
+		SELECT
+			competitor,
+			count(*)::int AS mentions,
+			count(DISTINCT prompt_id)::int AS prompts
+		FROM prompt_runs, unnest(competitors_mentioned) AS competitor
+		WHERE brand_id = ${brandId}
+			${dateFilter(fromDate, toDate, timezone)}
+			${promptIdFilter(enabledPromptIds)}
+			${modelFilter(model)}
+		GROUP BY competitor
+		ORDER BY mentions DESC
+	`);
+	return rows;
+}
+
 // ============================================================================
 // Per-Prompt Cited Pages (titles for the opportunities digest)
 // ============================================================================

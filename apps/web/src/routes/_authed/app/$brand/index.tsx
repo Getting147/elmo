@@ -28,6 +28,8 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
 import type { ClientConfig } from "@workspace/config/types";
 import { setPersonProperties } from "@/lib/posthog";
+import { Badge } from "@workspace/ui/components/badge";
+import { useLanguage } from "@/lib/language-context";
 
 function getVisibilityBgColor(value: number): string {
 	if (value > 75) return "bg-emerald-50 dark:bg-emerald-950/30";
@@ -151,11 +153,12 @@ function CardTitleWithTooltip({
 }
 
 /** The big "current" stat that fills a card — the latest point of its trend, colour-coded by value. */
-function HeroStat({ value, loading }: { value: number | null; loading: boolean }) {
+function HeroStat({ value, loading }: { value: number | string | null; loading: boolean }) {
+	const numericVal = typeof value === "string" ? parseFloat(value) : value;
 	return (
 		<CardContent className="flex-1 flex items-center justify-center">
 			<div
-				className={`font-bold tracking-tight tabular-nums ${value === null ? "text-muted-foreground" : getVisibilityTextColor(value)}`}
+				className={`font-bold tracking-tight tabular-nums ${value === null ? "text-muted-foreground" : getVisibilityTextColor(numericVal ?? 0)}`}
 				style={{ fontSize: "clamp(2.5rem, 6vw, 5rem)" }}
 			>
 				{loading ? <Skeleton className="h-16 w-32" /> : value === null ? "—" : `${value}%`}
@@ -182,10 +185,15 @@ function DashboardPage() {
 
 	const visibilityTimeSeries = dashboardSummary?.visibilityTimeSeries || [];
 
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
 	// "Current" = the latest plotted point of each trend, so the hero number always
 	// matches the right end of the chart beside it (rather than the whole-window average).
 	const currentVisibility = lastValue(visibilityTimeSeries, "overall");
-	const sovShare = lastValue(sovData?.shareTimeSeries ?? [], "share");
+	const cumulativeSovShare = sovData?.brandShare !== null && sovData?.brandShare !== undefined
+		? (sovData.brandShare * 100).toFixed(1)
+		: null;
 
 	if (isLoadingBrand) {
 		return (
@@ -381,7 +389,12 @@ function DashboardPage() {
 						<Card
 							className={`shadow-none flex flex-col gap-3 py-4 ${currentVisibility === null ? "" : `${getVisibilityBgColor(currentVisibility)} ${getVisibilityBorderColor(currentVisibility)}`}`}
 						>
-							<HeroStat value={currentVisibility} loading={isLoading} />
+							<div className="px-4 pt-1 flex justify-end">
+								<Badge variant="secondary" className="text-[10px] font-normal py-0 h-4">
+									{isZh ? "近 30 天均值" : "30d avg"}
+								</Badge>
+							</div>
+							<HeroStat value={currentVisibility !== null ? currentVisibility.toFixed(1) : null} loading={isLoading} />
 						</Card>
 
 						{/* Visibility Chart */}
@@ -423,9 +436,14 @@ function DashboardPage() {
 
 					<div className="grid gap-4 lg:grid-cols-4">
 						<Card
-							className={`shadow-none flex flex-col gap-3 py-4 ${sovShare === null ? "" : `${getVisibilityBgColor(sovShare)} ${getVisibilityBorderColor(sovShare)}`}`}
+							className={`shadow-none flex flex-col gap-3 py-4 ${cumulativeSovShare === null ? "" : `${getVisibilityBgColor(parseFloat(cumulativeSovShare))} ${getVisibilityBorderColor(parseFloat(cumulativeSovShare))}`}`}
 						>
-							<HeroStat value={sovShare} loading={isLoadingSov} />
+							<div className="px-4 pt-1 flex justify-end">
+								<Badge variant="secondary" className="text-[10px] font-normal py-0 h-4">
+									{isZh ? "近 30 天累计" : "Last 30 days cumulative"}
+								</Badge>
+							</div>
+							<HeroStat value={cumulativeSovShare} loading={isLoadingSov} />
 						</Card>
 
 						<Card className="shadow-none lg:col-span-3 flex flex-col gap-3 py-4">

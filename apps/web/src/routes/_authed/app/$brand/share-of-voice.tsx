@@ -22,6 +22,7 @@ import { useListFilters } from "@/hooks/use-list-filters";
 import { ColHead } from "@/components/col-head";
 import { ShareOfVoiceDonut } from "@/components/share-of-voice-donut";
 import { TrendChart } from "@/components/trend-chart";
+import { useLanguage } from "@/lib/language-context";
 
 export const Route = createFileRoute("/_authed/app/$brand/share-of-voice")({
 	head: ({ matches, match }) => {
@@ -57,6 +58,8 @@ const TIPS = {
 function ShareOfVoicePage() {
 	const { brand: brandId } = Route.useParams();
 	const { model, lookback, tags } = useListFilters();
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 
 	const { brand } = useBrand(brandId);
 	const availableModels = getAvailableModels(brand?.effectiveModels ?? []);
@@ -105,19 +108,26 @@ function ShareOfVoicePage() {
 			</Card>
 		);
 	} else {
-		// The big number = the trend's last plotted point, so it matches the line beside it.
-		const currentShare = currentShareOf(data.shareTimeSeries);
+		// Whole-window cumulative raw SOV to strictly align with reports (e.g. 70.6%)
+		const cumulativeShare = data.brandShare !== null && data.brandShare !== undefined
+			? (data.brandShare * 100).toFixed(1)
+			: null;
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="grid gap-6 lg:grid-cols-2">
 					<Card>
 						<CardHeader>
-							<CardTitle>Share of Voice</CardTitle>
+							<div className="flex items-center justify-between">
+								<CardTitle>Share of Voice</CardTitle>
+								<Badge variant="secondary" className="text-xs font-normal">
+									{isZh ? "近 30 天累计" : "Last 30 days cumulative"}
+								</Badge>
+							</div>
 						</CardHeader>
 						<CardContent className="flex items-center justify-between gap-4">
 							<div>
 								<div className="text-3xl sm:text-4xl font-bold tabular-nums">
-									{currentShare !== null ? `${currentShare}%` : "—"}
+									{cumulativeShare !== null ? `${cumulativeShare}%` : "—"}
 								</div>
 								<p className="text-sm text-muted-foreground mt-1 max-w-[18rem]">
 									{data.brandName} across {data.totalRuns.toLocaleString()} runs
@@ -130,7 +140,12 @@ function ShareOfVoicePage() {
 
 					<Card>
 						<CardHeader>
-							<CardTitle>Share of Voice Trends</CardTitle>
+							<div className="flex items-center justify-between">
+								<CardTitle>Share of Voice Trends</CardTitle>
+								<Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+									{isZh ? "逐日截面趋势 (LVCF)" : "Daily snapshot trend (LVCF)"}
+								</Badge>
+							</div>
 						</CardHeader>
 						<CardContent>
 							<TrendChart
