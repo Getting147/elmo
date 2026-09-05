@@ -42,6 +42,7 @@ export interface DashboardSummaryResponse {
 	totalPrompts: number;
 	totalRuns: number;
 	averageVisibility: number;
+	rawAverageVisibility: number;
 	nonBrandedVisibility: number;
 	brandedVisibility: number;
 	visibilityTimeSeries: VisibilityTimeSeriesPoint[];
@@ -175,6 +176,7 @@ export const getDashboardSummaryFn = createServerFn({ method: "GET" })
 			totalPrompts: Number(totalPrompts),
 			totalRuns,
 			averageVisibility,
+			rawAverageVisibility: summary ? Number(summary.raw_avg_visibility ?? summary.avg_visibility) : 0,
 			nonBrandedVisibility,
 			brandedVisibility,
 			visibilityTimeSeries,

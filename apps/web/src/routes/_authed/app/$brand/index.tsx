@@ -188,9 +188,12 @@ function DashboardPage() {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 
-	// "Current" = the latest plotted point of each trend, so the hero number always
-	// matches the right end of the chart beside it (rather than the whole-window average).
 	const currentVisibility = lastValue(visibilityTimeSeries, "overall");
+	const rawVisibility = dashboardSummary?.rawAverageVisibility != null
+		? dashboardSummary.rawAverageVisibility.toFixed(1)
+		: currentVisibility !== null
+			? currentVisibility.toFixed(1)
+			: null;
 	const cumulativeSovShare = sovData?.brandShare !== null && sovData?.brandShare !== undefined
 		? (sovData.brandShare * 100).toFixed(1)
 		: null;
@@ -394,7 +397,7 @@ function DashboardPage() {
 									{isZh ? "近 30 天均值" : "30d avg"}
 								</Badge>
 							</div>
-							<HeroStat value={currentVisibility !== null ? currentVisibility.toFixed(1) : null} loading={isLoading} />
+							<HeroStat value={rawVisibility} loading={isLoading} />
 						</Card>
 
 						{/* Visibility Chart */}
