@@ -418,7 +418,7 @@ export type Citation = {
 	citationIndex: number;
 };
 
-function parseCitationUrl(url: string, title: string | undefined, idx: number): Citation | null {
+export function parseCitationUrl(url: string, title: string | undefined, idx: number): Citation | null {
 	try {
 		const parsed = new URL(url);
 		return {
