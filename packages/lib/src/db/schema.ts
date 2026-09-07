@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, index, integer, smallint } from "drizzle-orm/pg-core";
+import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, jsonb, index, integer, smallint } from "drizzle-orm/pg-core";
 // `organization` is referenced by the brands FK below; the re-export makes it
 // (and the rest of the auth schema) visible to `import * as schema` consumers.
 import { organization } from "./schema-auth";
@@ -216,6 +216,61 @@ export const brandOpportunities = pgTable(
 
 export type BrandOpportunity = typeof brandOpportunities.$inferSelect;
 export type NewBrandOpportunity = typeof brandOpportunities.$inferInsert;
+
+// =============================================================================
+// Epic A-2 (V1.0) M2: 草稿表 draftResearch（与 brands 解耦，仅引用 brands.id FK CASCADE）
+// 状态机: pending_review → confirmed → applied → done / failed / rolled_back
+// idempotency: 唯一索引 (brand_id, url_hash) 保证同 URL 重跑命中现有草稿
+// payload JSONB: OnboardingSuggestion 完整快照（确认后 populate 各表）
+// =============================================================================
+
+export const draftResearchState = pgEnum("draft_research_state", [
+	"pending_review", // LLM 完成等用户确认
+	"confirmed", // 用户已确认待灌库
+	"applied", // 已 populate 目标表（v1 与 confirmed 同义，保留 V1.1 拆分明细）
+	"done", // 流程完成
+	"failed", // LLM/抓取失败（error 字段有原因）
+	"rolled_back", // 用户后悔放弃（V1 软删 = 状态标记）
+]);
+
+export const draftResearch = pgTable(
+	"draft_research",
+	{
+		id: text("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		/** SHA256(cleanUrl(website)).slice(0,16) — idempotency key */
+		urlHash: text("url_hash").notNull(),
+		state: draftResearchState("state").notNull().default("pending_review"),
+		/** OnboardingSuggestion 完整 JSONB 快照（summary/description/productLines confirmed+unverified/competitors/prompts） */
+		payload: jsonb("payload").notNull(),
+		/** 失败时填：错误描述（如 LLM 调用失败 / 抓取失败） */
+		error: text("error"),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+		/** V1 默认 30 天后过期（应用层查列表时 WHERE expires_at > now() 过滤） */
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		// 唯一性：同 brand + url_hash 仅 1 个 active 草稿（idempotency 强约束）
+		brandUrlIdx: index("draft_research_brand_id_url_hash_idx").on(table.brandId, table.urlHash),
+		// 列表查询（按 brand + 状态过滤 + 时间倒序）
+		brandStateIdx: index("draft_research_brand_id_state_idx").on(
+			table.brandId,
+			table.state,
+			table.createdAt.desc(),
+		),
+		// 监控/dashboard
+		stateIdx: index("draft_research_state_idx").on(table.state, table.createdAt.desc()),
+	}),
+).enableRLS();
+
+export type DraftResearch = typeof draftResearch.$inferSelect;
+export type NewDraftResearch = typeof draftResearch.$inferInsert;
 
 // =============================================================================
 // Epic A-1 品牌档案（US-A02 产品线 + US-A03 资质背书）
