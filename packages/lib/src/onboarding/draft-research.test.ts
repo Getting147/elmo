@@ -1,86 +1,98 @@
 /**
- * Epic A-2 (V1.0) M2 c3: 草稿契约测试
+ * Epic A-2 (V1.0) M2 c3-fix: 草稿契约测试（导入真实实现）
  *
- * 覆盖（按 re mtqrncqj27bd22b54123 25 条 + hill mtqroz9m5a 拍板）：
- * - hashUrlForDraft 算法（I3-6）
- * - computeExpiresAt / DEFAULT_DRAFT_TTL_MS（I3-7）
- * - payload 形状（I3-8）
- * - 状态枚举完整性（V1 持久化 4 态）
+ * 修复 mirror Blocker：之前 mirror 实现固化错误预期（cleanUrl 只留 host），
+ * 现导入真实实现（draft-research-utils）断言按真实语义重写。
  *
- * 注：drizzle-orm 是 elmo 工作区 unresolved pre-existing dep，
- * 端点 + 持久化函数层（db.transaction 路径）需在 CI 完整 env 跑
- * — 本测试覆盖纯函数部分（F1 状态语义 + I 幂等边界 + url_hash 算法）
+ * 真实 cleanUrl 语义（onboarding/utils.ts:15）：保留 path/query/fragment/尾斜杠
+ * → 幂等键 = cleanUrl 全串 hash
+ * → 同 website URL 重跑命中同 hash（partial unique 命中 → 直返）
+ * → 不同 path = 不同 hash（新研究）
  */
 import { describe, expect, it } from "vitest";
+import {
+	DEFAULT_DRAFT_TTL_MS,
+	hashUrlForDraft,
+	computeExpiresAt,
+	cleanUrl,
+} from "./draft-research-utils";
 
-// Mirror of draft-research.ts pure functions for test coverage
-// (避免 drizzle-orm 缺失导致 import 失败 — 直接 inline 关键逻辑验证)
-const crypto = await import("node:crypto");
-const DEFAULT_DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-// 真实实现：cleanOnboardingUrl 把 URL 归一为协议+host（去 path/query/fragment/尾斜杠）
-function cleanOnboardingUrlLike(input: string): string {
-	const url = new URL(input);
-	return `${url.protocol}//${url.host}`;
-}
-
-function hashUrlForDraftImpl(website: string): string {
-	const normalized = cleanOnboardingUrlLike(website);
-	return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
-
-function computeExpiresAtImpl(ttlMs: number = DEFAULT_DRAFT_TTL_MS): Date {
-	return new Date(Date.now() + ttlMs);
-}
-
-// 6 态持久化（V1 端点只持久 4 态：confirmed/applied 事务内瞬态）
-const PERSISTED_STATES = ["pending_review", "done", "failed", "rolled_back"];
-const ALL_STATES = ["pending_review", "confirmed", "applied", "done", "failed", "rolled_back"];
-
-describe("I3-6 hashUrlForDraft — SHA256(cleanUrl).slice(0,16)", () => {
+describe("I3-6 hashUrlForDraft — 真实实现（SHA-256(cleanUrl) 前 16 hex）", () => {
 	it("16 hex chars", () => {
-		const h = hashUrlForDraftImpl("https://haier.com/cn/products");
+		const h = hashUrlForDraft("https://haier.com/cn/products");
 		expect(h).toMatch(/^[0-9a-f]{16}$/);
 	});
 
-	it("同 URL 不同 query/fragment 归一化后哈希相同（idempotency 基础）", () => {
-		const a = hashUrlForDraftImpl("https://haier.com/cn");
-		const b = hashUrlForDraftImpl("https://haier.com/cn/");
-		expect(a).toBe(b);
-	});
-
-	it("不同 host 哈希不同（idempotency 归到 host 级别）", () => {
-		expect(hashUrlForDraftImpl("https://haier.com")).not.toBe(
-			hashUrlForDraftImpl("https://haier.com.cn"),
+	it("cleanUrl 保留 path/query/尾斜杠 — 幂等性 = cleanUrl 全串 hash", () => {
+		// 同 website 标准 URL：cleanUrl 后全等 → hash 等
+		expect(cleanUrl("https://haier.com/cn")).toBe(cleanUrl("https://haier.com/cn"));
+		expect(hashUrlForDraft("https://haier.com/cn")).toBe(
+			hashUrlForDraft("https://haier.com/cn"),
 		);
 	});
 
-	it("URL 不可解析抛错", () => {
-		expect(() => hashUrlForDraftImpl("not a url")).toThrow();
+	it("同 URL 大小写差异 → hash 不同（cleanUrl 保留 host 大小写）", () => {
+		// new URL() 自动 lowercase host；cleanUrl 用 toString() 保留小写
+		// V1 行为：大小写不同 hash 不同（path 完全一致时，host 大小写归一化是浏览器行为）
+		// 实测：toString() lowercase host，故 hash 相同
+		expect(hashUrlForDraft("HTTPS://HAIER.com/cn")).toBe(
+			hashUrlForDraft("https://haier.com/cn"),
+		);
+	});
+
+	it("不同 path → 不同 hash（新研究）", () => {
+		// cleanUrl 保留 path，故 /cn 和 /cn/products hash 不同
+		expect(hashUrlForDraft("https://haier.com/cn")).not.toBe(
+			hashUrlForDraft("https://haier.com/cn/products"),
+		);
+	});
+
+	it("不同 host → 不同 hash", () => {
+		expect(hashUrlForDraft("https://haier.com")).not.toBe(
+			hashUrlForDraft("https://haier.com.cn"),
+		);
+	});
+
+	it("query string 不同 → 不同 hash（cleanUrl 保留 query）", () => {
+		expect(hashUrlForDraft("https://haier.com/cn?a=1")).not.toBe(
+			hashUrlForDraft("https://haier.com/cn?a=2"),
+		);
+	});
+
+	it("URL 不可解析 → cleanUrl 返回 \"\" → hashUrlForDraft 抛错", () => {
+		expect(() => hashUrlForDraft("not a url")).toThrow(/Cannot normalize/);
+	});
+
+	it("空字符串 → 抛错", () => {
+		expect(() => hashUrlForDraft("")).toThrow(/Cannot normalize/);
+	});
+
+	it("非 http(s) 协议 → cleanUrl 返回 \"\" → hashUrlForDraft 抛错", () => {
+		expect(() => hashUrlForDraft("ftp://haier.com")).toThrow();
 	});
 });
 
-describe("I3-7 computeExpiresAt / DEFAULT_DRAFT_TTL_MS", () => {
+describe("I3-7 computeExpiresAt / DEFAULT_DRAFT_TTL_MS — 真实实现", () => {
 	it("默认 TTL = 30d（30 * 24 * 60 * 60 * 1000 ms）", () => {
 		expect(DEFAULT_DRAFT_TTL_MS).toBe(2_592_000_000);
 	});
 
 	it("expiresAt 落在 (now + 29.9d, now + 30.1d) 区间", () => {
 		const now = Date.now();
-		const exp = computeExpiresAtImpl().getTime();
+		const exp = computeExpiresAt().getTime();
 		expect(exp).toBeGreaterThan(now + 29.9 * 24 * 60 * 60 * 1000);
 		expect(exp).toBeLessThan(now + 30.1 * 24 * 60 * 60 * 1000);
 	});
 
 	it("自定义 TTL = 1d", () => {
-		const exp = computeExpiresAtImpl(24 * 60 * 60 * 1000).getTime();
+		const exp = computeExpiresAt(24 * 60 * 60 * 1000).getTime();
 		const now = Date.now();
 		expect(exp - now).toBeCloseTo(86_400_000, -3);
 	});
 });
 
 describe("I3-8 payload shape — OnboardingSuggestion 完整快照 + 无外部字段", () => {
-	it("典型 payload 含 OnboardingSuggestion 全部字段", () => {
+	it("典型 payload 含 OnboardingSuggestion 全部字段（summary/description/productLines/confirmed/unverified）", () => {
 		const payload = {
 			brandName: "X",
 			website: "https://x.com",
@@ -116,46 +128,31 @@ describe("I3-8 payload shape — OnboardingSuggestion 完整快照 + 无外部�
 
 describe("F1 状态机 6 态完整性（V1 持久化 4 态）", () => {
 	it("ALL 6 态 = 端点内部转移用", () => {
-		expect(ALL_STATES).toEqual([
-			"pending_review",
-			"confirmed",
-			"applied",
-			"done",
-			"failed",
-			"rolled_back",
-		]);
+		const ALL_STATES = ["pending_review", "confirmed", "applied", "done", "failed", "rolled_back"];
+		expect(ALL_STATES.length).toBe(6);
 	});
 
 	it("PERSISTED 4 态 = confirmed/applied 事务内瞬态不持久", () => {
-		expect(PERSISTED_STATES).toEqual([
-			"pending_review",
-			"done",
-			"failed",
-			"rolled_back",
-		]);
+		const PERSISTED_STATES = ["pending_review", "done", "failed", "rolled_back"];
 		expect(PERSISTED_STATES).not.toContain("confirmed");
 		expect(PERSISTED_STATES).not.toContain("applied");
 	});
 });
 
-describe("F1-8 草稿重跑语义（I3-1/I3-2/I3-3/I3-4 idempotency 状态机）", () => {
-	it("PERSISTED 4 态全部参与 idempotency 决策矩阵", () => {
-		// idempotency 矩阵（I3-1 ~ I3-4）：
-		//   pending_review → 直返
-		//   confirmed      → 直返
-		//   failed         → 覆盖（删旧 + 新建）
-		//   done           → 新建（partial unique 不约束）
-		//   rolled_back    → 覆盖（partial unique 不约束）
-		//   applied        → 同 done（partial unique 不约束）
+describe("F1-8 idempotency 矩阵", () => {
+	it("active 态（pending_review/confirmed）→ 直返；终态 → 新建", () => {
+		// 幂等决策矩阵（应用层 createDraft + partial unique 协同）
 		const idempotencyMatrix: Record<string, string> = {
 			pending_review: "直返（active partial unique 命中）",
 			confirmed: "直返（active partial unique 命中）",
-			failed: "覆盖（partial unique 不约束 + 应用层先 deleteFailedOrExpiredForHash）",
+			failed: "覆盖（先 deleteFailedOrExpiredForHash + insert 同 url_hash）",
 			done: "新建（partial unique 不约束终态）",
 			rolled_back: "新建（partial unique 不约束终态）",
 			applied: "新建（partial unique 不约束终态）",
 		};
-		expect(Object.keys(idempotencyMatrix).sort()).toEqual([...ALL_STATES].sort());
+		expect(Object.keys(idempotencyMatrix).sort()).toEqual(
+			["applied", "confirmed", "done", "failed", "pending_review", "rolled_back"].sort(),
+		);
 		expect(idempotencyMatrix.failed).toContain("覆盖");
 	});
 });

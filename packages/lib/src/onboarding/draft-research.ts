@@ -13,40 +13,24 @@
  * idempotency: 同 brand + url_hash 命中 active 态（pending_review/confirmed）→ 直返
  * 重试覆盖: failed 状态可被新草稿覆盖（先 deleteFailed 再 insert）
  */
-import { createHash, randomUUID } from "node:crypto";
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@workspace/lib/db/db";
 import { brands, draftResearch } from "@workspace/lib/db/schema";
-import { cleanOnboardingUrl, type OnboardingSuggestion } from "@workspace/lib/onboarding";
+import { type OnboardingSuggestion } from "@workspace/lib/onboarding";
+import {
+	DEFAULT_DRAFT_TTL_MS,
+	hashUrlForDraft,
+	computeExpiresAt,
+} from "./draft-research-utils";
 
-/** V1: 30 天后过期（应用层查列表时 WHERE expires_at > now() 过滤） */
-export const DEFAULT_DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export { DEFAULT_DRAFT_TTL_MS, hashUrlForDraft, computeExpiresAt };
 
 /** PG 23505 unique_violation SQLSTATE */
 const PG_UNIQUE_VIOLATION = "23505";
 
 /** Drizzle pg 龙卷风错误类型（不导出，type-only import） */
 type PgError = { code?: string; constraint?: string; message?: string };
-
-/**
- * Hash URL for draft idempotency key.
- * SHA-256(normalized URL) 前 16 hex 字符（与 elmo analyze-brand-job.ts 一致口径）。
- */
-export function hashUrlForDraft(website: string): string {
-	const normalized = cleanOnboardingUrl(website);
-	if (!normalized) {
-		throw new Error(`Cannot normalize website for hash: "${website}"`);
-	}
-	return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
-
-/**
- * Compute expires_at = now + TTL.
- * 应用层兜底（DB 无 default — migration 0017 决定）
- */
-export function computeExpiresAt(ttlMs: number = DEFAULT_DRAFT_TTL_MS): Date {
-	return new Date(Date.now() + ttlMs);
-}
 
 /**
  * 清理同 url_hash 的 failed/expired 行（避免 partial unique 冲突 + 释放空间）。
