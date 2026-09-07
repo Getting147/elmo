@@ -5,8 +5,8 @@
  * and edits before saving. Replaces the prior 4-step wizard that required
  * DataForSEO + Anthropic in tandem.
  */
-import { useState, useCallback, useEffect, memo, useMemo } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
@@ -19,11 +19,13 @@ import { citationKeys } from "@/hooks/use-citations";
 import { dashboardKeys } from "@/hooks/use-dashboard-summary";
 import { promptsSummaryKeys } from "@/hooks/use-prompts-summary";
 import {
-	startAnalyzeBrandFn,
-	getAnalyzeBrandStatusFn,
-	cancelAnalyzeBrandFn,
-	updateOnboardedBrandFn,
-} from "@/server/onboarding";
+	confirmDraft,
+	fetchBrandDrafts,
+	fetchDraft,
+	patchDraft,
+	triggerResearch,
+	type ResearchDraftPayload,
+} from "@/lib/brand-research-client";
 import { trackEvent } from "@/lib/posthog";
 import { safeUUID } from "@/lib/uuid";
 import { CompetitorsEditor, newCompetitorEntry, type CompetitorEntry } from "@/components/competitors-editor";
@@ -114,123 +116,49 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	const brandId = brand?.id;
 
-	// Stop polling, drop the cached status so the next run starts clean, and
-	// (best-effort) cancel the worker job. `errorMessage` surfaces a reason
-	// (timeout); a bare cancel passes null.
-	const stopAnalyzing = useCallback(
-		(errorMessage: string | null) => {
-			setPhase("idle");
-			setError(errorMessage);
-			if (brandId) {
-				queryClient.removeQueries({ queryKey: analyzeStatusKey(brandId) });
-				cancelAnalyzeBrandFn({ data: { brandId } }).catch(() => {});
-			}
-		},
-		[brandId, queryClient],
-	);
+	// ---- M2xM3: research draft flow (draft_research 持久化 + confirm 灌库) ----
+	const [draftId, setDraftId] = useState<string | null>(null);
+	// 完整 payload 快照 —— PATCH 时与用户编辑 merge（unverified 行保留原 evidence，仅被忽略的行移除）
+	const payloadRef = useRef<ResearchDraftPayload | null>(null);
 
-	const { mutate: enqueueAnalysis, isSuccess: analysisEnqueued } = useMutation({
-		mutationFn: (vars: { brandId: string; website: string; brandName?: string }) => startAnalyzeBrandFn({ data: vars }),
-		onError: (err) => {
-			setError(err instanceof Error ? err.message : "Analysis failed");
-			setPhase("idle");
-		},
-	});
+	const stopAnalyzing = useCallback((errorMessage: string | null) => {
+		setPhase("idle");
+		setError(errorMessage);
+		setDraftId(null);
+		payloadRef.current = null;
+	}, []);
 
-	// Poll the job status while analyzing. The query stops itself once the job
-	// reaches a terminal state (refetchInterval returns false), and is disabled
-	// the moment we leave the analyzing phase.
-	const statusQuery = useQuery({
-		queryKey: analyzeStatusKey(brandId ?? "none"),
-		queryFn: () => getAnalyzeBrandStatusFn({ data: { brandId: brandId! } }),
-		// Only poll once the job is actually enqueued.
-		enabled: phase === "analyzing" && analysisEnqueued && !!brandId,
-		staleTime: 0,
-		gcTime: 0,
-		refetchInterval: (query) => (query.state.data?.status === "pending" ? POLL_INTERVAL_MS : false),
-		refetchIntervalInBackground: true,
-	});
-
-	const handleAnalyze = useCallback(() => {
-		if (!brand?.website || !brand?.id) return;
-		setError(null);
-		// Clear any stale status from a previous run before we start polling.
-		queryClient.removeQueries({ queryKey: analyzeStatusKey(brand.id) });
-		setPhase("analyzing");
-		enqueueAnalysis({ brandId: brand.id, website: brand.website, brandName: brand.name });
-	}, [brand?.website, brand?.id, brand?.name, queryClient, enqueueAnalysis]);
-
-	// React to status transitions while analyzing.
-	const statusData = statusQuery.data;
+	// Mount: 恢复活动草稿（刷新/离开后重进续接管道；done+pending_review 直接进 review）
 	useEffect(() => {
-		if (phase !== "analyzing" || !statusData) return;
-		if (statusData.status === "failed") {
-			setError(statusData.error);
-			setPhase("idle");
-			if (brandId) queryClient.removeQueries({ queryKey: analyzeStatusKey(brandId) });
-			return;
-		}
-		if (statusData.status === "done") {
-			const suggestion = statusData.suggestion;
-			if (suggestion) {
-				const productLines = suggestion.productLines?.confirmed ?? [];
-				setData({
-					brandName: suggestion.brandName || brand?.name || "",
-					website: brand?.website || suggestion.website || "",
-					additionalDomains: suggestion.additionalDomains || [],
-					aliases: suggestion.aliases || [],
-					competitors: (suggestion.competitors || []).map((c) =>
-						newCompetitorEntry({
-							name: c.name,
-							domains: c.domains || [],
-							aliases: c.aliases || [],
-							expanded: false,
-						}),
-					),
-					prompts: (suggestion.suggestedPrompts || []).map((p) =>
-						newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
-					),
-					summary: suggestion.summary ?? "",
-					description: suggestion.description ?? "",
-					productLines: productLines.map((entry) =>
-						newEditableProductLine({
-							name: entry.line.name,
-							skus: entry.line.skus.map((s) =>
-								newEditableSku({
-									name: s.name,
-									model: s.model ?? "",
-									oneLiner: s.oneLiner,
-									evidenceUrl: s.evidenceUrl,
-								}),
-							),
-						}),
-					),
-					unverifiedLines: (suggestion.productLines?.unverified ?? []).map((entry) => ({
-						_key: safeUUID(),
-						name: entry.line.name,
-						skuNames: entry.line.skus.map((s) => s.name),
-						reason: entry.reason,
-					})),
-				});
-				setPhase("review");
-				trackEvent("onboarding_analyzed", {
-					competitor_count: suggestion.competitors?.length || 0,
-					prompt_count: suggestion.suggestedPrompts?.length || 0,
-					product_line_count: productLines.length,
-				});
+		if (!brandId) return;
+		let cancelled = false;
+		(async () => {
+			try {
+				const { drafts } = await fetchBrandDrafts(brandId);
+				const active = drafts.find(
+					(d) =>
+						d.researchStatus === "queued" ||
+						d.researchStatus === "running" ||
+						(d.researchStatus === "done" && d.state === "pending_review"),
+				);
+				if (cancelled || !active) return;
+				payloadRef.current = active.payload;
+				setDraftId(active.id);
+				if (active.researchStatus === "done") {
+					setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || ""));
+					setPhase("review");
+				} else {
+					setPhase("analyzing");
+				}
+			} catch {
+				// drafts 不可达（未登录/无权限等）——保持 idle，用户仍可手动触发
 			}
-		}
-	}, [phase, statusData, brandId, brand?.name, brand?.website, queryClient]);
-
-	// Give up on a stuck analysis instead of polling forever.
-	useEffect(() => {
-		if (phase !== "analyzing") return;
-		const timer = window.setTimeout(
-			() => stopAnalyzing("Brand analysis timed out. Please try again."),
-			ANALYZE_TIMEOUT_MS,
-		);
-		return () => window.clearTimeout(timer);
-	}, [phase, stopAnalyzing]);
+		})();
+		return () => {
+			cancelled = true;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [brandId]);
 
 	const updateBrandName = useCallback((brandName: string) => setData((p) => ({ ...p, brandName })), []);
 	const updateWebsite = useCallback((website: string) => setData((p) => ({ ...p, website })), []);
@@ -250,10 +178,84 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		(productLines: EditableProductLine[]) => setData((p) => ({ ...p, productLines })),
 		[],
 	);
-	const ignoreUnverified = useCallback(
-		(key: string) => setData((p) => ({ ...p, unverifiedLines: p.unverifiedLines.filter((u) => u._key !== key) })),
-		[],
-	);
+	const ignoreUnverified = useCallback((key: string) => {
+		setData((p) => {
+			const line = p.unverifiedLines.find((u) => u._key === key);
+			// 同步从 payload 快照移除（PATCH 时 unverified 不再含该行；其余原始行原样保留）
+			const cur = payloadRef.current;
+			const pl = cur?.productLines;
+			if (line && cur && pl) {
+				payloadRef.current = {
+					...cur,
+					productLines: {
+						...pl,
+						unverified: pl.unverified.filter((u) => u.line.name !== line.name),
+					},
+				};
+			}
+			return { ...p, unverifiedLines: p.unverifiedLines.filter((u) => u._key !== key) };
+		});
+	}, []);
+
+	const handleAnalyze = useCallback(async () => {
+		if (!brand?.website || !brand?.id) return;
+		setError(null);
+		setPhase("analyzing");
+		payloadRef.current = null;
+		try {
+			const res = await triggerResearch(brand.id, brand.website);
+			setDraftId(res.draftId);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Research request failed");
+			setPhase("idle");
+		}
+	}, [brand?.website, brand?.id]);
+
+	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
+	const draftQuery = useQuery({
+		queryKey: ["research-draft", draftId ?? "none"],
+		queryFn: () => fetchDraft(draftId!),
+		enabled: phase === "analyzing" && !!draftId,
+		staleTime: 0,
+		gcTime: 0,
+		refetchInterval: (query) => {
+			const s = query.state.data?.researchStatus;
+			return s === "queued" || s === "running" ? POLL_INTERVAL_MS : false;
+		},
+		refetchIntervalInBackground: true,
+	});
+
+	// 轮询结果驱动 phase 转移
+	const draftData = draftQuery.data;
+	useEffect(() => {
+		if (phase !== "analyzing" || !draftData) return;
+		if (draftData.researchStatus === "failed" || draftData.state === "failed") {
+			setError(draftData.error || "Brand research failed. Please try again.");
+			setPhase("idle");
+			return;
+		}
+		if (draftData.researchStatus === "done") {
+			payloadRef.current = draftData.payload;
+			setData(suggestionToWizardData(draftData.payload, brand?.name || "", brand?.website || ""));
+			setPhase("review");
+			trackEvent("onboarding_analyzed", {
+				competitor_count: draftData.payload.competitors?.length || 0,
+				prompt_count: draftData.payload.suggestedPrompts?.length || 0,
+				product_line_count: draftData.payload.productLines?.confirmed?.length || 0,
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [phase, draftData, brandId, brand?.name, brand?.website, queryClient]);
+
+	// Give up on a stuck research instead of polling forever.
+	useEffect(() => {
+		if (phase !== "analyzing") return;
+		const timer = window.setTimeout(
+			() => stopAnalyzing("Brand research timed out. Please try again."),
+			ANALYZE_TIMEOUT_MS,
+		);
+		return () => window.clearTimeout(timer);
+	}, [phase, stopAnalyzing]);
 
 	const previewCounts = useMemo(() => {
 		const enabled = data.prompts.filter((p) => p.enabled && p.value.trim().length > 0).length;
@@ -261,7 +263,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	}, [data.prompts]);
 
 	const handleSubmit = useCallback(async () => {
-		if (!brand?.id) return;
+		if (!brand?.id || !draftId) return;
 		setSubmitError(null);
 		setIsSaving(true);
 		try {
@@ -275,37 +277,45 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			const promptsPayload = data.prompts
 				.filter((p) => p.enabled && p.value.trim())
-				.map((p) => ({ value: p.value.trim(), tags: p.tags, enabled: true }));
+				.map((p) => ({ prompt: p.value.trim(), tags: p.tags }));
 
-			// Epic A-2 (V1.0): 只提交完整可用的 SKU（name + evidenceUrl 必填），unverified 永不提交
-			const productLinesPayload = data.productLines
+			// 只提交完整可用的 SKU（name + evidenceUrl 必填），unverified 永不提交
+			const confirmedLines = data.productLines
 				.map((line) => ({
-					name: line.name.trim(),
-					skus: line.skus
-						.filter((s) => s.name.trim() && s.evidenceUrl.trim())
-						.map((s) => ({
-							name: s.name.trim(),
-							model: s.model?.trim() || undefined,
-							oneLiner: s.oneLiner.trim(),
-							evidenceUrl: s.evidenceUrl.trim(),
-						})),
+					line: {
+						name: line.name.trim(),
+						skus: line.skus
+							.filter((s) => s.name.trim() && s.evidenceUrl.trim())
+							.map((s) => ({
+								name: s.name.trim(),
+								model: s.model?.trim() || undefined,
+								oneLiner: s.oneLiner.trim(),
+								evidenceUrl: s.evidenceUrl.trim(),
+							})),
+					},
 				}))
-				.filter((line) => line.name && line.skus.length > 0);
+				.filter((entry) => entry.line.name && entry.line.skus.length > 0);
 
-			await updateOnboardedBrandFn({
-				data: {
-					brandId: brand.id,
-					brandName: data.brandName.trim() || brand.name,
-					website: data.website.trim() || brand.website,
-					additionalDomains: data.additionalDomains,
-					aliases: data.aliases,
-					competitors: competitorsPayload,
-					prompts: promptsPayload,
-					summary: data.summary.trim() || undefined,
-					description: data.description.trim() || undefined,
-					productLines: productLinesPayload.length > 0 ? productLinesPayload : undefined,
-				},
+			const base = payloadRef.current;
+			// PATCH 回写用户编辑（payload 单一真源）——unverified 保留原行（忽略的行已被 ignore 从 payloadRef 移除）
+			await patchDraft(draftId, {
+				brandName: data.brandName.trim() || brand.name,
+				website: data.website.trim() || brand.website,
+				aliases: data.aliases,
+				additionalDomains: data.additionalDomains,
+				competitors: competitorsPayload,
+				prompts: promptsPayload,
+				summary: data.summary.trim() || undefined,
+				description: data.description.trim() || undefined,
+				productLines: base?.productLines
+					? {
+							confirmed: confirmedLines,
+							unverified: base.productLines.unverified,
+						}
+					: undefined,
 			});
+			// confirm 灌库（事务：brand → product lines → competitors → prompts）
+			await confirmDraft(draftId);
 
 			trackEvent("wizard_completed", {
 				prompts_created: promptsPayload.length,
@@ -327,7 +337,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		} finally {
 			setIsSaving(false);
 		}
-	}, [brand, data, queryClient, router, onComplete]);
+	}, [brand, data, draftId, queryClient, router, onComplete]);
 
 	if (phase === "idle" || phase === "analyzing") {
 		return (
@@ -492,4 +502,52 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			</Button>
 		</div>
 	);
+}
+
+
+/** suggestion/payload → WizardData（review 编辑区初始值）。模块级纯函数便于测试。 */
+function suggestionToWizardData(
+	suggestion: ResearchDraftPayload,
+	brandNameFallback: string,
+	websiteFallback: string,
+): WizardData {
+	const productLines = suggestion.productLines?.confirmed ?? [];
+	return {
+		brandName: suggestion.brandName || brandNameFallback,
+		website: websiteFallback || suggestion.website || "",
+		additionalDomains: suggestion.additionalDomains || [],
+		aliases: suggestion.aliases || [],
+		competitors: (suggestion.competitors || []).map((c) =>
+			newCompetitorEntry({
+				name: c.name,
+				domains: c.domains || [],
+				aliases: c.aliases || [],
+				expanded: false,
+			}),
+		),
+		prompts: (suggestion.suggestedPrompts || []).map((p) =>
+			newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
+		),
+		summary: suggestion.summary ?? "",
+		description: suggestion.description ?? "",
+		productLines: productLines.map((entry) =>
+			newEditableProductLine({
+				name: entry.line.name,
+				skus: entry.line.skus.map((s) =>
+					newEditableSku({
+						name: s.name,
+						model: s.model ?? "",
+						oneLiner: s.oneLiner,
+						evidenceUrl: s.evidenceUrl,
+					}),
+				),
+			}),
+		),
+		unverifiedLines: (suggestion.productLines?.unverified ?? []).map((entry) => ({
+			_key: safeUUID(),
+			name: entry.line.name,
+			skuNames: entry.line.skus.map((s) => s.name),
+			reason: entry.reason,
+		})),
+	};
 }
