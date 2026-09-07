@@ -6,7 +6,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { createApiHandler, ApiError } from "@/lib/api/handler";
 import {
-	researchBrand,
+	triggerResearch,
 	listDraftsByBrand,
 	DraftNotFoundError,
 } from "@/server/research";
@@ -26,7 +26,14 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 				handle: async ({ params, body }) => {
 					const { brandId } = params;
 					try {
-						const result = await researchBrand({ brandId, website: body.website });
+						// c3-job-fix: triggerResearch 替代 researchBrand（async job 化，<100ms 即返）
+						const result = await triggerResearch({
+							brandId,
+							website: body.website,
+							maxCompetitors: body.maxCompetitors,
+							maxPrompts: body.maxPrompts,
+							maxProducts: body.maxProducts,
+						});
 						return result;
 					} catch (err) {
 						if (err instanceof Error && err.message.includes("Cannot parse website")) {
@@ -42,6 +49,8 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 					const url = new URL(request.url);
 					const includeAll = url.searchParams.get("include_all") === "true";
 					const rows = await listDraftsByBrand(params.brandId, includeAll);
+					// c3-job-fix3: 端点返回字段 — researchStatus 含进 draft payload
+					// 列表端点本身不需改（listDraftsByBrand 已 select 全字段包含 researchStatus）
 					return { drafts: rows };
 				},
 			}),

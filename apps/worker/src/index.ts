@@ -58,6 +58,13 @@ async function main() {
 		retryBackoff: false,
 		expireInSeconds: 60 * 15, // 15 minute timeout for onboarding brand analysis
 	});
+	// c3-job: 异步 LLM 处理草稿（V1.0 替代同步 analyzeBrand — 30-90s → pg-boss enqueue）
+	await boss.createQueue("analyze-brand-research", {
+		retryLimit: 0, // 失败不自动重试（由前端用户手动重跑 — 避免重复 LLM 调用费用）
+		retryDelay: 0,
+		retryBackoff: false,
+		expireInSeconds: 60 * 15, // 15 min — 与 analyze-brand 一致
+	});
 	await boss.createQueue("schedule-maintenance", {
 		retryLimit: 3,
 		retryDelay: 300, // 5 minutes between retries

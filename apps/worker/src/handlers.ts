@@ -7,6 +7,10 @@ import { generateReportJob, type GenerateReportData } from "./jobs/generate-repo
 import { scheduleMaintenanceJob, type ScheduleMaintenanceData } from "./jobs/schedule-maintenance";
 import { syncAuth0MembershipsJob, type SyncAuth0MembershipsData } from "./jobs/sync-auth0-memberships";
 import { analyzeBrandJob, type AnalyzeBrandData } from "./jobs/analyze-brand";
+import {
+	processResearchJob,
+	type ProcessResearchJobData,
+} from "./jobs/process-research";
 
 /**
  * Wraps a pg-boss handler to report errors to Sentry before re-throwing.
@@ -54,6 +58,15 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
 		withSentry("analyze-brand", analyzeBrandJob),
 	);
 	console.log("Registered handler: analyze-brand");
+
+	// c3-job: 异步 LLM 处理草稿（V1.0 替代同步 analyzeBrand 触发网关/前端超时）
+	// batchSize: 1 保证单 job 单 draft 不并发写同一行
+	await boss.work<ProcessResearchJobData>(
+		"analyze-brand-research",
+		{ batchSize: 1, localConcurrency: 2 },
+		withSentry("analyze-brand-research", processResearchJob),
+	);
+	console.log("Registered handler: analyze-brand-research");
 
 	await boss.work<ScheduleMaintenanceData>(
 		"schedule-maintenance",
