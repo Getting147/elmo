@@ -76,8 +76,8 @@ vi.mock("@/server/onboarding-core", () => {
 	return { BrandNotFoundError };
 });
 
-import { Route as ResearchRoute } from "../../brands/$brandId/research/index";
-import { Route as DraftRoute } from "../../drafts/$draftId";
+import { Route as ResearchRoute } from "../brands/$brandId/research/index";
+import { Route as DraftRoute } from "../drafts/$draftId";
 
 const API_KEY = "test-api-key";
 const BASE = "http://localhost/api/v1";
@@ -86,9 +86,12 @@ type HandlerCtx = { request: Request; params: Record<string, string> };
 type HandlerFn = (ctx: HandlerCtx) => Promise<Response>;
 
 function getHandler(route: unknown, method: "GET" | "POST"): HandlerFn {
-	const handlers = (route as {
+	// TanStack file route 的 server handlers 可能在 Route.server 或 Route.options.server
+	const r = route as {
 		server?: { handlers?: Record<string, HandlerFn> };
-	}).server?.handlers;
+		options?: { server?: { handlers?: Record<string, HandlerFn> } };
+	};
+	const handlers = r.server?.handlers ?? r.options?.server?.handlers;
 	const handler = handlers?.[method];
 	if (!handler) throw new Error(`handler ${method} missing on route`);
 	return handler;
