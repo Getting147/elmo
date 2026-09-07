@@ -256,8 +256,9 @@ export const draftResearch = pgTable(
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 	},
 	(table) => ({
-		// 唯一性：同 brand + url_hash 仅 1 个 active 草稿（idempotency 强约束）
-		brandUrlIdx: index("draft_research_brand_id_url_hash_idx").on(table.brandId, table.urlHash),
+		// 唯一性：active 态（pending_review/confirmed）唯一（migration 0018 partial unique）—
+		// 终态（applied/done/failed/rolled_back）允许多行（重试覆盖/历史归档可追溯）
+		brandUrlActiveIdx: index("draft_research_brand_id_url_hash_active_idx").on(table.brandId, table.urlHash),
 		// 列表查询（按 brand + 状态过滤 + 时间倒序）
 		brandStateIdx: index("draft_research_brand_id_state_idx").on(
 			table.brandId,
