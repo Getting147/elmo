@@ -116,8 +116,7 @@ export function rollbackDraft(draftId: string): Promise<{ rolledBack: boolean }>
 }
 
 export function fetchBrandDrafts(brandId: string, includeAll = false): Promise<{ drafts: ResearchDraft[] }> {
-	return request<{ drafts: ResearchDraft[] }>(
-		`/api/v1/brands/${brandId}/research/?include_all=${includeAll}`,
-		{ method: "GET" },
-	);
+	return request<{ drafts: ResearchDraft[] }>(`/api/v1/brands/${brandId}/research/?include_all=${includeAll}`, {
+		method: "GET",
+	});
 }
