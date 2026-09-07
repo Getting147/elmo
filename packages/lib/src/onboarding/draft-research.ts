@@ -49,8 +49,12 @@ export function computeExpiresAt(ttlMs: number = DEFAULT_DRAFT_TTL_MS): Date {
 }
 
 /**
- * 清理同 url_hash 的 failed/expired 行（避免 partial unique 冲突 + 节省空间）。
+ * 清理同 url_hash 的 failed/expired 行（避免 partial unique 冲突 + 释放空间）。
  * 在 createDraft 前调用。
+ *
+ * F1-8 修正（避免重跑命中过期 pending_review/done 返旧草稿）：
+ * 过期行（expires_at < now()）不论 state 一律清 — done 行 payload 已灌库无保留价值；
+ * 过期 pending_review 必清（用户重跑应能新建）。
  */
 export async function deleteFailedOrExpiredForHash(
 	brandId: string,
@@ -62,7 +66,7 @@ export async function deleteFailedOrExpiredForHash(
 			and(
 				eq(draftResearch.brandId, brandId),
 				eq(draftResearch.urlHash, urlHash),
-				inArray(draftResearch.state, ["failed", "rolled_back"]),
+				sql`(${draftResearch.state} IN ('failed', 'rolled_back') OR ${draftResearch.expiresAt} < now())`,
 			),
 		)
 		.returning({ id: draftResearch.id });
@@ -183,11 +187,18 @@ export async function getDraftById(id: string) {
 /**
  * 品牌草稿列表（V1 默认过滤 expires_at > now()，排除过期）
  * ORDER BY created_at DESC（最新在前）
+ *
+ * S2-2: includeAll=true 时全显（含 failed/rolled_back/expired，仅排除无效态）
+ * — 默认按 hill 拍板：state IN ('pending_review','done') AND expires_at > now()
+ * — 兼容老调用（不传 includeAll → 默认 false 走默认行为）
  */
-export async function listDraftsByBrand(brandId: string) {
+export async function listDraftsByBrand(brandId: string, includeAll: boolean = false) {
+	const stateFilter = includeAll
+		? sql`(${draftResearch.state} IN ('pending_review', 'confirmed', 'done', 'failed', 'rolled_back') AND ${draftResearch.expiresAt} > now())`
+		: sql`(${draftResearch.state} IN ('pending_review', 'done') AND ${draftResearch.expiresAt} > now())`;
 	return db
 		.select()
 		.from(draftResearch)
-		.where(and(eq(draftResearch.brandId, brandId), gt(draftResearch.expiresAt, sql`now()`)))
+		.where(and(eq(draftResearch.brandId, brandId), stateFilter))
 		.orderBy(sql`${draftResearch.createdAt} DESC`);
 }
