@@ -45,6 +45,7 @@ import { Route as ApiV1BrandsBrandIdRouteImport } from './routes/api/v1/brands/$
 import { Route as ApiV1CompetitorsIndexRouteImport } from './routes/api/v1/competitors/index'
 import { Route as ApiV1CompetitorsCompetitorIdRouteImport } from './routes/api/v1/competitors/$competitorId'
 import { Route as ApiV1DocsIndexRouteImport } from './routes/api/v1/docs/index'
+import { Route as ApiV1DraftsDraftIdRouteImport } from './routes/api/v1/drafts/$draftId'
 import { Route as ApiV1PromptsIndexRouteImport } from './routes/api/v1/prompts/index'
 import { Route as ApiV1PromptsPromptIdRouteImport } from './routes/api/v1/prompts/$promptId'
 import { Route as ApiV1ReportsIndexRouteImport } from './routes/api/v1/reports/index'
@@ -66,6 +67,7 @@ import { Route as ApiV1BrandsBrandIdProfileIndexRouteImport } from './routes/api
 import { Route as ApiV1BrandsBrandIdProfileCompletenessRouteImport } from './routes/api/v1/brands/$brandId/profile/completeness'
 import { Route as ApiV1BrandsBrandIdProfileCredentialsRouteImport } from './routes/api/v1/brands/$brandId/profile/credentials'
 import { Route as ApiV1BrandsBrandIdProfileProductLinesRouteImport } from './routes/api/v1/brands/$brandId/profile/product-lines'
+import { Route as ApiV1BrandsBrandIdResearchIndexRouteImport } from './routes/api/v1/brands/$brandId/research/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -253,6 +255,11 @@ const ApiV1DocsIndexRoute = ApiV1DocsIndexRouteImport.update({
   path: '/api/v1/docs/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1DraftsDraftIdRoute = ApiV1DraftsDraftIdRouteImport.update({
+  id: '/api/v1/drafts/$draftId',
+  path: '/api/v1/drafts/$draftId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1PromptsIndexRoute = ApiV1PromptsIndexRouteImport.update({
   id: '/api/v1/prompts/',
   path: '/api/v1/prompts/',
@@ -374,6 +381,12 @@ const ApiV1BrandsBrandIdProfileProductLinesRoute =
     path: '/profile/product-lines',
     getParentRoute: () => ApiV1BrandsBrandIdRoute,
   } as any)
+const ApiV1BrandsBrandIdResearchIndexRoute =
+  ApiV1BrandsBrandIdResearchIndexRouteImport.update({
+    id: '/research/',
+    path: '/research/',
+    getParentRoute: () => ApiV1BrandsBrandIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -406,6 +419,7 @@ export interface FileRoutesByFullPath {
   '/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
   '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
+  '/api/v1/drafts/$draftId': typeof ApiV1DraftsDraftIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
   '/api/v1/tools/analyze': typeof ApiV1ToolsAnalyzeRoute
@@ -432,6 +446,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
   '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
   '/api/v1/brands/$brandId/profile/': typeof ApiV1BrandsBrandIdProfileIndexRoute
+  '/api/v1/brands/$brandId/research/': typeof ApiV1BrandsBrandIdResearchIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -461,6 +476,7 @@ export interface FileRoutesByTo {
   '/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
   '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
+  '/api/v1/drafts/$draftId': typeof ApiV1DraftsDraftIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
   '/api/v1/tools/analyze': typeof ApiV1ToolsAnalyzeRoute
@@ -487,6 +503,7 @@ export interface FileRoutesByTo {
   '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
   '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
   '/api/v1/brands/$brandId/profile': typeof ApiV1BrandsBrandIdProfileIndexRoute
+  '/api/v1/brands/$brandId/research': typeof ApiV1BrandsBrandIdResearchIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -521,6 +538,7 @@ export interface FileRoutesById {
   '/_authed/reports/render/$reportId': typeof AuthedReportsRenderReportIdRoute
   '/api/v1/brands/$brandId': typeof ApiV1BrandsBrandIdRouteWithChildren
   '/api/v1/competitors/$competitorId': typeof ApiV1CompetitorsCompetitorIdRoute
+  '/api/v1/drafts/$draftId': typeof ApiV1DraftsDraftIdRoute
   '/api/v1/prompts/$promptId': typeof ApiV1PromptsPromptIdRouteWithChildren
   '/api/v1/reports/$reportId': typeof ApiV1ReportsReportIdRoute
   '/api/v1/tools/analyze': typeof ApiV1ToolsAnalyzeRoute
@@ -547,6 +565,7 @@ export interface FileRoutesById {
   '/api/v1/brands/$brandId/profile/credentials': typeof ApiV1BrandsBrandIdProfileCredentialsRoute
   '/api/v1/brands/$brandId/profile/product-lines': typeof ApiV1BrandsBrandIdProfileProductLinesRoute
   '/api/v1/brands/$brandId/profile/': typeof ApiV1BrandsBrandIdProfileIndexRoute
+  '/api/v1/brands/$brandId/research/': typeof ApiV1BrandsBrandIdResearchIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -581,6 +600,7 @@ export interface FileRouteTypes {
     | '/reports/render/$reportId'
     | '/api/v1/brands/$brandId'
     | '/api/v1/competitors/$competitorId'
+    | '/api/v1/drafts/$draftId'
     | '/api/v1/prompts/$promptId'
     | '/api/v1/reports/$reportId'
     | '/api/v1/tools/analyze'
@@ -607,6 +627,7 @@ export interface FileRouteTypes {
     | '/api/v1/brands/$brandId/profile/credentials'
     | '/api/v1/brands/$brandId/profile/product-lines'
     | '/api/v1/brands/$brandId/profile/'
+    | '/api/v1/brands/$brandId/research/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -636,6 +657,7 @@ export interface FileRouteTypes {
     | '/reports/render/$reportId'
     | '/api/v1/brands/$brandId'
     | '/api/v1/competitors/$competitorId'
+    | '/api/v1/drafts/$draftId'
     | '/api/v1/prompts/$promptId'
     | '/api/v1/reports/$reportId'
     | '/api/v1/tools/analyze'
@@ -662,6 +684,7 @@ export interface FileRouteTypes {
     | '/api/v1/brands/$brandId/profile/credentials'
     | '/api/v1/brands/$brandId/profile/product-lines'
     | '/api/v1/brands/$brandId/profile'
+    | '/api/v1/brands/$brandId/research'
   id:
     | '__root__'
     | '/'
@@ -695,6 +718,7 @@ export interface FileRouteTypes {
     | '/_authed/reports/render/$reportId'
     | '/api/v1/brands/$brandId'
     | '/api/v1/competitors/$competitorId'
+    | '/api/v1/drafts/$draftId'
     | '/api/v1/prompts/$promptId'
     | '/api/v1/reports/$reportId'
     | '/api/v1/tools/analyze'
@@ -721,6 +745,7 @@ export interface FileRouteTypes {
     | '/api/v1/brands/$brandId/profile/credentials'
     | '/api/v1/brands/$brandId/profile/product-lines'
     | '/api/v1/brands/$brandId/profile/'
+    | '/api/v1/brands/$brandId/research/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -737,6 +762,7 @@ export interface RootRouteChildren {
   ApiSetupStatusIndexRoute: typeof ApiSetupStatusIndexRoute
   ApiV1BrandsBrandIdRoute: typeof ApiV1BrandsBrandIdRouteWithChildren
   ApiV1CompetitorsCompetitorIdRoute: typeof ApiV1CompetitorsCompetitorIdRoute
+  ApiV1DraftsDraftIdRoute: typeof ApiV1DraftsDraftIdRoute
   ApiV1PromptsPromptIdRoute: typeof ApiV1PromptsPromptIdRouteWithChildren
   ApiV1ReportsReportIdRoute: typeof ApiV1ReportsReportIdRoute
   ApiV1ToolsAnalyzeRoute: typeof ApiV1ToolsAnalyzeRoute
@@ -1003,6 +1029,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1DocsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/drafts/$draftId': {
+      id: '/api/v1/drafts/$draftId'
+      path: '/api/v1/drafts/$draftId'
+      fullPath: '/api/v1/drafts/$draftId'
+      preLoaderRoute: typeof ApiV1DraftsDraftIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/prompts/': {
       id: '/api/v1/prompts/'
       path: '/api/v1/prompts'
@@ -1150,6 +1183,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1BrandsBrandIdProfileProductLinesRouteImport
       parentRoute: typeof ApiV1BrandsBrandIdRoute
     }
+    '/api/v1/brands/$brandId/research/': {
+      id: '/api/v1/brands/$brandId/research/'
+      path: '/research'
+      fullPath: '/api/v1/brands/$brandId/research/'
+      preLoaderRoute: typeof ApiV1BrandsBrandIdResearchIndexRouteImport
+      parentRoute: typeof ApiV1BrandsBrandIdRoute
+    }
   }
 }
 
@@ -1267,6 +1307,7 @@ interface ApiV1BrandsBrandIdRouteChildren {
   ApiV1BrandsBrandIdProfileCredentialsRoute: typeof ApiV1BrandsBrandIdProfileCredentialsRoute
   ApiV1BrandsBrandIdProfileProductLinesRoute: typeof ApiV1BrandsBrandIdProfileProductLinesRoute
   ApiV1BrandsBrandIdProfileIndexRoute: typeof ApiV1BrandsBrandIdProfileIndexRoute
+  ApiV1BrandsBrandIdResearchIndexRoute: typeof ApiV1BrandsBrandIdResearchIndexRoute
 }
 
 const ApiV1BrandsBrandIdRouteChildren: ApiV1BrandsBrandIdRouteChildren = {
@@ -1277,6 +1318,7 @@ const ApiV1BrandsBrandIdRouteChildren: ApiV1BrandsBrandIdRouteChildren = {
   ApiV1BrandsBrandIdProfileProductLinesRoute:
     ApiV1BrandsBrandIdProfileProductLinesRoute,
   ApiV1BrandsBrandIdProfileIndexRoute: ApiV1BrandsBrandIdProfileIndexRoute,
+  ApiV1BrandsBrandIdResearchIndexRoute: ApiV1BrandsBrandIdResearchIndexRoute,
 }
 
 const ApiV1BrandsBrandIdRouteWithChildren =
@@ -1307,6 +1349,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSetupStatusIndexRoute: ApiSetupStatusIndexRoute,
   ApiV1BrandsBrandIdRoute: ApiV1BrandsBrandIdRouteWithChildren,
   ApiV1CompetitorsCompetitorIdRoute: ApiV1CompetitorsCompetitorIdRoute,
+  ApiV1DraftsDraftIdRoute: ApiV1DraftsDraftIdRoute,
   ApiV1PromptsPromptIdRoute: ApiV1PromptsPromptIdRouteWithChildren,
   ApiV1ReportsReportIdRoute: ApiV1ReportsReportIdRoute,
   ApiV1ToolsAnalyzeRoute: ApiV1ToolsAnalyzeRoute,

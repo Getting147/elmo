@@ -20,7 +20,7 @@ function notFoundMapper(err: unknown): ApiError | undefined {
 	return undefined;
 }
 
-export const Route = createFileRoute("/api/v1/drafts/$draftId/")({
+export const Route = createFileRoute("/api/v1/drafts/$draftId")({
 	server: {
 		handlers: {
 			GET: createApiHandler({
