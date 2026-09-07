@@ -345,6 +345,8 @@ async function insertProductLines(args: {
 				name: pl.name,
 				category: pl.category ?? null,
 				coreParams: pl.differentiators ?? null,
+				// differentiators 列 NOT NULL（A-1 契约）——LLM 未产出时空串兜底
+				differentiators: pl.differentiators ?? "",
 				targetAudience: pl.targetAudience ?? null,
 				position: i,
 			})

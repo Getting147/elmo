@@ -201,6 +201,9 @@ function ChartSection({
 				onboarded: true,
 				delayOverrideHours: null,
 				enabledModels: null,
+				deletedAt: null,
+				summary: null,
+				description: null,
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			}

@@ -4,7 +4,7 @@
  * Form to edit brand name, website, additional domains, and aliases.
  */
 import { useState, useCallback, useEffect } from "react";
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { getAppName, getBrandName, buildTitle } from "@/lib/route-head";
 import { Button } from "@workspace/ui/components/button";
@@ -47,7 +47,6 @@ export const Route = createFileRoute("/_authed/app/$brand/settings/brand")({
 function BrandSettingsPage() {
 	const { brand, isLoading, revalidate } = useBrand();
 	const queryClient = useQueryClient();
-	const router = useRouter();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState("");
 	const [success, setSuccess] = useState("");
@@ -99,7 +98,7 @@ function BrandSettingsPage() {
 		try {
 			await deleteBrandFn({ data: { brandId: brand.id } });
 			queryClient.invalidateQueries();
-			await router.navigate({ to: "/" });
+			window.location.href = "/";
 		} catch (err) {
 			setDeleteError(err instanceof Error ? err.message : "An error occurred");
 			setIsDeleting(false);
