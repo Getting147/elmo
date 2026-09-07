@@ -5,16 +5,26 @@
  * and edits before saving. Replaces the prior 4-step wizard that required
  * DataForSEO + Anthropic in tandem.
  */
-import { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
-import { Textarea } from "@workspace/ui/components/textarea";
-import { Loader2, AlertCircle, Play, Rocket } from "lucide-react";
-import { TagsInput } from "@workspace/ui/components/tags-input";
 import { Separator } from "@workspace/ui/components/separator";
-import { useBrand, brandKeys } from "@/hooks/use-brands";
+import { TagsInput } from "@workspace/ui/components/tags-input";
+import { Textarea } from "@workspace/ui/components/textarea";
+import { AlertCircle, Loader2, Play, Rocket } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CompetitorEntry, CompetitorsEditor, newCompetitorEntry } from "@/components/competitors-editor";
+import {
+	type EditableProductLine,
+	newEditableProductLine,
+	newEditableSku,
+	ProductLinesEditor,
+	type UnverifiedProductLine,
+} from "@/components/product-lines-editor";
+import { type EditablePrompt, newPromptEntry, PromptsListEditor } from "@/components/prompts-list-editor";
+import { brandKeys, useBrand } from "@/hooks/use-brands";
 import { citationKeys } from "@/hooks/use-citations";
 import { dashboardKeys } from "@/hooks/use-dashboard-summary";
 import { promptsSummaryKeys } from "@/hooks/use-prompts-summary";
@@ -23,20 +33,11 @@ import {
 	fetchBrandDrafts,
 	fetchDraft,
 	patchDraft,
-	triggerResearch,
 	type ResearchDraftPayload,
+	triggerResearch,
 } from "@/lib/brand-research-client";
 import { trackEvent } from "@/lib/posthog";
 import { safeUUID } from "@/lib/uuid";
-import { CompetitorsEditor, newCompetitorEntry, type CompetitorEntry } from "@/components/competitors-editor";
-import { PromptsListEditor, newPromptEntry, type EditablePrompt } from "@/components/prompts-list-editor";
-import {
-	ProductLinesEditor,
-	newEditableProductLine,
-	newEditableSku,
-	type EditableProductLine,
-	type UnverifiedProductLine,
-} from "@/components/product-lines-editor";
 
 interface PromptWizardProps {
 	onComplete: () => void;
@@ -45,8 +46,6 @@ interface PromptWizardProps {
 /** Brand analysis runs in the worker (LLM + web search, ~1 min); the client polls for the result. */
 const POLL_INTERVAL_MS = 2000;
 const ANALYZE_TIMEOUT_MS = 6 * 60 * 1000; // give up after ~6 minutes
-
-const analyzeStatusKey = (brandId: string) => ["analyze-brand", "status", brandId] as const;
 
 interface WizardData {
 	brandName: string;
@@ -157,8 +156,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		return () => {
 			cancelled = true;
 		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [brandId]);
+	}, [brandId, brand?.name, brand?.website]);
 
 	const updateBrandName = useCallback((brandName: string) => setData((p) => ({ ...p, brandName })), []);
 	const updateWebsite = useCallback((website: string) => setData((p) => ({ ...p, website })), []);
@@ -214,7 +212,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({
 		queryKey: ["research-draft", draftId ?? "none"],
-		queryFn: () => fetchDraft(draftId!),
+		queryFn: () => {
+			if (!draftId) throw new Error("No research draft in flight");
+			return fetchDraft(draftId);
+		},
 		enabled: phase === "analyzing" && !!draftId,
 		staleTime: 0,
 		gcTime: 0,
@@ -244,8 +245,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				product_line_count: draftData.payload.productLines?.confirmed?.length || 0,
 			});
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [phase, draftData, brandId, brand?.name, brand?.website, queryClient]);
+	}, [phase, draftData, brand?.name, brand?.website]);
 
 	// Give up on a stuck research instead of polling forever.
 	useEffect(() => {
@@ -503,7 +503,6 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		</div>
 	);
 }
-
 
 /** suggestion/payload → WizardData（review 编辑区初始值）。模块级纯函数便于测试。 */
 function suggestionToWizardData(
