@@ -45,6 +45,8 @@ const productLineSchema = z.object({
 /** PATCH body — 与 OnboardingSuggestion 部分字段对齐（全部可选 = 部分回写） */
 const patchBody = z
 	.object({
+		brandName: z.string().trim().min(1, "brand name is required").optional(),
+		website: z.string().trim().min(1, "website is required").optional(),
 		summary: z.string().optional(),
 		description: z.string().optional(),
 		aliases: z.array(z.string()).optional(),

@@ -66,6 +66,7 @@ function convertOnboardingSuggestionToWizardInput(args: {
 
 	return {
 		brandId,
+		brandName: suggestion.brandName,
 		website,
 		additionalDomains,
 		aliases: suggestion.aliases,
@@ -349,6 +350,8 @@ export interface DraftPayloadLine {
 
 /** PATCH body（路由 zod 消费）— 与 OnboardingSuggestion 部分字段对齐（productLines 只收 confirmed 结构） */
 export interface DraftPayloadPatch {
+	brandName?: string;
+	website?: string;
 	summary?: string;
 	description?: string;
 	aliases?: string[];
@@ -369,6 +372,8 @@ export function applyDraftPayloadPatch(
 	patch: DraftPayloadPatch,
 ): Record<string, unknown> {
 	const next = { ...prev };
+	if (patch.brandName !== undefined) next.brandName = patch.brandName;
+	if (patch.website !== undefined) next.website = patch.website;
 	if (patch.summary !== undefined) next.summary = patch.summary;
 	if (patch.description !== undefined) next.description = patch.description;
 	if (patch.aliases !== undefined) next.aliases = patch.aliases;
