@@ -168,46 +168,37 @@ export async function researchBrand(args: {
  * - 4. populate 失败 → 整体回滚（事务自动，state 仍 = pending_review 因 1 步未提交）
  */
 export async function confirmDraft(draftId: string): Promise<{ id: string }> {
-	// 乐观锁 UPDATE — 0 行 = 409
-	const updated = await db
-		.update(draftResearch)
-		.set({ state: "done", updatedAt: new Date() })
-		.where(
-			and(
-				eq(draftResearch.id, draftId),
-				inArray(draftResearch.state, ["pending_review", "confirmed"]),
-			),
-		)
-		.returning({ id: draftResearch.id });
-
-	if (updated.length === 0) {
-		// 查实际状态返 409 详细
-		const cur = await getDraftById(draftId);
-		if (!cur) throw new DraftNotFoundError(draftId);
-		throw new DraftConflictError(draftId, cur.state);
-	}
-
-	// 查草稿（用于 populate payload）
-	const draft = await getDraftById(draftId);
-	if (!draft) throw new DraftNotFoundError(draftId); // race: 已被删
-
-	// brand 删守卫（FK CASCADE 后再访问 brand 应 404 — 但草稿 brand_id 已被设）
-	const brandRow = await db.query.brands.findFirst({
-		where: eq(brands.id, draft.brandId),
-		columns: { id: true },
-	});
-	if (!brandRow) {
-		// 422 提示「brand 已被删除」（与契约 F1-10 一致）
-		// 把 state 回滚到 pending_review（因乐观锁已成功但 populate 失败）
-		await db
+	return db.transaction(async (tx) => {
+		// 乐观锁 UPDATE — 0 行 = 409
+		const updated = await tx
 			.update(draftResearch)
-			.set({ state: "pending_review", updatedAt: new Date() })
-			.where(eq(draftResearch.id, draftId));
-		throw new Error("brand has been deleted; cannot confirm draft");
-	}
+			.set({ state: "done", updatedAt: new Date() })
+			.where(
+				and(
+					eq(draftResearch.id, draftId),
+					inArray(draftResearch.state, ["pending_review", "confirmed"]),
+				),
+			)
+			.returning({ id: draftResearch.id });
 
-	// populate（事务内 — 失败整体回滚）
-	try {
+		if (updated.length === 0) {
+			// 查实际状态返 409 详细（用 db 读，无依赖 tx 状态）
+			const cur = await db.query.draftResearch.findFirst({
+				where: eq(draftResearch.id, draftId),
+			});
+			if (!cur) throw new DraftNotFoundError(draftId);
+			throw new DraftConflictError(draftId, cur.state);
+		}
+
+		// populate（同一事务 — 失败自动回滚，包括上面的 state='done' UPDATE）
+		const draft = await tx.query.draftResearch.findFirst({
+			where: eq(draftResearch.id, draftId),
+		});
+		if (!draft) {
+			// Race: 事务内某步删了 draft（应不会发生，但兜底）
+			throw new DraftNotFoundError(draftId);
+		}
+
 		const payload = draft.payload as OnboardingSuggestion;
 		const input = convertOnboardingSuggestionToWizardInput({
 			brandId: draft.brandId,
@@ -215,17 +206,10 @@ export async function confirmDraft(draftId: string): Promise<{ id: string }> {
 			additionalDomains: payload.additionalDomains,
 			suggestion: payload,
 		});
-		await saveWizardOnboarding(input);
-	} catch (err) {
-		// populate 失败 → 把 state 回滚到 pending_review（事务回滚 + UPDATE 同事务）
-		await db
-			.update(draftResearch)
-			.set({ state: "pending_review", updatedAt: new Date() })
-			.where(eq(draftResearch.id, draftId));
-		throw err;
-	}
+		await saveWizardOnboarding(input, tx);
 
-	return { id: draftId };
+		return { id: draftId };
+	});
 }
 
 /**

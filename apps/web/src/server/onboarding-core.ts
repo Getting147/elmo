@@ -240,8 +240,10 @@ export function apiUpdateInputToInternal(
 
 async function insertCompetitors(args: {
 	brandId: string;
+	tx?: typeof db;
 	websiteHost: string;
 	source: { name: string; domains: string[]; aliases: string[] }[];
+	tx?: typeof db;
 }): Promise<number> {
 	if (args.source.length === 0) return 0;
 
@@ -280,6 +282,7 @@ async function insertCompetitors(args: {
 
 async function insertPrompts(args: {
 	brandId: string;
+	tx?: typeof db;
 	brandName: string;
 	website: string;
 	source: { value: string; tags: string[]; enabled: boolean }[];
@@ -329,6 +332,7 @@ async function insertPrompts(args: {
 // Epic A-2 (V1.0): 产品线 + SKU 灌库
 async function insertProductLines(args: {
 	brandId: string;
+	tx?: typeof db;
 	source: ProductLineInput[];
 }): Promise<{ productLineId: string; skuCount: number }[]> {
 	if (args.source.length === 0) return [];
@@ -375,6 +379,7 @@ async function insertProductLines(args: {
 // Epic A-2 (V1.0): brands.summary / brands.description 更新
 async function updateBrandSummaryDescription(args: {
 	brandId: string;
+	tx?: typeof db;
 	summary?: string;
 	description?: string;
 }): Promise<void> {
@@ -477,8 +482,10 @@ export async function updateBrand(input: UpdateBrandInput): Promise<BrandResult>
 // Wizard save — brand fields + new prompts/competitors in one shot
 // ============================================================================
 
-export async function saveWizardOnboarding(input: WizardOnboardingInput): Promise<BrandResult> {
+export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: typeof db): Promise<BrandResult> {
 	await updateBrand({
+	const txToUse = tx ?? db;
+
 		brandId: input.brandId,
 		brandName: input.brandName,
 		website: input.website,
@@ -486,9 +493,9 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 		aliases: input.aliases,
 	});
 
-	await db.update(brands).set({ onboarded: true, updatedAt: new Date() }).where(eq(brands.id, input.brandId));
+	await txToUse.update(brands).set({ onboarded: true, updatedAt: new Date() }).where(eq(brands.id, input.brandId));
 
-	const existing = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
+	const existing = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	if (!existing) throw new BrandNotFoundError(input.brandId);
 	let websiteHost = "";
 	try {
@@ -500,6 +507,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 
 	await insertCompetitors({
 		brandId: input.brandId,
+		tx: txToUse,
 		websiteHost,
 		source: (input.competitors ?? []).map((c) => ({
 			name: c.name,
@@ -510,6 +518,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 
 	await insertPrompts({
 		brandId: input.brandId,
+		tx: txToUse,
 		brandName: existing.name,
 		website: existing.website,
 		source: (input.prompts ?? []).map((p) => ({
@@ -524,6 +533,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 	if (input.summary !== undefined || input.description !== undefined) {
 		await updateBrandSummaryDescription({
 			brandId: input.brandId,
+		tx: txToUse,
 			summary: input.summary,
 			description: input.description,
 		});
@@ -531,10 +541,11 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 	if (input.productLines && input.productLines.length > 0) {
 		await insertProductLines({
 			brandId: input.brandId,
+			tx: txToUse,
 			source: input.productLines,
 		});
 	}
 
-	const refreshed = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
+	const refreshed = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	return buildBrandResult(refreshed!);
 }
