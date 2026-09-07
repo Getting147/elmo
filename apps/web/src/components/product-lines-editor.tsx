@@ -60,8 +60,15 @@ export const EVIDENCE_REASON_LABELS: Record<string, string> = {
 	MISSING_URL: "缺少证据链接，无法核对",
 };
 
+/**
+ * Reasons arrive as `"<sku>: <CODE>"` entries joined with "; " — map each
+ * embedded code to its human label and keep the rest of the text as-is.
+ */
 function reasonLabel(reason: string): string {
-	return EVIDENCE_REASON_LABELS[reason] ?? reason;
+	return reason.replace(
+		/\b(URL_NOT_IN_CRAWL|NAME_NOT_FOUND|MISSING_URL)\b/g,
+		(code) => EVIDENCE_REASON_LABELS[code] ?? code,
+	);
 }
 
 /** An evidence URL is required to keep a SKU — the storage schema enforces it. */
