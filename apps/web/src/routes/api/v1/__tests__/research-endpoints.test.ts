@@ -21,26 +21,21 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-	triggerResearchMock,
-	listDraftsByBrandMock,
-	getDraftByIdMock,
-	confirmDraftMock,
-	rollbackDraftMock,
-} = vi.hoisted(() => {
-	const triggerResearchMock = vi.fn();
-	const listDraftsByBrandMock = vi.fn();
-	const getDraftByIdMock = vi.fn();
-	const confirmDraftMock = vi.fn();
-	const rollbackDraftMock = vi.fn();
-	return {
-		triggerResearchMock,
-		listDraftsByBrandMock,
-		getDraftByIdMock,
-		confirmDraftMock,
-		rollbackDraftMock,
-	};
-});
+const { triggerResearchMock, listDraftsByBrandMock, getDraftByIdMock, confirmDraftMock, rollbackDraftMock } =
+	vi.hoisted(() => {
+		const triggerResearchMock = vi.fn();
+		const listDraftsByBrandMock = vi.fn();
+		const getDraftByIdMock = vi.fn();
+		const confirmDraftMock = vi.fn();
+		const rollbackDraftMock = vi.fn();
+		return {
+			triggerResearchMock,
+			listDraftsByBrandMock,
+			getDraftByIdMock,
+			confirmDraftMock,
+			rollbackDraftMock,
+		};
+	});
 
 vi.mock("@/server/research", () => {
 	class DraftNotFoundError extends Error {
@@ -50,7 +45,10 @@ vi.mock("@/server/research", () => {
 		}
 	}
 	class DraftConflictError extends Error {
-		constructor(public readonly draftId: string, public readonly state: string) {
+		constructor(
+			public readonly draftId: string,
+			public readonly state: string,
+		) {
 			super(`Draft "${draftId}" is in state "${state}" — cannot perform this action.`);
 			this.name = "DraftConflictError";
 		}
@@ -121,7 +119,10 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 	afterEach(() => vi.unstubAllEnvs());
 
 	it("合法 body → 200 + 透传 + 参数传递", async () => {
-		const res = await getHandler(ResearchRoute, "POST")({
+		const res = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/brands/b1/research", {
 				website: "https://x.com",
 				maxCompetitors: 3,
@@ -147,7 +148,10 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 	});
 
 	it("website 非法 URL → 400 Validation Error", async () => {
-		const res = await getHandler(ResearchRoute, "POST")({
+		const res = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/brands/b1/research", {
 				website: "not-a-url",
 			}),
@@ -162,7 +166,10 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 	});
 
 	it("上界越限（maxCompetitors=11）→ 400；=10 边界合法", async () => {
-		const over = await getHandler(ResearchRoute, "POST")({
+		const over = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/brands/b1/research", {
 				website: "https://x.com",
 				maxCompetitors: 11,
@@ -171,7 +178,10 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 		});
 		expect(over.status).toBe(400);
 
-		const boundary = await getHandler(ResearchRoute, "POST")({
+		const boundary = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/brands/b1/research", {
 				website: "https://x.com",
 				maxCompetitors: 10,
@@ -185,7 +195,10 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 		const { BrandNotFoundError } = await import("@/server/onboarding-core");
 		triggerResearchMock.mockRejectedValue(new BrandNotFoundError("ghost"));
 
-		const res = await getHandler(ResearchRoute, "POST")({
+		const res = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/brands/ghost/research", {
 				website: "https://x.com",
 			}),
@@ -207,7 +220,10 @@ describe("S2 GET /api/v1/brands/{id}/research — drafts 列表", () => {
 	afterEach(() => vi.unstubAllEnvs());
 
 	it("include_all=true → 传 true + 200 {drafts}", async () => {
-		const res = await getHandler(ResearchRoute, "GET")({
+		const res = await getHandler(
+			ResearchRoute,
+			"GET",
+		)({
 			request: makeRequest("GET", "/brands/b1/research?include_all=true"),
 			params: { brandId: "b1" },
 		});
@@ -218,7 +234,10 @@ describe("S2 GET /api/v1/brands/{id}/research — drafts 列表", () => {
 	});
 
 	it("无 include_all → 传 false", async () => {
-		const res = await getHandler(ResearchRoute, "GET")({
+		const res = await getHandler(
+			ResearchRoute,
+			"GET",
+		)({
 			request: makeRequest("GET", "/brands/b1/research"),
 			params: { brandId: "b1" },
 		});
@@ -241,7 +260,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	afterEach(() => vi.unstubAllEnvs());
 
 	it("GET 存在 → 200 draft 透传", async () => {
-		const res = await getHandler(DraftRoute, "GET")({
+		const res = await getHandler(
+			DraftRoute,
+			"GET",
+		)({
 			request: makeRequest("GET", "/drafts/d1"),
 			params: { draftId: "d1" },
 		});
@@ -251,7 +273,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 
 	it("GET 不存在 → 404", async () => {
 		getDraftByIdMock.mockResolvedValue(undefined);
-		const res = await getHandler(DraftRoute, "GET")({
+		const res = await getHandler(
+			DraftRoute,
+			"GET",
+		)({
 			request: makeRequest("GET", "/drafts/missing"),
 			params: { draftId: "missing" },
 		});
@@ -259,7 +284,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	});
 
 	it("confirm 成功 → 200 {id}", async () => {
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/d1", { _action: "confirm" }),
 			params: { draftId: "d1" },
 		});
@@ -271,7 +299,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	it("confirm conflict → 409", async () => {
 		const { DraftConflictError } = await import("@/server/research");
 		confirmDraftMock.mockRejectedValue(new DraftConflictError("d1", "done"));
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/d1", { _action: "confirm" }),
 			params: { draftId: "d1" },
 		});
@@ -281,7 +312,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	it("confirm draft 不存在 → 404（mapError 映射）", async () => {
 		const { DraftNotFoundError } = await import("@/server/research");
 		confirmDraftMock.mockRejectedValue(new DraftNotFoundError("missing"));
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/missing", { _action: "confirm" }),
 			params: { draftId: "missing" },
 		});
@@ -289,7 +323,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	});
 
 	it("rollback 成功 → 200 {rolledBack: true}", async () => {
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/d1", { _action: "rollback" }),
 			params: { draftId: "d1" },
 		});
@@ -301,7 +338,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	it("rollback conflict（非 pending_review）→ 409", async () => {
 		const { DraftConflictError } = await import("@/server/research");
 		rollbackDraftMock.mockRejectedValue(new DraftConflictError("d1", "done"));
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/d1", { _action: "rollback" }),
 			params: { draftId: "d1" },
 		});
@@ -311,7 +351,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	it("rollback draft 不存在 → 404", async () => {
 		const { DraftNotFoundError } = await import("@/server/research");
 		rollbackDraftMock.mockRejectedValue(new DraftNotFoundError("missing"));
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/missing", { _action: "rollback" }),
 			params: { draftId: "missing" },
 		});
@@ -319,7 +362,10 @@ describe("I3 /api/v1/drafts/{id} — GET + confirm/rollback 状态机", () => {
 	});
 
 	it("_action 非法值 → 400 Validation Error", async () => {
-		const res = await getHandler(DraftRoute, "POST")({
+		const res = await getHandler(
+			DraftRoute,
+			"POST",
+		)({
 			request: makeRequest("POST", "/drafts/d1", { _action: "delete" }),
 			params: { draftId: "d1" },
 		});

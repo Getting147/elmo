@@ -9,26 +9,21 @@
  * 设计：D:\NegencyWiki\概念\项目管理\GEO\GEO-V2品牌研究管道-设计-20260906.md v1.0
  * 状态语义（V1 拍板）：只持久 4 态（pending_review/done/failed/rolled_back）
  */
-import { and, eq, inArray } from "drizzle-orm";
-import { getBoss } from "@/lib/boss-client";
+
 import { db } from "@workspace/lib/db/db";
 import { brands, draftResearch } from "@workspace/lib/db/schema";
 import {
 	analyzeBrand,
-	type OnboardingSuggestion,
-} from "@workspace/lib/onboarding";
-import {
-	BrandNotFoundError,
-	saveWizardOnboarding,
-	type WizardOnboardingInput,
-} from "@/server/onboarding-core";
-import {
 	createDraft,
 	getDraftById,
 	listDraftsByBrand,
 	markFailed,
 	markRolledBack,
+	type OnboardingSuggestion,
 } from "@workspace/lib/onboarding";
+import { and, eq, inArray } from "drizzle-orm";
+import { getBoss } from "@/lib/boss-client";
+import { BrandNotFoundError, saveWizardOnboarding, type WizardOnboardingInput } from "@/server/onboarding-core";
 
 export class DraftNotFoundError extends Error {
 	constructor(public readonly draftId: string) {
@@ -38,14 +33,14 @@ export class DraftNotFoundError extends Error {
 }
 
 export class DraftConflictError extends Error {
-	constructor(public readonly draftId: string, public readonly state: string) {
+	constructor(
+		public readonly draftId: string,
+		public readonly state: string,
+	) {
 		super(`Draft "${draftId}" is in state "${state}" — cannot perform this action.`);
 		this.name = "DraftConflictError";
 	}
 }
-
-/** PG 23505 unique_violation SQLSTATE */
-const PG_UNIQUE_VIOLATION = "23505";
 
 /**
  * convertOnboardingSuggestionToWizardInput — V1.2 改造前临时方案。
@@ -174,12 +169,7 @@ export async function confirmDraft(draftId: string): Promise<{ id: string }> {
 		const updated = await tx
 			.update(draftResearch)
 			.set({ state: "done", updatedAt: new Date() })
-			.where(
-				and(
-					eq(draftResearch.id, draftId),
-					inArray(draftResearch.state, ["pending_review", "confirmed"]),
-				),
-			)
+			.where(and(eq(draftResearch.id, draftId), inArray(draftResearch.state, ["pending_review", "confirmed"])))
 			.returning({ id: draftResearch.id });
 
 		if (updated.length === 0) {
@@ -235,7 +225,7 @@ export { getDraftById, listDraftsByBrand };
 // 同步 analyzeBrand（30-90s 抓站+LLM）改造为 pg-boss enqueue（<100ms 即返）
 // =============================================================================
 
-import { draftResearch as _draftResearchTable } from "@workspace/lib/db/schema";
+import type { draftResearch as _draftResearchTable } from "@workspace/lib/db/schema";
 
 /** V1 pg-boss 队列名（c3-job 异步 LLM 处理） */
 const ANALYZE_BRAND_RESEARCH_QUEUE = "analyze-brand-research";
@@ -307,11 +297,7 @@ export async function triggerResearch(args: {
 	// existed + 还在跑 → 跳过 enqueue
 	if (createResult.alreadyExisted) {
 		const existing = await getDraftById(createResult.id);
-		if (
-			existing &&
-			(existing.researchStatus === "queued" ||
-				existing.researchStatus === "running")
-		) {
+		if (existing && (existing.researchStatus === "queued" || existing.researchStatus === "running")) {
 			return {
 				draftId: createResult.id,
 				alreadyExisted: true,
@@ -338,9 +324,7 @@ export async function triggerResearch(args: {
 			maxCompetitors: args.maxCompetitors,
 			maxPrompts: args.maxPrompts,
 			maxProducts: args.maxProducts,
-			crawledPageTexts: args.crawledPageTexts
-				? Array.from(args.crawledPageTexts.entries())
-				: undefined,
+			crawledPageTexts: args.crawledPageTexts ? Array.from(args.crawledPageTexts.entries()) : undefined,
 		},
 	});
 
