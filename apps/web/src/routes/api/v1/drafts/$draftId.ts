@@ -12,10 +12,19 @@ import {
 	DraftConflictError,
 } from "@/server/research";
 
+/** DraftNotFoundError → 404（GET/POST 统一映射，避免裸 Error 落 500） */
+function notFoundMapper(err: unknown): ApiError | undefined {
+	if (err instanceof DraftNotFoundError) {
+		return new ApiError(404, "Not Found", err.message);
+	}
+	return undefined;
+}
+
 export const Route = createFileRoute("/api/v1/drafts/$draftId/")({
 	server: {
 		handlers: {
 			GET: createApiHandler({
+				mapError: notFoundMapper,
 				handle: async ({ params }) => {
 					const draft = await getDraftById(params.draftId);
 					if (!draft) throw new DraftNotFoundError(params.draftId);
@@ -25,6 +34,7 @@ export const Route = createFileRoute("/api/v1/drafts/$draftId/")({
 
 			// POST 用作子资源动作（confirm / rollback 通过 _action 参数区分）
 			POST: createApiHandler({
+				mapError: notFoundMapper,
 				body: z.object({
 					_action: z.enum(["confirm", "rollback"]),
 				}),

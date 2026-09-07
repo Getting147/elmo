@@ -10,6 +10,7 @@ import {
 	listDraftsByBrand,
 	DraftNotFoundError,
 } from "@/server/research";
+import { BrandNotFoundError } from "@/server/onboarding-core";
 
 const postBody = z.object({
 	website: z.string().url("website must be a valid URL"),
@@ -18,10 +19,19 @@ const postBody = z.object({
 	maxProducts: z.number().int().min(0).max(20).optional(),
 });
 
+/** BrandNotFoundError → 404（POST 统一映射，避免裸 Error 落 500） */
+function brandNotFoundMapper(err: unknown): ApiError | undefined {
+	if (err instanceof BrandNotFoundError) {
+		return new ApiError(404, "Not Found", err.message);
+	}
+	return undefined;
+}
+
 export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 	server: {
 		handlers: {
 			POST: createApiHandler({
+				mapError: brandNotFoundMapper,
 				body: postBody,
 				handle: async ({ params, body }) => {
 					const { brandId } = params;

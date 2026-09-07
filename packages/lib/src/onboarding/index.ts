@@ -17,3 +17,10 @@ export {
 	type EvidenceCheckResult,
 	type EvidenceFailureCode,
 } from "./evidence";
+export {
+	createDraft,
+	getDraftById,
+	listDraftsByBrand,
+	markFailed,
+	markRolledBack,
+} from "./draft-research";

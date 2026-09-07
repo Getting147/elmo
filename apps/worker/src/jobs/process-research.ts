@@ -12,11 +12,11 @@ import { and, eq, sql } from "drizzle-orm";
 import {
 	analyzeBrand,
 	validateEvidence,
+	markFailed,
 	type OnboardingSuggestion,
 } from "@workspace/lib/onboarding";
 import { db } from "@workspace/lib/db/db";
 import { draftResearch } from "@workspace/lib/db/schema";
-import { markFailed } from "@workspace/lib/onboarding/draft-research";
 
 export interface ProcessResearchJobData {
 	draftId: string;

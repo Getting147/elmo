@@ -9,7 +9,8 @@
  * 设计：D:\NegencyWiki\概念\项目管理\GEO\GEO-V2品牌研究管道-设计-20260906.md v1.0
  * 状态语义（V1 拍板）：只持久 4 态（pending_review/done/failed/rolled_back）
  */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { getBoss } from "@/lib/boss-client";
 import { db } from "@workspace/lib/db/db";
 import { brands, draftResearch } from "@workspace/lib/db/schema";
 import {
@@ -27,7 +28,7 @@ import {
 	listDraftsByBrand,
 	markFailed,
 	markRolledBack,
-} from "@workspace/lib/onboarding/draft-research";
+} from "@workspace/lib/onboarding";
 
 export class DraftNotFoundError extends Error {
 	constructor(public readonly draftId: string) {
@@ -234,9 +235,7 @@ export { getDraftById, listDraftsByBrand };
 // 同步 analyzeBrand（30-90s 抓站+LLM）改造为 pg-boss enqueue（<100ms 即返）
 // =============================================================================
 
-import { and, eq, inArray, sql } from "drizzle-orm";
 import { draftResearch as _draftResearchTable } from "@workspace/lib/db/schema";
-import { getBoss } from "@/lib/boss-client";
 
 /** V1 pg-boss 队列名（c3-job 异步 LLM 处理） */
 const ANALYZE_BRAND_RESEARCH_QUEUE = "analyze-brand-research";
