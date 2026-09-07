@@ -10,7 +10,7 @@ import { getDeployment } from "@/lib/config/server";
 import { db } from "@workspace/lib/db/db";
 import { brands, prompts, competitors, type BrandWithPrompts, type Brand } from "@workspace/lib/db/schema";
 import { provisionAdditionalLocalOrg } from "@workspace/lib/db/provisioning";
-import { eq, and, count, sql, inArray } from "drizzle-orm";
+import { eq, and, count, sql, inArray, isNull } from "drizzle-orm";
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
 import { cleanAndValidateDomain } from "@/lib/domain-categories";
 import { validateWebsiteUrl } from "@/lib/brand-website";
@@ -112,7 +112,7 @@ export const getBrands = createServerFn({ method: "GET" }).handler(async () => {
 	}
 
 	const scopedBrands = await db.query.brands.findMany({
-		where: inArray(brands.organizationId, orgIds),
+		where: and(inArray(brands.organizationId, orgIds), isNull(brands.deletedAt)),
 	});
 
 	const brandsData = await Promise.all(scopedBrands.map((brand) => getBrandWithPromptsFromDb(brand.id)));
@@ -133,7 +133,7 @@ export const getBrand = createServerFn({ method: "GET" })
 		await requireOrgAccess(session.user.id, data.brandId);
 
 		const brand = await getBrandWithPromptsFromDb(data.brandId);
-		if (!brand) {
+		if (!brand || brand.deletedAt) {
 			throw new Error("Brand not found");
 		}
 
@@ -279,6 +279,30 @@ export const updateBrandFn = createServerFn({ method: "POST" })
 		}
 
 		return result[0];
+	});
+
+/**
+ * Soft delete a brand (V1): hidden from lists + sampling disabled, history kept.
+ * Owner 2026-09-07: 删除 = 停止展示 + 停止自动扫描，历史数据保留。
+ * Restore = admin SQL (UPDATE brands SET deleted_at = NULL WHERE id = ...).
+ */
+export const deleteBrandFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
+
+		const result = await db
+			.update(brands)
+			.set({ deletedAt: new Date(), enabled: false, updatedAt: new Date() })
+			.where(and(eq(brands.id, data.brandId), isNull(brands.deletedAt)))
+			.returning({ id: brands.id });
+
+		if (!result[0]) {
+			throw new Error("Brand not found or already deleted");
+		}
+
+		return { deleted: true, brandId: result[0].id };
 	});
 
 /**

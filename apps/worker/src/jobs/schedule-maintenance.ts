@@ -5,7 +5,7 @@ import { brands, promptRuns, prompts } from "@workspace/lib/db/schema";
 import { shouldExpediteJob } from "@workspace/lib/expedite";
 import { isPromptOverdue } from "@workspace/lib/overdue";
 import { parseScrapeTargets } from "@workspace/lib/providers";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import boss from "../boss";
 import { PROMPT_JOB_OPTIONS } from "./process-prompt";
@@ -51,9 +51,9 @@ export async function scheduleMaintenanceJob(jobs: Job<ScheduleMaintenanceData>[
 }
 
 async function runMaintenanceCheck(): Promise<void> {
-	// Get all enabled brands
+	// Get all enabled brands (soft-deleted excluded — deleted_at set, see 0020_brand_soft_delete)
 	const enabledBrands = await db.query.brands.findMany({
-		where: eq(brands.enabled, true),
+		where: and(eq(brands.enabled, true), isNull(brands.deletedAt)),
 	});
 
 	if (enabledBrands.length === 0) {

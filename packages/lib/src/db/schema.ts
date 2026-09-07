@@ -43,6 +43,8 @@ export const brands = pgTable(
 			.defaultNow()
 			.$onUpdate(() => new Date())
 			.notNull(),
+		// Soft delete (V1): 删除 = 隐藏 + 停扫 + 数据保留（Owner 2026-09-07）
+		deletedAt: timestamp("deleted_at", { withTimezone: true }),
 	},
 	(table) => ({
 		organizationIdIdx: index("brands_organization_id_idx").on(table.organizationId),

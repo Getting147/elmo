@@ -11,12 +11,23 @@ import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { useBrand } from "@/hooks/use-brands";
-import { updateBrandFn } from "@/server/brands";
+import { deleteBrandFn, updateBrandFn } from "@/server/brands";
 import { citationKeys } from "@/hooks/use-citations";
 import { dashboardKeys } from "@/hooks/use-dashboard-summary";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@workspace/ui/components/tooltip";
 import { IconInfoCircle } from "@tabler/icons-react";
 import { TagsInput } from "@workspace/ui/components/tags-input";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "@workspace/ui/components/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert";
+import { AlertTriangle, Trash2 } from "lucide-react";
 import { cleanAndValidateDomain } from "@/lib/domain-categories";
 
 export const Route = createFileRoute("/_authed/app/$brand/settings/brand")({
@@ -41,6 +52,9 @@ function BrandSettingsPage() {
 	const [success, setSuccess] = useState("");
 	const [additionalDomains, setAdditionalDomains] = useState<string[]>([]);
 	const [aliases, setAliases] = useState<string[]>([]);
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [isDeleting, setIsDeleting] = useState(false);
+	const [deleteError, setDeleteError] = useState("");
 
 	useEffect(() => {
 		if (brand) {
@@ -77,6 +91,19 @@ function BrandSettingsPage() {
 			</div>
 		);
 	}
+
+	const handleDelete = async () => {
+		setIsDeleting(true);
+		setDeleteError("");
+		try {
+			await deleteBrandFn({ data: { brandId: brand.id } });
+			queryClient.invalidateQueries();
+			window.location.href = "/";
+		} catch (err) {
+			setDeleteError(err instanceof Error ? err.message : "An error occurred");
+			setIsDeleting(false);
+		}
+	};
 
 	const handleSubmit = async (formData: FormData) => {
 		setIsSubmitting(true);
@@ -205,6 +232,49 @@ function BrandSettingsPage() {
 					</Button>
 				</div>
 			</form>
+
+			<div className="border-t pt-6">
+				<Alert variant="destructive">
+					<AlertTriangle className="h-4 w-4" />
+					<AlertTitle>Danger Zone</AlertTitle>
+					<AlertDescription>
+						Delete this project. It stops automatic sampling, hides the project from all
+						lists, and blocks access. Historical data is kept and can be restored by an
+						administrator.
+					</AlertDescription>
+				</Alert>
+				<div className="mt-4">
+					<Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+						<DialogTrigger asChild>
+							<Button variant="destructive" className="cursor-pointer">
+								<Trash2 className="h-4 w-4" />
+								Delete Project
+							</Button>
+						</DialogTrigger>
+						<DialogContent>
+							<DialogHeader>
+								<DialogTitle>Delete &quot;{brand.name}&quot;?</DialogTitle>
+								<DialogDescription>
+									This will stop automatic sampling and hide the project from all lists.
+									Historical data (prompts, runs, citations, reports) is kept and can be
+									restored by an administrator. This action can be undone by an administrator.
+								</DialogDescription>
+							</DialogHeader>
+							{deleteError && (
+								<div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{deleteError}</div>
+							)}
+							<DialogFooter>
+								<Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={isDeleting} className="cursor-pointer">
+									Cancel
+								</Button>
+								<Button variant="destructive" onClick={handleDelete} disabled={isDeleting} className="cursor-pointer">
+									{isDeleting ? "Deleting..." : "Delete Project"}
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
+				</div>
+			</div>
 		</div>
 	);
 }

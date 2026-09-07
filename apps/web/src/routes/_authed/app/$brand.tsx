@@ -24,6 +24,7 @@ import { SidebarInset, SidebarProvider } from "@workspace/ui/components/sidebar"
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
+import FullPageCard from "@/components/full-page-card";
 import BrandOnboarding from "@/components/brand-onboarding";
 import { validateBrandFilterSearch } from "@/hooks/use-list-filters";
 
@@ -38,13 +39,15 @@ const getBrandData = createServerFn({ method: "GET" })
 			isAdmin: boolean;
 			hasReportAccess: boolean;
 			hasAccess: boolean;
+			// true = brand row exists but was soft-deleted (hide + stop scanning + keep data)
+			deleted: boolean;
 		}> => {
 			const session = await requireAuthSession();
 
 			// Verify access
 			const hasAccess = await checkOrgAccess(session.user.id, data.brandId);
 			if (!hasAccess) {
-				return { brand: null, brandName: null, isAdmin: false, hasReportAccess: false, hasAccess: false };
+				return { brand: null, brandName: null, isAdmin: false, hasReportAccess: false, hasAccess: false, deleted: false };
 			}
 
 			// Get brand metadata (name from org membership — org exists even if not in DB yet)
@@ -61,7 +64,11 @@ const getBrandData = createServerFn({ method: "GET" })
 			});
 
 			if (!brand) {
-				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true };
+				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, deleted: false };
+			}
+
+			if (brand.deletedAt) {
+				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, deleted: true };
 			}
 
 			const brandPrompts = await db.query.prompts.findMany({
@@ -82,6 +89,7 @@ const getBrandData = createServerFn({ method: "GET" })
 				isAdmin: admin,
 				hasReportAccess: reportAccess,
 				hasAccess: true,
+				deleted: false,
 			};
 		},
 	);
@@ -146,7 +154,8 @@ export const Route = createFileRoute("/_authed/app/$brand")({
 			brandName: result.brandName,
 			isAdmin: result.isAdmin,
 			hasReportAccess: result.hasReportAccess,
-			needsOnboarding: result.hasAccess && !result.brand,
+			deleted: result.deleted,
+			needsOnboarding: result.hasAccess && !result.brand && !result.deleted,
 		};
 	},
 	head: ({ match, loaderData }) => {
@@ -169,8 +178,19 @@ export const Route = createFileRoute("/_authed/app/$brand")({
 });
 
 function BrandLayout() {
-	const { brand, brandName, isAdmin, hasReportAccess, needsOnboarding } = Route.useLoaderData();
+	const { brand, brandName, isAdmin, hasReportAccess, needsOnboarding, deleted } = Route.useLoaderData();
 	const { brand: brandId } = Route.useParams();
+
+	// Soft-deleted brand: hide + stop scanning + keep data (recoverable by admin).
+	if (deleted) {
+		return (
+			<FullPageCard title="项目已删除" subtitle={`「${brandName || brandId}」已被删除，自动扫描已停止，历史数据保留。如需恢复请联系管理员。`}>
+				<a href="/app" className="text-sm text-blue-600 hover:underline">
+					← 返回项目列表
+				</a>
+			</FullPageCard>
+		);
+	}
 
 	// Brand exists in auth but not in DB - show onboarding
 	if (needsOnboarding) {
