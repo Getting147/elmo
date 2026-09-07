@@ -455,8 +455,9 @@ export async function createBrand(input: CreateBrandInput): Promise<BrandResult>
 // updateBrand — pure brand-level update
 // ============================================================================
 
-export async function updateBrand(input: UpdateBrandInput): Promise<BrandResult> {
-	const existing = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
+export async function updateBrand(input: UpdateBrandInput, tx?: typeof db): Promise<BrandResult> {
+	const dbc = tx ?? db;
+	const existing = await dbc.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	if (!existing) throw new BrandNotFoundError(input.brandId);
 
 	const formattedWebsite = input.website ? validateAndFormatWebsite(input.website) : null;
@@ -475,8 +476,8 @@ export async function updateBrand(input: UpdateBrandInput): Promise<BrandResult>
 	if (input.aliases !== undefined) patch.aliases = dedupeAliases(input.aliases);
 	if (input.enabled !== undefined) patch.enabled = input.enabled;
 
-	await db.update(brands).set(patch).where(eq(brands.id, input.brandId));
-	const refreshed = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
+	await dbc.update(brands).set(patch).where(eq(brands.id, input.brandId));
+	const refreshed = await dbc.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	return buildBrandResult(refreshed!);
 }
 
@@ -485,15 +486,17 @@ export async function updateBrand(input: UpdateBrandInput): Promise<BrandResult>
 // ============================================================================
 
 export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: typeof db): Promise<BrandResult> {
-	await updateBrand({
 	const txToUse = tx ?? db;
-
-		brandId: input.brandId,
-		brandName: input.brandName,
-		website: input.website,
-		additionalDomains: input.additionalDomains,
-		aliases: input.aliases,
-	});
+	await updateBrand(
+		{
+			brandId: input.brandId,
+			brandName: input.brandName,
+			website: input.website,
+			additionalDomains: input.additionalDomains,
+			aliases: input.aliases,
+		},
+		txToUse,
+	);
 
 	await txToUse.update(brands).set({ onboarded: true, updatedAt: new Date() }).where(eq(brands.id, input.brandId));
 
@@ -509,7 +512,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 
 	await insertCompetitors({
 		brandId: input.brandId,
-		tx: txToUse,
+			tx: txToUse,
 		websiteHost,
 		source: (input.competitors ?? []).map((c) => ({
 			name: c.name,
@@ -520,7 +523,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 
 	await insertPrompts({
 		brandId: input.brandId,
-		tx: txToUse,
+			tx: txToUse,
 		brandName: existing.name,
 		website: existing.website,
 		source: (input.prompts ?? []).map((p) => ({
@@ -535,7 +538,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 	if (input.summary !== undefined || input.description !== undefined) {
 		await updateBrandSummaryDescription({
 			brandId: input.brandId,
-		tx: txToUse,
+			tx: txToUse,
 			summary: input.summary,
 			description: input.description,
 		});

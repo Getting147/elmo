@@ -1,37 +1,45 @@
 /**
- * Epic A-2 (V1.0) M2 c3-job-fix4: triggerResearch + processResearchJob 契约测试
+ * Epic A-2 (V1.0) M2 c3-job-fix4: triggerResearch 契约测试
  *
- * 策略：纯函数 + 内存 mock，避免 drizzle + pg-boss 真实连接。
- * 端点契约测试在 CI 完整 env 跑（drizzle 真实连接）。
+ * 策略：纯函数 + 内存 mock。triggerResearch 依赖面：
+ * - db.query.brands.findFirst（404 守卫）
+ * - createDraft / getDraftById（@workspace/lib/onboarding — partial unique 幂等）
+ * - getBoss().send（pg-boss enqueue）
+ * 全部 mock，不连 drizzle/pg-boss。
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock pg-boss
-const sendMock = vi.fn();
+const {
+	sendMock,
+	findFirstBrandMock,
+	createDraftMock,
+	getDraftByIdMock,
+} = vi.hoisted(() => {
+	const sendMock = vi.fn();
+	const findFirstBrandMock = vi.fn();
+	const createDraftMock = vi.fn();
+	const getDraftByIdMock = vi.fn();
+	return { sendMock, findFirstBrandMock, createDraftMock, getDraftByIdMock };
+});
+
 vi.mock("@/lib/boss-client", () => ({
 	getBoss: () => ({ send: sendMock }),
 }));
 
-// Mock drizzle
-const findFirstBrandMock = vi.fn();
-const findFirstDraftMock = vi.fn();
-const updateDraftMock = vi.fn();
-const insertDraftMock = vi.fn();
-const deleteDraftMock = vi.fn();
-const draftResearchTable = { id: "id", brandId: "brandId", state: "state", researchStatus: "researchStatus" };
-
 vi.mock("@workspace/lib/db/db", () => ({
 	db: {
 		query: { brands: { findFirst: findFirstBrandMock } },
-		update: () => ({ set: () => ({ where: () => ({ returning: () => updateDraftMock() }) }) }),
-		insert: () => ({ values: () => insertDraftMock() }),
-		delete: () => ({ where: () => ({ returning: () => deleteDraftMock() }) }),
 	},
 }));
 
-vi.mock("@workspace/lib/db/schema", () => ({
-	draftResearch: draftResearchTable,
-	brands: { id: "brands.id" },
+vi.mock("@workspace/lib/onboarding", () => ({
+	analyzeBrand: vi.fn(),
+	validateEvidence: vi.fn(),
+	createDraft: createDraftMock,
+	getDraftById: getDraftByIdMock,
+	listDraftsByBrand: vi.fn(),
+	markFailed: vi.fn(),
+	markRolledBack: vi.fn(),
 }));
 
 import { triggerResearch } from "@/server/research";
@@ -40,10 +48,8 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 	beforeEach(() => {
 		sendMock.mockReset();
 		findFirstBrandMock.mockReset();
-		findFirstDraftMock.mockReset();
-		updateDraftMock.mockReset();
-		insertDraftMock.mockReset();
-		deleteDraftMock.mockReset();
+		createDraftMock.mockReset();
+		getDraftByIdMock.mockReset();
 	});
 
 	it("① brand 不存在 → 抛 BrandNotFoundError", async () => {
@@ -51,12 +57,13 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 		await expect(
 			triggerResearch({ brandId: "ghost", website: "https://x.com" }),
 		).rejects.toThrow(/not found/i);
+		expect(createDraftMock).not.toHaveBeenCalled();
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
 	it("② 新建 draft + enqueue → <100ms 返回 {draftId, alreadyExisted:false, jobSkipped:false}", async () => {
-		findFirstBrandMock.mockReturnValue({ id: "b1" });
-		insertDraftMock.mockReturnValue([{ id: "d_new" }]);
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: false });
 		sendMock.mockResolvedValue(undefined);
 
 		const start = Date.now();
@@ -74,15 +81,9 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 	});
 
 	it("③ existed + researchStatus=queued → 跳过 enqueue（防重 job）", async () => {
-		findFirstBrandMock.mockReturnValue({ id: "b1" });
-		insertDraftMock.mockImplementation(() => {
-			// 模拟 PG 23505 unique violation → createDraft catch → 返 existing
-			const err = new Error("duplicate key");
-			(err as { code?: string }).code = "23505";
-			throw err;
-		});
-		findFirstDraftMock.mockReturnValue({ researchStatus: "queued" });
-		sendMock.mockReset();
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
+		getDraftByIdMock.mockResolvedValue({ researchStatus: "queued" });
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
 
@@ -92,14 +93,9 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 	});
 
 	it("④ existed + researchStatus=running → 跳过 enqueue（运行中保护）", async () => {
-		findFirstBrandMock.mockReturnValue({ id: "b1" });
-		insertDraftMock.mockImplementation(() => {
-			const err = new Error("duplicate key");
-			(err as { code?: string }).code = "23505";
-			throw err;
-		});
-		findFirstDraftMock.mockReturnValue({ researchStatus: "running" });
-		sendMock.mockReset();
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
+		getDraftByIdMock.mockResolvedValue({ researchStatus: "running" });
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
 
@@ -108,32 +104,22 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("⑤ existed + researchStatus=done → 返 alreadyExisted（V1.1 优化：重跑按 trigger 端策略）", async () => {
-		findFirstBrandMock.mockReturnValue({ id: "b1" });
-		insertDraftMock.mockImplementation(() => {
-			const err = new Error("duplicate key");
-			(err as { code?: string }).code = "23505";
-			throw err;
-		});
-		findFirstDraftMock.mockReturnValue({ researchStatus: "done" });
-		sendMock.mockReset();
+	it("⑤ existed + researchStatus=done → 返 alreadyExisted（done 是历史归档不重跑）", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
+		getDraftByIdMock.mockResolvedValue({ researchStatus: "done" });
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
 
 		expect(result.alreadyExisted).toBe(true);
-		expect(result.jobSkipped).toBe(false); // V1 不再触发（done 是历史归档）
+		expect(result.jobSkipped).toBe(false);
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("⑥ existed + researchStatus=failed → 返 alreadyExisted（V1.1 优化）", async () => {
-		findFirstBrandMock.mockReturnValue({ id: "b1" });
-		insertDraftMock.mockImplementation(() => {
-			const err = new Error("duplicate key");
-			(err as { code?: string }).code = "23505";
-			throw err;
-		});
-		findFirstDraftMock.mockReturnValue({ researchStatus: "failed" });
-		sendMock.mockReset();
+	it("⑥ existed + researchStatus=failed → 返 alreadyExisted（failed 覆盖策略由调用方定）", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
+		getDraftByIdMock.mockResolvedValue({ researchStatus: "failed" });
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
 
