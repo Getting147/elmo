@@ -11,9 +11,14 @@
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
 import { db } from "@workspace/lib/db/db";
 import { ensureOrganization } from "@workspace/lib/db/provisioning";
+import * as schema from "@workspace/lib/db/schema";
 import { brandProductLines, brandProductSkus, brands, competitors, prompts } from "@workspace/lib/db/schema";
 import { computeSystemTags, sanitizeUserTags } from "@workspace/lib/tag-utils";
-import { count, eq } from "drizzle-orm";
+import { count, eq, type ExtractTablesWithRelations } from "drizzle-orm";
+import type { NodePgTransaction } from "drizzle-orm/node-postgres";
+
+type Tx = NodePgTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
+export type DbOrTx = typeof db | Tx;
 import { z } from "zod";
 import { dedupeAliases, dedupeDomains } from "@/lib/domain-categories";
 import { createMultiplePromptJobSchedulers } from "@/lib/job-scheduler";
@@ -234,14 +239,14 @@ export function apiUpdateInputToInternal(
 
 async function insertCompetitors(args: {
 	brandId: string;
-	tx?: typeof db;
+	tx?: DbOrTx;
 	websiteHost: string;
 	source: { name: string; domains: string[]; aliases: string[] }[];
-	tx?: typeof db;
 }): Promise<number> {
+	const dbc = args.tx ?? db;
 	if (args.source.length === 0) return 0;
 
-	const existing = await db.query.competitors.findMany({
+	const existing = await dbc.query.competitors.findMany({
 		where: eq(competitors.brandId, args.brandId),
 	});
 	const existingDomains = new Set(existing.flatMap((c) => c.domains));
@@ -270,23 +275,24 @@ async function insertCompetitors(args: {
 		);
 	}
 
-	await db.insert(competitors).values(toInsert);
+	await dbc.insert(competitors).values(toInsert);
 	return toInsert.length;
 }
 
 async function insertPrompts(args: {
 	brandId: string;
-	tx?: typeof db;
+	tx?: DbOrTx;
 	brandName: string;
 	website: string;
 	source: { value: string; tags: string[]; enabled: boolean }[];
 	dedupeAgainstExisting: boolean;
 }): Promise<number> {
+	const dbc = args.tx ?? db;
 	if (args.source.length === 0) return 0;
 
 	const seen = new Set<string>();
 	if (args.dedupeAgainstExisting) {
-		const existing = await db.query.prompts.findMany({
+		const existing = await dbc.query.prompts.findMany({
 			where: eq(prompts.brandId, args.brandId),
 		});
 		for (const p of existing) seen.add(p.value.toLowerCase());
@@ -318,7 +324,7 @@ async function insertPrompts(args: {
 	}
 	if (rows.length === 0) return 0;
 
-	const inserted = await db.insert(prompts).values(rows).returning({ id: prompts.id });
+	const inserted = await dbc.insert(prompts).values(rows).returning({ id: prompts.id });
 	await createMultiplePromptJobSchedulers(inserted.map((r) => r.id));
 	return inserted.length;
 }
@@ -326,16 +332,17 @@ async function insertPrompts(args: {
 // Epic A-2 (V1.0): 产品线 + SKU 灌库
 async function insertProductLines(args: {
 	brandId: string;
-	tx?: typeof db;
+	tx?: DbOrTx;
 	source: ProductLineInput[];
 }): Promise<{ productLineId: string; skuCount: number }[]> {
+	const dbc = args.tx ?? db;
 	if (args.source.length === 0) return [];
 	const results: { productLineId: string; skuCount: number }[] = [];
 	for (let i = 0; i < args.source.length; i++) {
 		const pl = args.source[i];
 		if (!pl.name || !pl.skus || pl.skus.length === 0) continue;
 		const id = `bpl_${i}_${args.brandId}`;
-		await db
+		await dbc
 			.insert(brandProductLines)
 			.values({
 				id,
@@ -353,7 +360,7 @@ async function insertProductLines(args: {
 		for (let j = 0; j < pl.skus.length; j++) {
 			const sku = pl.skus[j];
 			const skuId = `bsku_${i}_${j}_${args.brandId}`;
-			await db
+			await dbc
 				.insert(brandProductSkus)
 				.values({
 					id: skuId,
@@ -375,15 +382,16 @@ async function insertProductLines(args: {
 // Epic A-2 (V1.0): brands.summary / brands.description 更新
 async function updateBrandSummaryDescription(args: {
 	brandId: string;
-	tx?: typeof db;
+	tx?: DbOrTx;
 	summary?: string;
 	description?: string;
 }): Promise<void> {
+	const dbc = args.tx ?? db;
 	const updates: Record<string, string> = {};
 	if (args.summary !== undefined) updates.summary = args.summary;
 	if (args.description !== undefined) updates.description = args.description;
 	if (Object.keys(updates).length === 0) return;
-	await db.update(brands).set(updates).where(eq(brands.id, args.brandId));
+	await dbc.update(brands).set(updates).where(eq(brands.id, args.brandId));
 }
 
 // ============================================================================
@@ -450,7 +458,7 @@ export async function createBrand(input: CreateBrandInput): Promise<BrandResult>
 // updateBrand — pure brand-level update
 // ============================================================================
 
-export async function updateBrand(input: UpdateBrandInput, tx?: typeof db): Promise<BrandResult> {
+export async function updateBrand(input: UpdateBrandInput, tx?: DbOrTx): Promise<BrandResult> {
 	const dbc = tx ?? db;
 	const existing = await dbc.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	if (!existing) throw new BrandNotFoundError(input.brandId);
@@ -481,7 +489,7 @@ export async function updateBrand(input: UpdateBrandInput, tx?: typeof db): Prom
 // Wizard save — brand fields + new prompts/competitors in one shot
 // ============================================================================
 
-export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: typeof db): Promise<BrandResult> {
+export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: DbOrTx): Promise<BrandResult> {
 	const txToUse = tx ?? db;
 	await updateBrand(
 		{

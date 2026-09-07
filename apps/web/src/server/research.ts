@@ -122,7 +122,6 @@ export async function researchBrand(args: {
 	try {
 		suggestion = await analyzeBrand({
 			website,
-			brandId,
 			maxCompetitors: args.maxCompetitors ?? 10,
 			maxPrompts: args.maxPrompts ?? 30,
 			maxProducts: args.maxProducts ?? 10,
@@ -147,11 +146,12 @@ export async function researchBrand(args: {
 	}
 
 	// 3. 落草稿（含 partial unique 幂等）
-	return createDraft({
+	const created = await createDraft({
 		brandId,
 		website,
 		payload: suggestion,
 	});
+	return { draftId: created.id, alreadyExisted: created.alreadyExisted };
 }
 
 /**
@@ -225,7 +225,6 @@ export { getDraftById, listDraftsByBrand };
 // 同步 analyzeBrand（30-90s 抓站+LLM）改造为 pg-boss enqueue（<100ms 即返）
 // =============================================================================
 
-import type { draftResearch as _draftResearchTable } from "@workspace/lib/db/schema";
 
 /** V1 pg-boss 队列名（c3-job 异步 LLM 处理） */
 const ANALYZE_BRAND_RESEARCH_QUEUE = "analyze-brand-research";
@@ -242,7 +241,7 @@ function emptySuggestionPayload(args: {
 	brandId: string;
 	website: string;
 	additionalDomains: string[];
-}): typeof _draftResearchTable.$inferSelect.payload {
+}): OnboardingSuggestion {
 	return {
 		brandName: "",
 		website: args.website,
@@ -253,7 +252,7 @@ function emptySuggestionPayload(args: {
 		summary: "",
 		description: "",
 		productLines: { confirmed: [], unverified: [] },
-	} as never;
+	};
 }
 
 /**
