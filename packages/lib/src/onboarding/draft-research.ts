@@ -107,7 +107,7 @@ export async function createDraft(args: {
 					eq(draftResearch.urlHash, urlHash),
 					inArray(draftResearch.state, ["pending_review", "confirmed"]),
 				),
-				columns: { id: draftResearch.id },
+				columns: { id: true },
 			});
 			if (existing) {
 				return { id: existing.id, alreadyExisted: true };
