@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
+import { Textarea } from "@workspace/ui/components/textarea";
 import { Loader2, AlertCircle, Play, Rocket } from "lucide-react";
 import { TagsInput } from "@workspace/ui/components/tags-input";
 import { Separator } from "@workspace/ui/components/separator";
@@ -24,8 +25,16 @@ import {
 	updateOnboardedBrandFn,
 } from "@/server/onboarding";
 import { trackEvent } from "@/lib/posthog";
+import { safeUUID } from "@/lib/uuid";
 import { CompetitorsEditor, newCompetitorEntry, type CompetitorEntry } from "@/components/competitors-editor";
 import { PromptsListEditor, newPromptEntry, type EditablePrompt } from "@/components/prompts-list-editor";
+import {
+	ProductLinesEditor,
+	newEditableProductLine,
+	newEditableSku,
+	type EditableProductLine,
+	type UnverifiedProductLine,
+} from "@/components/product-lines-editor";
 
 interface PromptWizardProps {
 	onComplete: () => void;
@@ -44,6 +53,11 @@ interface WizardData {
 	aliases: string[];
 	competitors: CompetitorEntry[];
 	prompts: EditablePrompt[];
+	// Epic A-2 (V1.0): 公司档案（一句话定位 + 简介）+ 产品线/SKU
+	summary: string;
+	description: string;
+	productLines: EditableProductLine[];
+	unverifiedLines: UnverifiedProductLine[];
 }
 
 const EditableTagsInput = memo(
@@ -92,6 +106,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		aliases: [],
 		competitors: [],
 		prompts: [],
+		summary: "",
+		description: "",
+		productLines: [],
+		unverifiedLines: [],
 	});
 
 	const brandId = brand?.id;
@@ -155,6 +173,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		if (statusData.status === "done") {
 			const suggestion = statusData.suggestion;
 			if (suggestion) {
+				const productLines = suggestion.productLines?.confirmed ?? [];
 				setData({
 					brandName: suggestion.brandName || brand?.name || "",
 					website: brand?.website || suggestion.website || "",
@@ -171,11 +190,33 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					prompts: (suggestion.suggestedPrompts || []).map((p) =>
 						newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
 					),
+					summary: suggestion.summary ?? "",
+					description: suggestion.description ?? "",
+					productLines: productLines.map((entry) =>
+						newEditableProductLine({
+							name: entry.line.name,
+							skus: entry.line.skus.map((s) =>
+								newEditableSku({
+									name: s.name,
+									model: s.model ?? "",
+									oneLiner: s.oneLiner,
+									evidenceUrl: s.evidenceUrl,
+								}),
+							),
+						}),
+					),
+					unverifiedLines: (suggestion.productLines?.unverified ?? []).map((entry) => ({
+						_key: safeUUID(),
+						name: entry.line.name,
+						skuNames: entry.line.skus.map((s) => s.name),
+						reason: entry.reason,
+					})),
 				});
 				setPhase("review");
 				trackEvent("onboarding_analyzed", {
 					competitor_count: suggestion.competitors?.length || 0,
 					prompt_count: suggestion.suggestedPrompts?.length || 0,
+					product_line_count: productLines.length,
 				});
 			}
 		}
@@ -203,6 +244,16 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		[],
 	);
 	const updatePrompts = useCallback((prompts: EditablePrompt[]) => setData((p) => ({ ...p, prompts })), []);
+	const updateSummary = useCallback((summary: string) => setData((p) => ({ ...p, summary })), []);
+	const updateDescription = useCallback((description: string) => setData((p) => ({ ...p, description })), []);
+	const updateProductLines = useCallback(
+		(productLines: EditableProductLine[]) => setData((p) => ({ ...p, productLines })),
+		[],
+	);
+	const ignoreUnverified = useCallback(
+		(key: string) => setData((p) => ({ ...p, unverifiedLines: p.unverifiedLines.filter((u) => u._key !== key) })),
+		[],
+	);
 
 	const previewCounts = useMemo(() => {
 		const enabled = data.prompts.filter((p) => p.enabled && p.value.trim().length > 0).length;
@@ -226,6 +277,21 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				.filter((p) => p.enabled && p.value.trim())
 				.map((p) => ({ value: p.value.trim(), tags: p.tags, enabled: true }));
 
+			// Epic A-2 (V1.0): 只提交完整可用的 SKU（name + evidenceUrl 必填），unverified 永不提交
+			const productLinesPayload = data.productLines
+				.map((line) => ({
+					name: line.name.trim(),
+					skus: line.skus
+						.filter((s) => s.name.trim() && s.evidenceUrl.trim())
+						.map((s) => ({
+							name: s.name.trim(),
+							model: s.model?.trim() || undefined,
+							oneLiner: s.oneLiner.trim(),
+							evidenceUrl: s.evidenceUrl.trim(),
+						})),
+				}))
+				.filter((line) => line.name && line.skus.length > 0);
+
 			await updateOnboardedBrandFn({
 				data: {
 					brandId: brand.id,
@@ -235,6 +301,9 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					aliases: data.aliases,
 					competitors: competitorsPayload,
 					prompts: promptsPayload,
+					summary: data.summary.trim() || undefined,
+					description: data.description.trim() || undefined,
+					productLines: productLinesPayload.length > 0 ? productLinesPayload : undefined,
 				},
 			});
 
@@ -312,6 +381,23 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						<Input value={data.brandName} onChange={(e) => updateBrandName(e.target.value)} placeholder="Brand name" />
 					</div>
 					<div>
+						<p className="text-xs text-muted-foreground">One-line positioning</p>
+						<Input
+							value={data.summary}
+							onChange={(e) => updateSummary(e.target.value)}
+							placeholder="What the brand is, in one sentence"
+						/>
+					</div>
+					<div>
+						<p className="text-xs text-muted-foreground">Description</p>
+						<Textarea
+							value={data.description}
+							onChange={(e) => updateDescription(e.target.value)}
+							placeholder="Short company / product introduction"
+							rows={3}
+						/>
+					</div>
+					<div>
 						<p className="text-xs text-muted-foreground">Website URL</p>
 						<Input
 							type="url"
@@ -339,6 +425,24 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						/>
 					</div>
 				</div>
+			</div>
+
+			<Separator />
+
+			<div className="space-y-3">
+				<div>
+					<h2 className="text-2xl font-bold">Product lines</h2>
+					<p className="text-muted-foreground">
+						Product lines and SKUs your content covers. Every SKU keeps an evidence URL from the website scan.
+					</p>
+				</div>
+				<ProductLinesEditor
+					lines={data.productLines}
+					onChange={updateProductLines}
+					unverified={data.unverifiedLines}
+					onIgnoreUnverified={ignoreUnverified}
+					disabled={isSaving}
+				/>
 			</div>
 
 			<Separator />
