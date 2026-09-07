@@ -82,6 +82,17 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 		expect(next.productLines).toEqual(BASE_PAYLOAD.productLines);
 	});
 
+	it("brandName/website 回写（336c9e2）→ 替换原值，其余保留", () => {
+		const next = applyDraftPayloadPatch(
+			{ ...BASE_PAYLOAD },
+			{ brandName: "Haier Smart Home", website: "https://haier-smarthome.com" },
+		);
+		expect(next.brandName).toBe("Haier Smart Home");
+		expect(next.website).toBe("https://haier-smarthome.com");
+		expect(next.summary).toBe("old summary");
+		expect(next.aliases).toEqual(BASE_PAYLOAD.aliases);
+	});
+
 	it("prompts → suggestedPrompts 映射 + tags 默认 []；competitors domains/aliases 默认 []", () => {
 		const next = applyDraftPayloadPatch(
 			{ ...BASE_PAYLOAD },

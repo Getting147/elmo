@@ -491,6 +491,10 @@ export async function updateBrand(input: UpdateBrandInput, tx?: DbOrTx): Promise
 
 export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: DbOrTx): Promise<BrandResult> {
 	const txToUse = tx ?? db;
+	// 软删除守卫：已删品牌不可被 onboarding/draft confirm 复活（re CR minor，语义同 getBrand 404）
+	const guard = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
+	if (!guard || guard.deletedAt) throw new BrandNotFoundError(input.brandId);
+
 	await updateBrand(
 		{
 			brandId: input.brandId,
@@ -504,8 +508,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: Db
 
 	await txToUse.update(brands).set({ onboarded: true, updatedAt: new Date() }).where(eq(brands.id, input.brandId));
 
-	const existing = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
-	if (!existing) throw new BrandNotFoundError(input.brandId);
+	const existing = guard;
 	let websiteHost = "";
 	try {
 		const rawUrl = existing.website.startsWith("http") ? existing.website : `https://${existing.website}`;
