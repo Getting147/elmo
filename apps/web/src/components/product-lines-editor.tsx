@@ -64,7 +64,7 @@ export const EVIDENCE_REASON_LABELS: Record<string, string> = {
  * Reasons arrive as `"<sku>: <CODE>"` entries joined with "; " — map each
  * embedded code to its human label and keep the rest of the text as-is.
  */
-function reasonLabel(reason: string): string {
+export function formatEvidenceReason(reason: string): string {
 	return reason.replace(
 		/\b(URL_NOT_IN_CRAWL|NAME_NOT_FOUND|MISSING_URL)\b/g,
 		(code) => EVIDENCE_REASON_LABELS[code] ?? code,
@@ -72,17 +72,16 @@ function reasonLabel(reason: string): string {
 }
 
 /** An evidence URL is required to keep a SKU — the storage schema enforces it. */
-function isSkusValid(skus: EditableSku[]): { valid: boolean; firstInvalidIndex: number } {
-	for (let i = 0; i < skus.length; i++) {
-		const s = skus[i];
-		if (!s.name.trim() || !s.evidenceUrl.trim()) return { valid: false, firstInvalidIndex: i };
+export function areSkusValid(skus: EditableSku[]): boolean {
+	return skus.every((s) => {
+		if (!s.name.trim() || !s.evidenceUrl.trim()) return false;
 		try {
 			new URL(s.evidenceUrl);
+			return true;
 		} catch {
-			return { valid: false, firstInvalidIndex: i };
+			return false;
 		}
-	}
-	return { valid: true, firstInvalidIndex: -1 };
+	});
 }
 
 interface ProductLinesEditorProps {
@@ -131,7 +130,7 @@ export function ProductLinesEditor({
 			)}
 
 			{lines.map((line, lineIndex) => {
-				const validity = isSkusValid(line.skus);
+				const skusValid = areSkusValid(line.skus);
 				return (
 					<div key={line._key} className="space-y-3 rounded-md border p-3">
 						<div className="flex items-center gap-2">
@@ -155,7 +154,7 @@ export function ProductLinesEditor({
 							</Button>
 						</div>
 
-						{!validity.valid && (
+						{!skusValid && (
 							<p className="text-xs text-amber-600">
 								Every SKU needs a name and a valid evidence URL before it can be saved.
 							</p>
@@ -236,7 +235,7 @@ export function ProductLinesEditor({
 								<p className="text-xs text-muted-foreground">{u.skuNames.join(" · ")}</p>
 								<p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
 									<AlertCircle className="h-3 w-3 flex-shrink-0" />
-									{reasonLabel(u.reason)}
+									{formatEvidenceReason(u.reason)}
 								</p>
 							</div>
 							{onIgnoreUnverified && (
