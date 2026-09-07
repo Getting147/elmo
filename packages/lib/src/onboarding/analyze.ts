@@ -282,8 +282,8 @@ export function normalizeAnalysisResult(raw: RawSuggestion, ctx: AnalysisContext
 		includePrompts: ctx.maxPrompts > 0,
 		maxCompetitors: ctx.maxCompetitors,
 		maxPrompts: ctx.maxPrompts,
-		includeProducts: ctx.maxProducts > 0,
-		maxProducts: ctx.maxProducts,
+		includeProducts: (ctx.maxProducts ?? DEFAULT_MAX_PRODUCTS) > 0,
+		maxProducts: ctx.maxProducts ?? DEFAULT_MAX_PRODUCTS,
 		crawledPageTexts: ctx.crawledPageTexts,
 	});
 }
