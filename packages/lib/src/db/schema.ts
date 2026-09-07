@@ -222,6 +222,7 @@ export type NewBrandOpportunity = typeof brandOpportunities.$inferInsert;
 // 状态机: pending_review → confirmed → applied → done / failed / rolled_back
 // idempotency: 唯一索引 (brand_id, url_hash) 保证同 URL 重跑命中现有草稿
 // payload JSONB: OnboardingSuggestion 完整快照（确认后 populate 各表）
+// research_status（migration 0019）: queued/running/done/failed — 异步 LLM 处理状态（独立于 state）
 // =============================================================================
 
 export const draftResearchState = pgEnum("draft_research_state", [
@@ -231,6 +232,13 @@ export const draftResearchState = pgEnum("draft_research_state", [
 	"done", // 流程完成
 	"failed", // LLM/抓取失败（error 字段有原因）
 	"rolled_back", // 用户后悔放弃（V1 软删 = 状态标记）
+]);
+
+export const draftResearchResearchStatus = pgEnum("draft_research_research_status", [
+	"queued", // triggerResearch 建 draft（enqueue 前）
+	"running", // processResearchJob 开始
+	"done", // analyzeBrand + validateEvidence 完成，payload 已写入
+	"failed", // job 异常（同 batch research_status='failed' + state='failed'）
 ]);
 
 export const draftResearch = pgTable(
@@ -247,6 +255,10 @@ export const draftResearch = pgTable(
 		payload: jsonb("payload").notNull(),
 		/** 失败时填：错误描述（如 LLM 调用失败 / 抓取失败） */
 		error: text("error"),
+		/** 异步 LLM 处理状态（V1.0 加列，避免 payload 探测 hack） */
+		researchStatus: draftResearchResearchStatus("research_status")
+			.notNull()
+			.default("queued"),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
@@ -267,6 +279,12 @@ export const draftResearch = pgTable(
 		),
 		// 监控/dashboard
 		stateIdx: index("draft_research_state_idx").on(table.state, table.createdAt.desc()),
+		// 监控/dashboard（按 research_status 过滤 + 时间倒序）
+		brandResearchStatusIdx: index("draft_research_brand_id_research_status_idx").on(
+			table.brandId,
+			table.researchStatus,
+			table.createdAt.desc(),
+		),
 	}),
 ).enableRLS();
 
