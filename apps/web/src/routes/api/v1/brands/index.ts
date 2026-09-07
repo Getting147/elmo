@@ -9,7 +9,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
 import { brands } from "@workspace/lib/db/schema";
-import { count, desc } from "drizzle-orm";
+import { and, count, desc, isNull } from "drizzle-orm";
 import {
 	createBrand,
 	createBrandInputSchema,
@@ -30,11 +30,17 @@ export const Route = createFileRoute("/api/v1/brands/")({
 					const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "20")));
 					const offset = (page - 1) * limit;
 
-					const [totalCountResult] = await db.select({ count: count() }).from(brands);
+					const [totalCountResult] = await db.select({ count: count() }).from(brands).where(isNull(brands.deletedAt));
 					const totalCount = totalCountResult?.count || 0;
 					const totalPages = Math.ceil(totalCount / limit);
 
-					const rows = await db.select().from(brands).orderBy(desc(brands.createdAt)).limit(limit).offset(offset);
+					const rows = await db
+						.select()
+						.from(brands)
+						.where(isNull(brands.deletedAt))
+						.orderBy(desc(brands.createdAt))
+						.limit(limit)
+						.offset(offset);
 
 					return {
 						brands: rows.map(buildBrandResult),

@@ -60,7 +60,7 @@ const getBrandData = createServerFn({ method: "GET" })
 				where: eq(brands.id, data.brandId),
 			});
 
-			if (!brand) {
+			if (!brand || brand.deletedAt) {
 				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true };
 			}
 
