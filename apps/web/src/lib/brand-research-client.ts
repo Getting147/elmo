@@ -18,19 +18,24 @@ export interface ResearchDraftPayload {
 		confirmed: Array<{
 			line: {
 				name: string;
-				differentiators?: string;
-				category?: string;
-				targetAudience?: string;
 				skus: Array<{ name: string; model?: string; oneLiner: string; evidenceUrl: string }>;
 			};
-			evidence?: { url: string; reason?: string };
+			sourceEvidenceChecked?: number;
 		}>;
 		unverified: Array<{
 			line: { name: string; skus: Array<{ name: string; model?: string }> };
 			reason: string;
-			evidence?: { url: string; reason?: string };
 		}>;
 	};
+}
+
+/** PATCH /drafts/{id} 回写契约 — confirmed 数组（unverified 由后端保留，不灌库仅展示） */
+export interface DraftPatchProductLine {
+	line: {
+		name: string;
+		skus: Array<{ name: string; model?: string; oneLiner: string; evidenceUrl: string }>;
+	};
+	evidence?: number;
 }
 
 export interface ResearchDraft {
@@ -60,7 +65,7 @@ export interface DraftPatchBody {
 	additionalDomains?: string[];
 	competitors?: ResearchDraftPayload["competitors"];
 	prompts?: ResearchDraftPayload["suggestedPrompts"];
-	productLines?: ResearchDraftPayload["productLines"];
+	productLines?: DraftPatchProductLine[];
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

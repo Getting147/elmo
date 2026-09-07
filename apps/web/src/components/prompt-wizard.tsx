@@ -297,7 +297,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				.filter((entry) => entry.line.name && entry.line.skus.length > 0);
 
 			const base = payloadRef.current;
-			// PATCH 回写用户编辑（payload 单一真源）——unverified 保留原行（忽略的行已被 ignore 从 payloadRef 移除）
+			// PATCH 回写用户编辑（payload 单一真源）——契约 = confirmed 数组 {line, evidence}；unverified 由后端保留（不灌库，仅展示）
 			await patchDraft(draftId, {
 				brandName: data.brandName.trim() || brand.name,
 				website: data.website.trim() || brand.website,
@@ -307,12 +307,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				prompts: promptsPayload,
 				summary: data.summary.trim() || undefined,
 				description: data.description.trim() || undefined,
-				productLines: base?.productLines
-					? {
-							confirmed: confirmedLines,
-							unverified: base.productLines.unverified,
-						}
-					: undefined,
+				productLines: base?.productLines ? confirmedLines.map((entry) => ({ line: entry.line, evidence: 0 })) : undefined,
 			});
 			// confirm 灌库（事务：brand → product lines → competitors → prompts）
 			await confirmDraft(draftId);
