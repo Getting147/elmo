@@ -225,7 +225,6 @@ export { getDraftById, listDraftsByBrand };
 // 同步 analyzeBrand（30-90s 抓站+LLM）改造为 pg-boss enqueue（<100ms 即返）
 // =============================================================================
 
-
 /** V1 pg-boss 队列名（c3-job 异步 LLM 处理） */
 const ANALYZE_BRAND_RESEARCH_QUEUE = "analyze-brand-research";
 
@@ -328,4 +327,96 @@ export async function triggerResearch(args: {
 	});
 
 	return { draftId: createResult.id, alreadyExisted: false, jobSkipped: false };
+}
+
+// =============================================================================
+// Epic A-2 M2×M3 对接: updateDraftPayload — PATCH /drafts/{id} payload 编辑回写
+// confirm 灌库读 draft.payload（单一真源）→ 前端 review 编辑必须回写 payload。
+// 语义：缺失字段保留原值；仅 pending_review 可编辑（409 其他态）。
+// =============================================================================
+
+export interface DraftPayloadSku {
+	name: string;
+	model?: string;
+	oneLiner: string;
+	evidenceUrl: string;
+}
+
+export interface DraftPayloadLine {
+	name: string;
+	skus: DraftPayloadSku[];
+}
+
+/** PATCH body（路由 zod 消费）— 与 OnboardingSuggestion 部分字段对齐（productLines 只收 confirmed 结构） */
+export interface DraftPayloadPatch {
+	summary?: string;
+	description?: string;
+	aliases?: string[];
+	additionalDomains?: string[];
+	competitors?: { name: string; domains?: string[]; aliases?: string[] }[];
+	prompts?: { prompt: string; tags?: string[] }[];
+	productLines?: { line: DraftPayloadLine; evidence?: number }[];
+}
+
+/**
+ * 纯 merge：把 PATCH 部分字段应用到原 payload（Record 级浅合并 + key 映射）。
+ * - prompts → suggestedPrompts（payload 存储键名）
+ * - productLines → { confirmed: 传入行, unverified: 保留原值 }（unverified 是 LLM 证据不足行，编辑不触碰）
+ * - 其余字段存在即替换，缺失保留原值
+ */
+export function applyDraftPayloadPatch(
+	prev: Record<string, unknown>,
+	patch: DraftPayloadPatch,
+): Record<string, unknown> {
+	const next = { ...prev };
+	if (patch.summary !== undefined) next.summary = patch.summary;
+	if (patch.description !== undefined) next.description = patch.description;
+	if (patch.aliases !== undefined) next.aliases = patch.aliases;
+	if (patch.additionalDomains !== undefined) next.additionalDomains = patch.additionalDomains;
+	if (patch.competitors !== undefined) {
+		next.competitors = patch.competitors.map((c) => ({
+			name: c.name,
+			domains: c.domains ?? [],
+			aliases: c.aliases ?? [],
+		}));
+	}
+	if (patch.prompts !== undefined) {
+		next.suggestedPrompts = patch.prompts.map((p) => ({
+			prompt: p.prompt,
+			tags: p.tags ?? [],
+		}));
+	}
+	if (patch.productLines !== undefined) {
+		const prevProductLines = prev.productLines as OnboardingSuggestion["productLines"];
+		next.productLines = {
+			confirmed: patch.productLines.map(({ line, evidence }) => ({
+				line,
+				sourceEvidenceChecked: evidence ?? 0,
+			})),
+			unverified: prevProductLines?.unverified ?? [],
+		};
+	}
+	return next;
+}
+
+/**
+ * 编辑回写：404（不存在）+ 409（非 pending_review）+ payload merge + UPDATE JSONB。
+ * 返回 { id, state }（state 恒 pending_review — 编辑不改变状态）
+ */
+export async function updateDraftPayload(
+	draftId: string,
+	patch: DraftPayloadPatch,
+): Promise<{ id: string; state: string }> {
+	const draft = await getDraftById(draftId);
+	if (!draft) throw new DraftNotFoundError(draftId);
+	if (draft.state !== "pending_review") throw new DraftConflictError(draftId, draft.state);
+
+	const prev = (draft.payload ?? {}) as Record<string, unknown>;
+	const next = applyDraftPayloadPatch(prev, patch);
+	await db
+		.update(draftResearch)
+		.set({ payload: next as never, updatedAt: new Date() })
+		.where(eq(draftResearch.id, draftId));
+
+	return { id: draftId, state: "pending_review" };
 }
