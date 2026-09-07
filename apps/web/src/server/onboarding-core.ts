@@ -7,20 +7,15 @@
  * client bundle). Server functions live in onboarding.ts; everything else
  * lives here.
  */
-import { z } from "zod";
-import { eq, count } from "drizzle-orm";
-import { db } from "@workspace/lib/db/db";
-import {
-	brands,
-	prompts,
-	competitors,
-	brandProductLines,
-	brandProductSkus,
-} from "@workspace/lib/db/schema";
-import { ensureOrganization } from "@workspace/lib/db/provisioning";
+
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
+import { db } from "@workspace/lib/db/db";
+import { ensureOrganization } from "@workspace/lib/db/provisioning";
+import { brandProductLines, brandProductSkus, brands, competitors, prompts } from "@workspace/lib/db/schema";
 import { computeSystemTags, sanitizeUserTags } from "@workspace/lib/tag-utils";
-import { dedupeDomains, dedupeAliases } from "@/lib/domain-categories";
+import { count, eq } from "drizzle-orm";
+import { z } from "zod";
+import { dedupeAliases, dedupeDomains } from "@/lib/domain-categories";
 import { createMultiplePromptJobSchedulers } from "@/lib/job-scheduler";
 
 // ============================================================================
@@ -76,7 +71,6 @@ const productLineInputSchema = z.object({
 type CompetitorInput = z.infer<typeof competitorInputSchema>;
 type PromptInput = z.infer<typeof promptInputSchema>;
 type ProductLineInput = z.infer<typeof productLineInputSchema>;
-type SkuInput = z.infer<typeof skuInputSchema>;
 
 /**
  * POST /api/v1/brands body.
@@ -446,7 +440,8 @@ export async function createBrand(input: CreateBrandInput): Promise<BrandResult>
 	});
 
 	const refreshed = await db.query.brands.findFirst({ where: eq(brands.id, input.id) });
-	return buildBrandResult(refreshed!);
+	if (!refreshed) throw new BrandNotFoundError(input.id);
+	return buildBrandResult(refreshed);
 }
 
 // ============================================================================
@@ -476,7 +471,8 @@ export async function updateBrand(input: UpdateBrandInput, tx?: typeof db): Prom
 
 	await dbc.update(brands).set(patch).where(eq(brands.id, input.brandId));
 	const refreshed = await dbc.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
-	return buildBrandResult(refreshed!);
+	if (!refreshed) throw new BrandNotFoundError(input.brandId);
+	return buildBrandResult(refreshed);
 }
 
 // ============================================================================
@@ -505,12 +501,15 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 		const rawUrl = existing.website.startsWith("http") ? existing.website : `https://${existing.website}`;
 		websiteHost = new URL(rawUrl).hostname.replace(/^www\./, "");
 	} catch {
-		websiteHost = existing.website.replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+		websiteHost = existing.website
+			.replace(/^https?:\/\//, "")
+			.split("/")[0]
+			.replace(/^www\./, "");
 	}
 
 	await insertCompetitors({
 		brandId: input.brandId,
-			tx: txToUse,
+		tx: txToUse,
 		websiteHost,
 		source: (input.competitors ?? []).map((c) => ({
 			name: c.name,
@@ -521,7 +520,7 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 
 	await insertPrompts({
 		brandId: input.brandId,
-			tx: txToUse,
+		tx: txToUse,
 		brandName: existing.name,
 		website: existing.website,
 		source: (input.prompts ?? []).map((p) => ({
@@ -550,5 +549,6 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: ty
 	}
 
 	const refreshed = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
-	return buildBrandResult(refreshed!);
+	if (!refreshed) throw new BrandNotFoundError(input.brandId);
+	return buildBrandResult(refreshed);
 }

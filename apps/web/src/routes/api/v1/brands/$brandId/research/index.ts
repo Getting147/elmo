@@ -4,13 +4,9 @@
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { createApiHandler, ApiError } from "@/lib/api/handler";
-import {
-	triggerResearch,
-	listDraftsByBrand,
-	DraftNotFoundError,
-} from "@/server/research";
+import { ApiError, createApiHandler } from "@/lib/api/handler";
 import { BrandNotFoundError } from "@/server/onboarding-core";
+import { DraftNotFoundError, listDraftsByBrand, triggerResearch } from "@/server/research";
 
 const postBody = z.object({
 	website: z.string().url("website must be a valid URL"),

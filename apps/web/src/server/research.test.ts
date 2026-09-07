@@ -9,12 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-	sendMock,
-	findFirstBrandMock,
-	createDraftMock,
-	getDraftByIdMock,
-} = vi.hoisted(() => {
+const { sendMock, findFirstBrandMock, createDraftMock, getDraftByIdMock } = vi.hoisted(() => {
 	const sendMock = vi.fn();
 	const findFirstBrandMock = vi.fn();
 	const createDraftMock = vi.fn();
@@ -54,9 +49,7 @@ describe("c3-job-fix4 triggerResearch 契约", () => {
 
 	it("① brand 不存在 → 抛 BrandNotFoundError", async () => {
 		findFirstBrandMock.mockReturnValue(undefined);
-		await expect(
-			triggerResearch({ brandId: "ghost", website: "https://x.com" }),
-		).rejects.toThrow(/not found/i);
+		await expect(triggerResearch({ brandId: "ghost", website: "https://x.com" })).rejects.toThrow(/not found/i);
 		expect(createDraftMock).not.toHaveBeenCalled();
 		expect(sendMock).not.toHaveBeenCalled();
 	});

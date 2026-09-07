@@ -11,19 +11,18 @@
  * 策略：db.update chain mock（set/where 记录 + returning 可编程），
  * analyzeBrand / markFailed vi.mock 注入。
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Job } from "pg-boss";
 
-const { analyzeBrandMock, markFailedMock, setMock, whereMock, returningMock } = vi.hoisted(
-	() => {
-		const analyzeBrandMock = vi.fn();
-		const markFailedMock = vi.fn();
-		const setMock = vi.fn();
-		const whereMock = vi.fn();
-		const returningMock = vi.fn();
-		return { analyzeBrandMock, markFailedMock, setMock, whereMock, returningMock };
-	},
-);
+import type { Job } from "pg-boss";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { analyzeBrandMock, markFailedMock, setMock, whereMock, returningMock } = vi.hoisted(() => {
+	const analyzeBrandMock = vi.fn();
+	const markFailedMock = vi.fn();
+	const setMock = vi.fn();
+	const whereMock = vi.fn();
+	const returningMock = vi.fn();
+	return { analyzeBrandMock, markFailedMock, setMock, whereMock, returningMock };
+});
 
 vi.mock("@workspace/lib/onboarding", () => ({
 	analyzeBrand: analyzeBrandMock,
@@ -52,7 +51,7 @@ vi.mock("@workspace/lib/db/db", () => ({
 	},
 }));
 
-import { processResearchJob, type ProcessResearchJobData } from "./process-research";
+import { type ProcessResearchJobData, processResearchJob } from "./process-research";
 
 type FakeJob = Job<ProcessResearchJobData>;
 

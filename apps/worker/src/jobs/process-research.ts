@@ -7,16 +7,12 @@
  *
  * 与 triggerResearch 配对：trigger 立即返 draftId，handler 跑 30-90s 后写 payload
  */
-import type { Job } from "pg-boss";
-import { and, eq, sql } from "drizzle-orm";
-import {
-	analyzeBrand,
-	validateEvidence,
-	markFailed,
-	type OnboardingSuggestion,
-} from "@workspace/lib/onboarding";
+
 import { db } from "@workspace/lib/db/db";
 import { draftResearch } from "@workspace/lib/db/schema";
+import { analyzeBrand, markFailed } from "@workspace/lib/onboarding";
+import { and, eq } from "drizzle-orm";
+import type { Job } from "pg-boss";
 
 export interface ProcessResearchJobData {
 	draftId: string;
@@ -40,25 +36,18 @@ export interface ProcessResearchJobData {
  *   3. 任一异常 → markFailed + research_status='failed' + state='failed'
  *   4. state 仍=pending_review（V1 持久化 4 态：confirmed/applied 事务内瞬态；done/failed/rolled_back 持久）
  */
-export async function processResearchJob(
-	jobs: Job<ProcessResearchJobData>[],
-): Promise<void> {
+export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): Promise<void> {
 	const [job] = jobs;
 	if (!job) {
 		throw new Error("process-research handler received an empty batch");
 	}
-	const { draftId, website, additionalDomains, input } = job.data;
+	const { draftId, website, input } = job.data;
 
 	// 1. UPDATE research_status='running'（CAS：仅 queued 态转 running，防重入）
 	const claimed = await db
 		.update(draftResearch)
 		.set({ researchStatus: "running", updatedAt: new Date() })
-		.where(
-			and(
-				eq(draftResearch.id, draftId),
-				eq(draftResearch.researchStatus, "queued"),
-			),
-		)
+		.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "queued")))
 		.returning({ id: draftResearch.id });
 
 	if (claimed.length === 0) {
@@ -68,9 +57,7 @@ export async function processResearchJob(
 
 	try {
 		// 2. analyzeBrand + validateEvidence（m1 evidence 校验）
-		const crawledPageTexts = input?.crawledPageTexts
-			? new Map(input.crawledPageTexts)
-			: new Map<string, string>();
+		const crawledPageTexts = input?.crawledPageTexts ? new Map(input.crawledPageTexts) : new Map<string, string>();
 
 		const suggestion = await analyzeBrand({
 			website,
@@ -90,12 +77,7 @@ export async function processResearchJob(
 				researchStatus: "done",
 				updatedAt: new Date(),
 			})
-			.where(
-				and(
-					eq(draftResearch.id, draftId),
-					eq(draftResearch.researchStatus, "running"),
-				),
-			);
+			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
 	} catch (err) {
 		// 4. 异常 → markFailed（state='failed' + research_status='failed' + error 字段）
 		const errorMsg = err instanceof Error ? err.message : String(err);
@@ -105,12 +87,7 @@ export async function processResearchJob(
 				researchStatus: "failed",
 				updatedAt: new Date(),
 			})
-			.where(
-				and(
-					eq(draftResearch.id, draftId),
-					eq(draftResearch.researchStatus, "running"),
-				),
-			);
+			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
 		// 同步 state='failed' + error（用现成 helper）
 		await markFailed({ id: draftId, error: errorMsg });
 	}
