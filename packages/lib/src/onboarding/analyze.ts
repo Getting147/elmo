@@ -497,14 +497,15 @@ function normalize(args: {
 			if (!rl) continue;
 			const line: OnboardingProductLine = {
 				name: rl.name.trim(),
+				// S2-1: filter 必填字段 name + oneLiner 在 map 前（防缺字段崩溃 → s.evidenceUrl.trim() 抛 TypeError）
 				skus: (rl.skus ?? [])
+					.filter((s) => s.name && s.oneLiner && s.evidenceUrl)
 					.map((s) => ({
 						name: s.name.trim(),
 						model: s.model?.trim() || undefined,
 						oneLiner: s.oneLiner.trim(),
 						evidenceUrl: s.evidenceUrl.trim(),
-					}))
-					.filter((s) => s.name && s.oneLiner && s.evidenceUrl),
+					})),
 			};
 			if (!line.name || line.skus.length === 0) continue;
 
