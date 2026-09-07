@@ -10,7 +10,13 @@
 import { z } from "zod";
 import { eq, count } from "drizzle-orm";
 import { db } from "@workspace/lib/db/db";
-import { brands, prompts, competitors } from "@workspace/lib/db/schema";
+import {
+	brands,
+	prompts,
+	competitors,
+	brandProductLines,
+	brandProductSkus,
+} from "@workspace/lib/db/schema";
 import { ensureOrganization } from "@workspace/lib/db/provisioning";
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
 import { computeSystemTags, sanitizeUserTags } from "@workspace/lib/tag-utils";
@@ -51,8 +57,26 @@ const promptInputSchema = z.object({
 	enabled: z.boolean().optional().default(true),
 });
 
+// Epic A-2 (V1.0): SKU / 产品线 schema（与 analyze.ts 一致）
+const skuInputSchema = z.object({
+	name: z.string().min(1),
+	model: z.string().optional(),
+	oneLiner: z.string().min(1),
+	evidenceUrl: z.string().url("evidenceUrl must be a valid URL"),
+});
+
+const productLineInputSchema = z.object({
+	name: z.string().min(1),
+	category: z.string().optional(),
+	differentiators: z.string().optional(),
+	targetAudience: z.string().optional(),
+	skus: z.array(skuInputSchema).optional().default([]),
+});
+
 type CompetitorInput = z.infer<typeof competitorInputSchema>;
 type PromptInput = z.infer<typeof promptInputSchema>;
+type ProductLineInput = z.infer<typeof productLineInputSchema>;
+type SkuInput = z.infer<typeof skuInputSchema>;
 
 /**
  * POST /api/v1/brands body.
@@ -87,6 +111,10 @@ export const wizardOnboardingInputSchema = z.object({
 	aliases: z.array(z.string()).optional(),
 	competitors: z.array(competitorInputSchema).optional(),
 	prompts: z.array(promptInputSchema).optional(),
+	// Epic A-2 (V1.0): 品牌档案 + 产品线/SKU
+	summary: z.string().optional(),
+	description: z.string().optional(),
+	productLines: z.array(productLineInputSchema).optional(),
 });
 
 /** Internal shape for createBrand — matches storage (website + additionalDomains). */
@@ -110,7 +138,11 @@ export interface UpdateBrandInput {
 	enabled?: boolean;
 }
 
-export type WizardOnboardingInput = z.infer<typeof wizardOnboardingInputSchema>;
+export type WizardOnboardingInput = z.infer<typeof wizardOnboardingInputSchema> & {
+	summary?: string;
+	description?: string;
+	productLines?: ProductLineInput[];
+};
 
 export interface BrandResult {
 	id: string;
@@ -294,6 +326,65 @@ async function insertPrompts(args: {
 	return inserted.length;
 }
 
+// Epic A-2 (V1.0): 产品线 + SKU 灌库
+async function insertProductLines(args: {
+	brandId: string;
+	source: ProductLineInput[];
+}): Promise<{ productLineId: string; skuCount: number }[]> {
+	if (args.source.length === 0) return [];
+	const results: { productLineId: string; skuCount: number }[] = [];
+	for (let i = 0; i < args.source.length; i++) {
+		const pl = args.source[i];
+		if (!pl.name || !pl.skus || pl.skus.length === 0) continue;
+		const id = `bpl_${i}_${args.brandId}`;
+		await db
+			.insert(brandProductLines)
+			.values({
+				id,
+				brandId: args.brandId,
+				name: pl.name,
+				category: pl.category ?? null,
+				coreParams: pl.differentiators ?? null,
+				targetAudience: pl.targetAudience ?? null,
+				position: i,
+			})
+			.onConflictDoNothing();
+
+		for (let j = 0; j < pl.skus.length; j++) {
+			const sku = pl.skus[j];
+			const skuId = `bsku_${i}_${j}_${args.brandId}`;
+			await db
+				.insert(brandProductSkus)
+				.values({
+					id: skuId,
+					brandId: args.brandId,
+					productLineId: id,
+					name: sku.name,
+					model: sku.model ?? null,
+					oneLiner: sku.oneLiner,
+					evidenceUrl: sku.evidenceUrl,
+					position: j,
+				})
+				.onConflictDoNothing();
+		}
+		results.push({ productLineId: id, skuCount: pl.skus.length });
+	}
+	return results;
+}
+
+// Epic A-2 (V1.0): brands.summary / brands.description 更新
+async function updateBrandSummaryDescription(args: {
+	brandId: string;
+	summary?: string;
+	description?: string;
+}): Promise<void> {
+	const updates: Record<string, string> = {};
+	if (args.summary !== undefined) updates.summary = args.summary;
+	if (args.description !== undefined) updates.description = args.description;
+	if (Object.keys(updates).length === 0) return;
+	await db.update(brands).set(updates).where(eq(brands.id, args.brandId));
+}
+
 // ============================================================================
 // createBrand — pure create
 // ============================================================================
@@ -428,6 +519,21 @@ export async function saveWizardOnboarding(input: WizardOnboardingInput): Promis
 		})),
 		dedupeAgainstExisting: true,
 	});
+
+	// Epic A-2 (V1.0): 公司档案 summary/description + 产品线/SKU
+	if (input.summary !== undefined || input.description !== undefined) {
+		await updateBrandSummaryDescription({
+			brandId: input.brandId,
+			summary: input.summary,
+			description: input.description,
+		});
+	}
+	if (input.productLines && input.productLines.length > 0) {
+		await insertProductLines({
+			brandId: input.brandId,
+			source: input.productLines,
+		});
+	}
 
 	const refreshed = await db.query.brands.findFirst({ where: eq(brands.id, input.brandId) });
 	return buildBrandResult(refreshed!);

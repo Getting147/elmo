@@ -12,3 +12,8 @@ export {
 	cleanUrl as cleanOnboardingUrl,
 	inferBrandNameFromDomain,
 } from "./utils";
+export {
+	validateEvidence,
+	type EvidenceCheckResult,
+	type EvidenceFailureCode,
+} from "./evidence";

@@ -22,6 +22,10 @@ export const brands = pgTable(
 		website: text("website").notNull(),
 		additionalDomains: text("additional_domains").array().notNull().default([]),
 		aliases: text("aliases").array().notNull().default([]),
+		// Epic A-2 (V1.0): 一句话定位（"中国领先的高端家电品牌"）
+		summary: text("summary"),
+		// Epic A-2 (V1.0): 简介 ~500 字（业务/产品/市场/历史摘要）
+		description: text("description"),
 		enabled: boolean("enabled").default(true).notNull(),
 		onboarded: boolean("onboarded").default(false).notNull(),
 		delayOverrideHours: integer("delay_override_hours"),
@@ -283,6 +287,41 @@ export type BrandProductLine = typeof brandProductLines.$inferSelect;
 export type NewBrandProductLine = typeof brandProductLines.$inferInsert;
 export type BrandCredential = typeof brandCredentials.$inferSelect;
 export type NewBrandCredential = typeof brandCredentials.$inferInsert;
+
+/**
+ * Epic A-2 (V1.0): 产品线 SKU（独立表，与 Epic A-1 product_lines 1:N）。
+ * evidence_url 是防幻觉证据源（M1 evidence.ts 校验 SKU name grep 对应页文本）。
+ */
+export const brandProductSkus = pgTable(
+	"brand_product_skus",
+	{
+		id: text("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		productLineId: text("product_line_id")
+			.references(() => brandProductLines.id, { onDelete: "cascade" })
+			.notNull(),
+		name: text("name").notNull(),
+		model: text("model"),
+		oneLiner: text("one_liner"),
+		position: smallint("position").default(0).notNull(),
+		/** M1 evidence.ts L1 校验：URL 属抓取页集合（normalize 后）；L2：SKU name grep 此 URL 文本 */
+		evidenceUrl: text("evidence_url"),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => ({
+		productLineIdIdx: index("brand_product_skus_product_line_id_idx").on(table.productLineId, table.position),
+		brandIdIdx: index("brand_product_skus_brand_id_idx").on(table.brandId),
+	}),
+).enableRLS();
+
+export type BrandProductSku = typeof brandProductSkus.$inferSelect;
+export type NewBrandProductSku = typeof brandProductSkus.$inferInsert;
 
 export type Brand = typeof brands.$inferSelect;
 export type NewBrand = typeof brands.$inferInsert;

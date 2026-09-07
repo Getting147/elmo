@@ -14,6 +14,7 @@
 import { z } from "zod";
 import { getWebsiteExcerpt } from "../website-excerpt";
 import { runStructuredResearchPrompt } from "./llm";
+import { validateEvidence } from "./evidence";
 import {
 	cleanAndValidateDomain,
 	cleanDomain,
@@ -54,7 +55,36 @@ const promptSchema = z.object({
 		.describe(`1-3 tags per prompt (ideally 1-2), drawn from the shared brand-tailored vocabulary. ${TAG_GUIDANCE}`),
 });
 
-function buildSchema(args: { maxCompetitors: number; maxPrompts: number }) {
+// Epic A-2 (V1.0): SKU 防幻觉 — evidenceUrl 必填，validateEvidence 兜底校验
+const skuSchema = z.object({
+	name: z.string().describe("SKU product name (e.g. 'Haier BCD-470WGCTD1'). Distinct from product line."),
+	model: z.string().optional().describe("Model number if distinct from name (e.g. 'BCD-470WGCTD1')."),
+	oneLiner: z.string().describe("One-sentence distinguishing feature (e.g. '470L French-door, energy class A+++')."),
+	evidenceUrl: z
+		.string()
+		.describe(
+			"REQUIRED. Source URL where this SKU was found (anti-hallucination — validated against crawled pages). Hostname + path, no query.",
+		),
+});
+
+const productLineSchema = z.object({
+	name: z.string().describe("Product line name (e.g. 'Refrigerators'). One line per top-level category."),
+	skus: z
+		.array(skuSchema)
+		.min(1)
+		.describe("1-10 SKUs in this line. Each SKU MUST cite evidenceUrl pointing to a crawled page."),
+});
+
+const summarySchema = z.string().describe(
+	"One-sentence positioning (no markdown, no links, ≤120 chars). E.g. 'China-leading high-end home appliance brand.'",
+);
+
+const descriptionSchema = z.string().describe(
+	"Concise ~500-char brand summary covering business/products/markets/history. Plain prose, no markdown.",
+);
+
+function buildSchema(args: { maxCompetitors: number; maxPrompts: number; maxProducts?: number }) {
+	const includeProducts = (args.maxProducts ?? 10) > 0;
 	return z.object({
 		brandName: z
 			.string()
@@ -81,6 +111,21 @@ function buildSchema(args: { maxCompetitors: number; maxPrompts: number }) {
 			.describe(
 				`Up to ${args.maxPrompts} suggested AI tracking prompts. IMPORTANT: the MAJORITY must be UNBRANDED — generic category/persona queries that do NOT contain the brand name (e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]"). Only 3-5 should be branded (contain the brand name, e.g. "[brand] alternative", "is [brand] worth it"). The goal is to test whether AI models mention the brand organically in response to unbranded queries. ${TAG_GUIDANCE}`,
 			),
+		// Epic A-2 (V1.0): 公司档案扩展
+		summary: includeProducts
+			? summarySchema
+			: summarySchema.optional(),
+		description: includeProducts
+			? descriptionSchema
+			: descriptionSchema.optional(),
+		productLines: includeProducts
+			? z
+					.array(productLineSchema)
+					.max(args.maxProducts ?? 10)
+					.describe(
+						`Up to ${args.maxProducts ?? 10} product lines, each with SKUs having evidenceUrl. Evidence validates against crawled pages (anti-hallucination). Empty if uncertain.`,
+					)
+			: z.array(productLineSchema).optional(),
 	});
 }
 
@@ -97,6 +142,24 @@ export interface OnboardingPrompt {
 	tags: string[];
 }
 
+// Epic A-2 (V1.0): 子结构类型供 OnboardingSuggestion 使用
+export interface OnboardingSku {
+	name: string;
+	model?: string;
+	oneLiner: string;
+	evidenceUrl: string;
+}
+
+export interface OnboardingProductLine {
+	name: string;
+	skus: OnboardingSku[];
+}
+
+export interface OnboardingProductLines {
+	confirmed: { line: OnboardingProductLine; sourceEvidenceChecked: number }[];
+	unverified: { line: OnboardingProductLine; reason: string }[];
+}
+
 export interface OnboardingSuggestion {
 	brandName: string;
 	website: string;
@@ -104,6 +167,10 @@ export interface OnboardingSuggestion {
 	aliases: string[];
 	competitors: OnboardingCompetitor[];
 	suggestedPrompts: OnboardingPrompt[];
+	// Epic A-2 (V1.0): 公司档案 + 产品线/SKU（按 evidence 校验分 confirmed/unverified）
+	summary?: string;
+	description?: string;
+	productLines?: OnboardingProductLines;
 }
 
 export interface AnalyzeBrandOptions {
@@ -119,10 +186,23 @@ export interface AnalyzeBrandOptions {
 	maxCompetitors?: number;
 	/** 0 disables prompt generation entirely. */
 	maxPrompts?: number;
+	/**
+	 * Epic A-2 (V1.0): 0 disables productLines+summary+description entirely.
+	 * Default 10 (向后兼容 — 老调用不传时 = 启用).
+	 */
+	maxProducts?: number;
+	/**
+	 * Epic A-2 (V1.0): evidence 校验依据 — URL → 抓取文本 (preprocessed lowercase+HTML stripped).
+	 * 若不传：productLines 分组时不校验（confirmed=全部 SKUs, unverified=[]）.
+	 */
+	crawledPageTexts?: Map<string, string>;
 }
 
 const DEFAULT_MAX_COMPETITORS = 10;
 const DEFAULT_MAX_PROMPTS = 30;
+// Epic A-2 (V1.0): productLines 默认上限 — buildPrompt 引导段引用
+const DEFAULT_MAX_PRODUCTS = 10;
+const DEFAULT_MAX_COMPETITORS_HINT = DEFAULT_MAX_PRODUCTS; // 复用避免再定常量
 
 /**
  * Resolved inputs for one analysis run: the prompt the LLM sees, the schema
@@ -142,10 +222,20 @@ export interface AnalysisContext {
 	schema: ReturnType<typeof buildSchema>;
 	maxCompetitors: number;
 	maxPrompts: number;
+	maxProducts: number;
+	/** Epic A-2 (V1.0): evidence 校验用的抓取页文本 (url → preprocessed text) */
+	crawledPageTexts: Map<string, string>;
 }
 
 export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promise<AnalysisContext> {
-	const { website, brandName, maxCompetitors = DEFAULT_MAX_COMPETITORS, maxPrompts = DEFAULT_MAX_PROMPTS } = options;
+	const {
+		website,
+		brandName,
+		maxCompetitors = DEFAULT_MAX_COMPETITORS,
+		maxPrompts = DEFAULT_MAX_PROMPTS,
+		maxProducts = 10,
+		crawledPageTexts = new Map(),
+	} = options;
 
 	const normalizedWebsite = cleanDomain(website);
 	const analysisUrl = cleanUrl(website);
@@ -165,6 +255,7 @@ export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promis
 		websiteExcerpt,
 		includeCompetitors: maxCompetitors > 0,
 		includePrompts: maxPrompts > 0,
+		includeProducts: maxProducts > 0,
 	});
 
 	return {
@@ -173,9 +264,11 @@ export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promis
 		brandNameHint,
 		...(providedBrandName !== undefined && { providedBrandName }),
 		prompt,
-		schema: buildSchema({ maxCompetitors, maxPrompts }),
+		schema: buildSchema({ maxCompetitors, maxPrompts, maxProducts }),
 		maxCompetitors,
 		maxPrompts,
+		maxProducts,
+		crawledPageTexts,
 	};
 }
 
@@ -189,6 +282,9 @@ export function normalizeAnalysisResult(raw: RawSuggestion, ctx: AnalysisContext
 		includePrompts: ctx.maxPrompts > 0,
 		maxCompetitors: ctx.maxCompetitors,
 		maxPrompts: ctx.maxPrompts,
+		includeProducts: ctx.maxProducts > 0,
+		maxProducts: ctx.maxProducts,
+		crawledPageTexts: ctx.crawledPageTexts,
 	});
 }
 
@@ -252,6 +348,7 @@ function buildPrompt(args: {
 	websiteExcerpt: string;
 	includeCompetitors: boolean;
 	includePrompts: boolean;
+	includeProducts: boolean;
 }): string {
 	const excerptBlock = args.websiteExcerpt
 		? `\nText from ${args.analysisUrl}:\n---\n${args.websiteExcerpt}\n---\n`
@@ -271,6 +368,20 @@ function buildPrompt(args: {
 	const skipNotes: string[] = [];
 	if (!args.includeCompetitors) skipNotes.push("Return an empty array for competitors.");
 	if (!args.includePrompts) skipNotes.push("Return an empty array for suggestedPrompts.");
+	if (!args.includeProducts) {
+		skipNotes.push(
+			"Return an empty string for summary and description. Return an empty array for productLines.",
+		);
+	}
+
+	// Epic A-2 (V1.0): prompts 6:4 混合引导段
+	// 6 成 unbranded search-style fragment (<12 words) + 4 成 decision questions
+	// (≥15 words). 反映 Owner "用户真实问法"倾向。
+	const productGuidance = args.includeProducts
+		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
+For productLines: each SKU MUST have an evidenceUrl pointing to a page where the SKU actually appears — that URL will be validated against the crawled pages. If you cannot cite a source for a SKU, omit it. Do not invent SKUs.
+For suggestedPrompts: produce a MIX of approximately 60% unbranded search-style fragments (under 12 words, NO brand name, examples: "best [category]", "[category] vs alternatives", "where to buy [category]") and 40% decision questions (15+ words, more specific intent, examples: "is [brand] worth it for [use case]", "[brand] vs [competitor] for [category]"). The mix lets us test both organic-discovery and explicit-comparison behavior.`
+		: "";
 
 	return `Analyze the brand at ${args.analysisUrl}.
 
@@ -278,7 +389,7 @@ ${nameLine}
 ${scopeNote}${excerptBlock}
 Use web search to verify facts. Never invent information — return empty arrays when uncertain.
 
-You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}`;
+You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}${productGuidance}`;
 }
 
 function normalize(args: {
@@ -288,8 +399,11 @@ function normalize(args: {
 	providedBrandName?: string;
 	includeCompetitors: boolean;
 	includePrompts: boolean;
+	includeProducts: boolean;
 	maxCompetitors: number;
 	maxPrompts: number;
+	maxProducts: number;
+	crawledPageTexts: Map<string, string>;
 }): OnboardingSuggestion {
 	const {
 		raw,
@@ -298,8 +412,11 @@ function normalize(args: {
 		providedBrandName,
 		includeCompetitors,
 		includePrompts,
+		includeProducts,
 		maxCompetitors,
 		maxPrompts,
+		maxProducts,
+		crawledPageTexts,
 	} = args;
 
 	// A caller-supplied name wins: it's what the user asked to track, and for a
@@ -354,7 +471,7 @@ function normalize(args: {
 		}
 	}
 
-	return {
+	const result: OnboardingSuggestion = {
 		brandName,
 		website,
 		additionalDomains: dedupedAdditionalDomains,
@@ -362,4 +479,63 @@ function normalize(args: {
 		competitors,
 		suggestedPrompts,
 	};
+
+	// Epic A-2 (V1.0): 公司档案 summary / description + 产品线/SKU (按 evidence 校验分 confirmed/unverified)
+	if (includeProducts) {
+		if (raw.summary && raw.summary.trim()) {
+			result.summary = raw.summary.trim().slice(0, 200);
+		}
+		if (raw.description && raw.description.trim()) {
+			result.description = raw.description.trim().slice(0, 1000);
+		}
+		const rawLines = raw.productLines ?? [];
+		const confirmed: { line: OnboardingProductLine; sourceEvidenceChecked: number }[] = [];
+		const unverified: { line: OnboardingProductLine; reason: string }[] = [];
+		const limit = Math.min(rawLines.length, maxProducts);
+		for (let i = 0; i < limit; i++) {
+			const rl = rawLines[i];
+			if (!rl) continue;
+			const line: OnboardingProductLine = {
+				name: rl.name.trim(),
+				skus: (rl.skus ?? [])
+					.map((s) => ({
+						name: s.name.trim(),
+						model: s.model?.trim() || undefined,
+						oneLiner: s.oneLiner.trim(),
+						evidenceUrl: s.evidenceUrl.trim(),
+					}))
+					.filter((s) => s.name && s.oneLiner && s.evidenceUrl),
+			};
+			if (!line.name || line.skus.length === 0) continue;
+
+			// evidence 校验 — 仅在 crawledPageTexts 非空时校验
+			if (crawledPageTexts.size === 0) {
+				// 老调用兼容：未传 crawledPageTexts → 全部算 confirmed
+				const sourceEvidenceChecked = line.skus.length;
+				confirmed.push({ line, sourceEvidenceChecked });
+				continue;
+			}
+
+			// 按 SKU 校验，evidence 失败 → 整 line 进 unverified（按 re H1 用例口径）
+			const reasons: string[] = [];
+			for (const sku of line.skus) {
+				const result = validateEvidence({
+					skuName: sku.name,
+					evidenceUrl: sku.evidenceUrl,
+					crawledPageTexts,
+				});
+				if (!result.ok) {
+					reasons.push(`${sku.name}: ${result.code}`);
+				}
+			}
+			if (reasons.length === 0) {
+				confirmed.push({ line, sourceEvidenceChecked: line.skus.length });
+			} else {
+				unverified.push({ line, reason: reasons.join("; ") });
+			}
+		}
+		result.productLines = { confirmed, unverified };
+	}
+
+	return result;
 }
