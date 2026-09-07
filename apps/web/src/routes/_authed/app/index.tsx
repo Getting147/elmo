@@ -3,17 +3,30 @@
  *
  * In single-org mode (local/demo): redirects to the default org
  * In multi-org mode (whitelabel): shows brand switcher
+ *
+ * Row-level delete (V1 soft delete): trash icon per brand removes it from the
+ * list — 删除 = 隐藏 + 停扫 + 数据保留（Owner 2026-09-07 拍板）。
  */
 
 import { useState, useEffect } from "react";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { Trash2 } from "lucide-react";
 import { Button } from "@workspace/ui/components/button";
 import { Skeleton } from "@workspace/ui/components/skeleton";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@workspace/ui/components/dialog";
 import { syncAuth0UserById } from "@workspace/whitelabel/auth-hooks";
 import FullPageCard from "@/components/full-page-card";
 import { listUserOrganizations, requireAuthSession } from "@/lib/auth/helpers";
 import { getDeployment } from "@/lib/config/server";
+import { deleteBrandFn } from "@/server/brands";
 
 const getOrganizations = createServerFn({ method: "GET" }).handler(
 	async (): Promise<{
@@ -69,25 +82,67 @@ export const Route = createFileRoute("/_authed/app/")({
 	component: BrandSwitcherPage,
 });
 
+interface OrgEntry {
+	id: string;
+	name: string;
+}
+
 function BrandSwitcherPage() {
 	const [mounted, setMounted] = useState(false);
+	const [orgs, setOrgs] = useState<OrgEntry[]>([]);
+	const [deleteTarget, setDeleteTarget] = useState<OrgEntry | null>(null);
+	const [isDeleting, setIsDeleting] = useState(false);
+	const [deleteError, setDeleteError] = useState("");
+	const { organizations, canCreateBrands } = Route.useLoaderData();
+
 	useEffect(() => {
 		setMounted(true);
-	}, []);
-	const { organizations, canCreateBrands } = Route.useLoaderData();
+		setOrgs(organizations);
+	}, [organizations]);
+
+	const handleDelete = async () => {
+		if (!deleteTarget) return;
+		setIsDeleting(true);
+		setDeleteError("");
+		try {
+			await deleteBrandFn({ data: { brandId: deleteTarget.id } });
+			// Soft delete: row disappears from the list immediately (data kept, recoverable).
+			setOrgs((prev) => prev.filter((o) => o.id !== deleteTarget.id));
+			setDeleteTarget(null);
+		} catch (err) {
+			setDeleteError(err instanceof Error ? err.message : "An error occurred");
+		} finally {
+			setIsDeleting(false);
+		}
+	};
 
 	if (!mounted) return null;
 
 	return (
 		<FullPageCard title="Brand Switcher" subtitle="Select a brand to get started">
 			<div className="flex flex-col space-y-3 min-w-[200px]">
-				{organizations.length > 0 ? (
-					organizations.map((org: { id: string; name: string }) => (
-						<Button key={org.id} asChild variant="secondary">
-							<Link to="/app/$brand" params={{ brand: org.id }}>
-								{org.name}
-							</Link>
-						</Button>
+				{orgs.length > 0 ? (
+					orgs.map((org) => (
+						<div key={org.id} className="flex items-center gap-2">
+							<Button asChild variant="secondary" className="flex-1">
+								<Link to="/app/$brand" params={{ brand: org.id }}>
+									{org.name}
+								</Link>
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon"
+								className="shrink-0 text-muted-foreground hover:text-destructive cursor-pointer"
+								aria-label={`Delete ${org.name}`}
+								title="Delete project"
+								onClick={() => {
+									setDeleteError("");
+									setDeleteTarget(org);
+								}}
+							>
+								<Trash2 className="h-4 w-4" />
+							</Button>
+						</div>
 					))
 				) : (
 					<p className="text-muted-foreground text-center">No brands available</p>
@@ -98,6 +153,27 @@ function BrandSwitcherPage() {
 					</Button>
 				)}
 			</div>
+
+			<Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete &quot;{deleteTarget?.name}&quot;?</DialogTitle>
+						<DialogDescription>
+							Deleting a project stops automatic sampling and hides it from all pages.
+							Historical data is kept and can be restored by an admin.
+						</DialogDescription>
+					</DialogHeader>
+					{deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={isDeleting} className="cursor-pointer">
+							Cancel
+						</Button>
+						<Button variant="destructive" onClick={handleDelete} disabled={isDeleting} className="cursor-pointer">
+							{isDeleting ? "Deleting..." : "Delete Project"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</FullPageCard>
 	);
 }

@@ -3,8 +3,8 @@
  */
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
-import { member, organization } from "@workspace/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { member, organization, brands } from "@workspace/lib/db/schema";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { getDeployment } from "@/lib/config/server";
 import { auth } from "./server";
 
@@ -48,9 +48,15 @@ export async function requireOrgAccess(userId: string, orgId: string): Promise<v
 }
 
 export async function listUserOrganizations(userId: string): Promise<{ id: string; name: string }[]> {
+	// Hide orgs whose brand was soft-deleted (V1 软删除: 隐藏 + 停扫 + 数据保留)。
+	// Left join: orgs without a brand row (rare) stay visible so users can still
+	// complete onboarding; orgs whose brand has deleted_at set disappear.
 	return db
 		.select({ id: organization.id, name: organization.name })
 		.from(member)
 		.innerJoin(organization, eq(member.organizationId, organization.id))
-		.where(eq(member.userId, userId));
+		.leftJoin(brands, eq(brands.organizationId, organization.id))
+		.where(
+			and(eq(member.userId, userId), or(isNull(brands.id), isNull(brands.deletedAt))),
+		);
 }
