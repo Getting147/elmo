@@ -111,7 +111,7 @@ function buildSchema(args: { maxCompetitors: number; maxPrompts: number; maxProd
 		suggestedPrompts: z
 			.array(promptSchema)
 			.describe(
-				`Up to ${args.maxPrompts} suggested AI tracking prompts. IMPORTANT: the MAJORITY must be UNBRANDED — generic category/persona queries that do NOT contain the brand name (e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]"). Only 3-5 should be branded (contain the brand name, e.g. "[brand] alternative", "is [brand] worth it"). The goal is to test whether AI models mention the brand organically in response to unbranded queries. ${TAG_GUIDANCE}`,
+				`Up to ${args.maxPrompts} suggested AI tracking prompts. IMPORTANT: prompts must NEVER contain the brand's own name, its aliases, or its proprietary product/SKU names — a prompt that names the brand forces AI answers to mention it, which inflates organic mention-rate. Use ONLY generic category/persona/use-case queries with descriptive (non-proprietary) terms (e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]"). The goal is to test whether AI models mention the brand organically in response to unbranded queries. ${TAG_GUIDANCE}`,
 			),
 		// Epic A-2 (V1.0): 公司档案扩展
 		summary: includeProducts
@@ -382,7 +382,7 @@ function buildPrompt(args: {
 	const productGuidance = args.includeProducts
 		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
 For productLines: each SKU MUST have an evidenceUrl pointing to a page where the SKU actually appears — that URL will be validated against the crawled pages. If you cannot cite a source for a SKU, omit it. Do not invent SKUs.
-For suggestedPrompts: produce a MIX of approximately 60% unbranded search-style fragments (under 12 words, NO brand name, examples: "best [category]", "[category] vs alternatives", "where to buy [category]") and 40% decision questions (15+ words, more specific intent, examples: "is [brand] worth it for [use case]", "[brand] vs [competitor] for [category]"). The mix lets us test both organic-discovery and explicit-comparison behavior.`
+For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded).`
 		: "";
 
 	return `Analyze the brand at ${args.analysisUrl}.
@@ -462,11 +462,33 @@ function normalize(args: {
 
 	const suggestedPrompts: OnboardingPrompt[] = [];
 	if (includePrompts) {
+		// Owner 2026-09-08: prompt 含品牌名/别名/专有产品名 → AI 回答必提品牌 →
+		// 品牌提及率注水。规则层已禁，此处在解析后做运行时护栏再剔一层
+		// （productLines 同批输出，先扫 raw 收集专名用于交叉检测）。
+		const brandNeedles = new Set<string>(
+			[brandName, ...aliases, ...(raw.aliases ?? [])].map((s) => s.toLowerCase()).filter(Boolean),
+		);
+		const productNeedles = new Set<string>();
+		for (const line of raw.productLines ?? []) {
+			if (line && typeof line === "object") {
+				const lineObj = line as { name?: unknown; skus?: unknown };
+				if (typeof lineObj.name === "string") productNeedles.add(lineObj.name.toLowerCase());
+				if (Array.isArray(lineObj.skus)) {
+					for (const sku of lineObj.skus) {
+						if (sku && typeof sku === "object" && typeof (sku as { name?: unknown }).name === "string") {
+							productNeedles.add((sku as { name: string }).name.toLowerCase());
+						}
+					}
+				}
+			}
+		}
+		const allNeedles = [...brandNeedles, ...productNeedles].filter((n) => n.length > 1);
 		const seen = new Set<string>();
 		for (const p of raw.suggestedPrompts ?? []) {
 			if (suggestedPrompts.length >= maxPrompts) break;
 			const value = p.prompt.trim().toLowerCase();
 			if (!value || seen.has(value)) continue;
+			if (allNeedles.some((n) => value.includes(n))) continue; // contaminated → drop
 			seen.add(value);
 			const tags = uniqueLowercase((p.tags ?? []).map(toKebabCase).filter(Boolean)).slice(0, 3);
 			suggestedPrompts.push({ prompt: value, tags });
