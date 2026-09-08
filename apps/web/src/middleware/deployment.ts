@@ -39,18 +39,29 @@ export const deploymentMiddleware = createMiddleware().server(async ({ next }) =
 		{ adminApiKeys: getAdminApiKeys() },
 	);
 
-	switch (result.action) {
-		case "block":
+	if (result.action === "block" && result.status === 401 && result.error === "Unauthorized") {
+		// API v1 dual-auth: Bearer API key failed in the pure-policy pass above;
+		// fall back to better-auth session cookie so UI fetches work alongside
+		// script/CLI Bearer callers. (createApiHandler + apiKeyMiddleware also
+		// dual-auth, but this global middleware runs first and would 401 first.)
+		const sessionOk = await validateApiKeyFromRequest(request);
+		if (!sessionOk) {
 			throw new Response(JSON.stringify({ error: result.error, message: result.message }), {
 				status: result.status,
 				headers: { "Content-Type": "application/json" },
 			});
-		case "redirect":
-			throw Response.redirect(new URL(result.url, request.url), 302);
-		case "serve-openapi":
-			throw Response.json(openApiSpec, {
-				headers: { "Content-Type": "application/json" },
-			});
+		}
+	} else if (result.action === "block") {
+		throw new Response(JSON.stringify({ error: result.error, message: result.message }), {
+			status: result.status,
+			headers: { "Content-Type": "application/json" },
+		});
+	} else if (result.action === "redirect") {
+		throw Response.redirect(new URL(result.url, request.url), 302);
+	} else if (result.action === "serve-openapi") {
+		throw Response.json(openApiSpec, {
+			headers: { "Content-Type": "application/json" },
+		});
 	}
 
 	return next({
