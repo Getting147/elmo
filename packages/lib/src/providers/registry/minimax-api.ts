@@ -110,6 +110,10 @@ export function normalizeM3Output(parsed: unknown): unknown {
 					if (typeof skuObj.name !== "string") skuObj.name = "";
 					if (typeof skuObj.model !== "string") skuObj.model = null;
 					if (typeof skuObj.oneLiner !== "string") skuObj.oneLiner = "";
+					// hill 2026-09-08: evidenceUrl 缺 → null（schema nullable；无 URL 的 SKU
+					// 进 unverified MISSING_URL 待人工确认，不整组丢弃——M3 检索弱不给 URL
+					// 曾导致整个 productLines 输出为空）
+					if (typeof skuObj.evidenceUrl !== "string") skuObj.evidenceUrl = null;
 					return skuObj;
 				});
 			}

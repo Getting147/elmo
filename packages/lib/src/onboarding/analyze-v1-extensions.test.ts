@@ -195,7 +195,7 @@ describe("analyzeBrand — 新调用带 crawledPageTexts（H1-1/1-2/1-5 evidence
 		expect(result.productLines?.unverified[0].reason).toContain("NAME_NOT_FOUND");
 	});
 
-	it("S2-1: SKU 缺必填字段（无 evidenceUrl）→ 整 line 被 filter 掉", () => {
+	it("S2-1: SKU 缺 evidenceUrl → 保留并进 unverified (MISSING_URL)（hill 2026-09-08：不整组丢弃）", () => {
 		const result = normalizeAnalysisResult(
 			{
 				brandName: "Haier",
@@ -217,9 +217,10 @@ describe("analyzeBrand — 新调用带 crawledPageTexts（H1-1/1-2/1-5 evidence
 			} as never,
 			analysisContextBase,
 		);
-		// evidenceUrl 缺失 → normalize 时 .filter 掉该 SKU → line.skus.length === 0 → 整 line 不入 confirmed/unverified
+		// evidenceUrl 缺失 → SKU 保留（evidenceUrl=""）→ validateEvidence MISSING_URL → 整 line 进 unverified
 		expect(result.productLines?.confirmed.length).toBe(0);
-		expect(result.productLines?.unverified.length).toBe(0);
+		expect(result.productLines?.unverified.length).toBe(1);
+		expect(result.productLines?.unverified[0].reason).toContain("MISSING_URL");
 	});
 
 	it("summary/description 长度截断（200/1000）", () => {

@@ -64,8 +64,9 @@ const skuSchema = z.object({
 	oneLiner: z.string().describe("One-sentence distinguishing feature (e.g. '470L French-door, energy class A+++')."),
 	evidenceUrl: z
 		.string()
+		.nullable()
 		.describe(
-			"REQUIRED. Source URL where this SKU was found (anti-hallucination — validated against crawled pages). Hostname + path, no query.",
+			"Source URL where this SKU was found (anti-hallucination — validated against crawled pages). Hostname + path, no query. May be null when the SKU is confidently real but no exact page was retrievable — it will be flagged for human confirmation instead of dropped.",
 		),
 });
 
@@ -381,7 +382,7 @@ function buildPrompt(args: {
 	// (≥15 words). 反映 Owner "用户真实问法"倾向。
 	const productGuidance = args.includeProducts
 		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
-For productLines: each SKU MUST have an evidenceUrl pointing to a page where the SKU actually appears — that URL will be validated against the crawled pages. If you cannot cite a source for a SKU, omit it. Do not invent SKUs.
+For productLines: list the brand's real product lines (top-level categories), each with 1-10 SKUs. SKUs must be real models you are confident about — do not invent model numbers. Prefer an evidenceUrl (a page where the SKU actually appears, no query string) when you have one; if a SKU is confidently real but no exact page was retrievable, leave evidenceUrl null — it will be flagged for human confirmation rather than dropped. Never invent a URL. Omitting an entire product line because one URL is missing is wrong: name-level product knowledge is common knowledge, list it.
 For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded).`
 		: "";
 
@@ -389,7 +390,9 @@ For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand'
 
 ${nameLine}
 ${scopeNote}${excerptBlock}
-Use web search to verify facts. Never invent information — return empty arrays when uncertain.
+Use web search to verify facts. Never invent information — return empty arrays only when information is genuinely unavailable.
+
+Competitors and aliases are common-knowledge fields: list the brand's well-known direct competitors (3-8 names with their own domains) and the brand's common aliases (abbreviations, parent-company names, widely used short forms) whenever you are reasonably confident — do not leave them empty just because the excerpt is thin. Return empty arrays only for fields where you truly have no signal.
 
 You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}${productGuidance}`;
 }
@@ -521,14 +524,15 @@ function normalize(args: {
 			if (!rl) continue;
 			const line: OnboardingProductLine = {
 				name: rl.name.trim(),
-				// S2-1: filter 必填字段 name + oneLiner 在 map 前（防缺字段崩溃 → s.evidenceUrl.trim() 抛 TypeError）
+				// S2-1: filter 必填字段 name + oneLiner 在 map 前（防缺字段崩溃 → s.evidenceUrl.trim() 抛 TypeError）。
+				// evidenceUrl 可空（null/"" → 进 unverified MISSING_URL 待人工确认，不整组丢弃）
 				skus: (rl.skus ?? [])
-					.filter((s) => s.name && s.oneLiner && s.evidenceUrl)
+					.filter((s) => s.name && s.oneLiner)
 					.map((s) => ({
 						name: s.name.trim(),
 						model: s.model?.trim() || undefined,
 						oneLiner: s.oneLiner.trim(),
-						evidenceUrl: s.evidenceUrl.trim(),
+						evidenceUrl: s.evidenceUrl?.trim() || "",
 					})),
 			};
 			if (!line.name || line.skus.length === 0) continue;
