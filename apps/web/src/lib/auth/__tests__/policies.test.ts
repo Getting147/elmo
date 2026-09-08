@@ -12,7 +12,7 @@
  *   4. API key authentication
  *   5. Read-only enforcement
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	evaluateAdminRouteGuard,
 	evaluateApiKeyAuth,
@@ -28,6 +28,16 @@ import {
 	type RequestInfo,
 } from "@/lib/auth/policies";
 import { createMockSession, DEMO_FEATURES, LOCAL_FEATURES, WHITELABEL_FEATURES } from "@/test/mocks/auth";
+
+// Cookie fallback path (validateApiKeyFromRequest) 需要 auth.api.getSession ——
+// vitest 环境真实 better-auth init 会挂起超时，这里 mock 成立即返回 null（无 session）。
+vi.mock("../server", () => ({
+	auth: {
+		api: {
+			getSession: async () => null,
+		},
+	},
+}));
 
 // ============================================================================
 // Helpers
@@ -702,15 +712,13 @@ describe("full access-control scenarios", () => {
 		// 动态 import('./server') 在 vitest 环境里 better-auth init 需要 BETTER_AUTH_SECRET 等 env；
 		// 我们覆盖纯 Bearer 路径，cookie 路径在生产 curl 实测（hill 复测）。
 		const VALID_KEY = "test-key-abc123";
-		const ORIGINAL_ENV = process.env.ADMIN_API_KEYS;
 
 		beforeAll(() => {
-			process.env.ADMIN_API_KEYS = VALID_KEY;
+			vi.stubEnv("ADMIN_API_KEYS", VALID_KEY);
 		});
 
 		afterAll(() => {
-			if (ORIGINAL_ENV === undefined) delete process.env.ADMIN_API_KEYS;
-			else process.env.ADMIN_API_KEYS = ORIGINAL_ENV;
+			vi.unstubAllEnvs();
 		});
 
 		it("allows valid Bearer API key (returns true synchronously)", async () => {
