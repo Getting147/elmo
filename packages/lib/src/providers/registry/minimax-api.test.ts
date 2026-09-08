@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { stripThinkingBlocks } from "./minimax-api";
 
 const fetchMock = vi.fn();
 
@@ -104,6 +105,80 @@ describe("minimax-api runStructuredResearch", () => {
 		await expect(
 			minimaxApi.runStructuredResearch({ prompt: "extract", schema }),
 		).rejects.toThrow();
+	});
+});
+
+describe("stripThinkingBlocks", () => {
+	it("removes <think>...</think> blocks (qoder-cn review)", () => {
+		const input = `<think>Let me think about Haier...</think>{"name":"Haier"}`;
+		expect(stripThinkingBlocks(input)).toBe(`{"name":"Haier"}`);
+	});
+
+	it("removes multi-line <think> blocks", () => {
+		const input = `<think>\nLine 1\nLine 2\nLine 3\n</think>{"name":"X"}`;
+		expect(stripThinkingBlocks(input)).toBe(`{"name":"X"}`);
+	});
+
+	it("removes markdown ```json fences", () => {
+		const input = '```json\n{"name":"Haier"}\n```';
+		expect(stripThinkingBlocks(input)).toBe(`{"name":"Haier"}`);
+	});
+
+	it("removes both think block and fence in sequence", () => {
+		const input = '<think>reasoning</think>```json\n{"name":"H"}\n```';
+		expect(stripThinkingBlocks(input)).toBe(`{"name":"H"}`);
+	});
+
+	it("returns trimmed plain JSON unchanged", () => {
+		expect(stripThinkingBlocks('  {"a":1}  ')).toBe(`{"a":1}`);
+	});
+});
+
+describe("minimax-api runStructuredResearch with thinking blocks", () => {
+	it("parses JSON even when LLM wraps response in <think> blocks", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				model: "MiniMax-M3",
+				choices: [
+					{
+						message: {
+							content: '<think>The brand is Haier.</think>{"name":"Haier"}',
+						},
+						finish_reason: "stop",
+					},
+				],
+			}),
+		);
+		const { minimaxApi } = await import("./minimax-api");
+		const schema = z.object({ name: z.string() });
+		const result = await minimaxApi.runStructuredResearch<{ name: string }>({
+			prompt: "extract",
+			schema,
+		});
+		expect(result.object).toEqual({ name: "Haier" });
+	});
+
+	it("parses JSON even when LLM wraps in ```json fences", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				model: "MiniMax-M3",
+				choices: [
+					{
+						message: {
+							content: '```json\n{"name":"Haier"}\n```',
+						},
+						finish_reason: "stop",
+					},
+				],
+			}),
+		);
+		const { minimaxApi } = await import("./minimax-api");
+		const schema = z.object({ name: z.string() });
+		const result = await minimaxApi.runStructuredResearch<{ name: string }>({
+			prompt: "extract",
+			schema,
+		});
+		expect(result.object).toEqual({ name: "Haier" });
 	});
 });
 

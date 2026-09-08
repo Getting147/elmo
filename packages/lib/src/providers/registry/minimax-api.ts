@@ -27,6 +27,20 @@ const BASE_URL = "https://api.minimaxi.com/v1";
 const MAX_RETRIES = 2;
 const RETRY_DELAYS_MS = [1000, 3000];
 
+/**
+ * 剥离 LLM 输出里的 <think>...</think> 思考块和 markdown code fence（geo-api 9-5 实证 MiniMax M3 常见）。
+ * qoder-cn review 要点：M3 在 max_tokens > 1024 或 response_format=json_object 时会触发 thinking 模式，
+ * 输出结构 = `<think>{...}\n</think>`{实际 JSON}` —— JSON.parse 不剥这两个就炸。
+ * 顺序：先剥 think 块 → 再剥 ```json fences → 再 trim
+ */
+export function stripThinkingBlocks(text: string): string {
+	return text
+		.replace(/<think>[\s\S]*?<\/think>/g, "")
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/```\s*$/i, "")
+		.trim();
+}
+
 /** 是否可重试的 HTTP 状态（含 429 限流 + 5xx 服务器错误） */
 function isRetryableStatus(status: number): boolean {
 	return status === 429 || (status >= 500 && status < 600);
@@ -128,20 +142,22 @@ export const minimaxApi: Provider = {
 		prompt,
 		schema,
 	}: StructuredResearchOptions<T>): Promise<StructuredResearchResult<T>> {
-		// qoder-cn review 要点：minimax 无 webSearch 工具，固定不开
-		// 用 response_format json_object 引导输出 JSON；调用方传入的 zod schema 在 provider 内解析校验
+		// qoder-cn review 要点（06:28 f6811e1f）：minimax M3 输出可能含 <think>...</think> 思考块，
+		// 必须先剥离再 JSON.parse，否则 schema.parse 失败 → 整个 wizard 卡死。
+		// geo-api 9-5 实证：M3 thinking 模式触发条件是 max_tokens > 1024 或 response_format=json_object。
 		const data = await minimaxChat(
 			[
 				{
 					role: "system",
-					content: "You are a precise JSON extractor. Respond only with a single JSON object matching the requested schema.",
+					content: "You are a precise JSON extractor. Respond only with a single JSON object matching the requested schema. Never include thinking blocks, commentary, or markdown fences around the JSON.",
 				},
 				{ role: "user", content: prompt },
 			],
 			{ model: DEFAULT_MODEL, responseFormat: { type: "json_object" } },
 		);
-		const text = data?.choices?.[0]?.message?.content ?? "{}";
-		const parsed = JSON.parse(text);
+		const rawText = data?.choices?.[0]?.message?.content ?? "{}";
+		const cleaned = stripThinkingBlocks(rawText);
+		const parsed = JSON.parse(cleaned);
 		const validated = schema.parse(parsed) as T;
 		return {
 			object: validated,
