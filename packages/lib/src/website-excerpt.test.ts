@@ -152,7 +152,34 @@ describe("getWebsiteExcerpt", () => {
 		const excerpt = await getWebsiteExcerpt("acme.com");
 		expect(excerpt).toContain("Unable to retrieve live content from acme.com");
 		expect(excerpt).toContain("well-known public knowledge about \"acme\"");
-		expect(excerpt).toContain("do not leave productLines or competitors empty");
+		// v15 正向引导：空输出才是真失败 + safety net 说明（不再负向禁止措辞）。
+		expect(excerpt).toContain("empty productLines or competitors is the real failure");
+		expect(excerpt).toContain("unverified for human review");
+	});
+
+	it("uses the industry-hint branch when the hostname signals the industry (hill 2026-09-08)", async () => {
+		stubFetch({
+			jina: response({ ok: false, status: 401 }),
+			direct: response({ ok: false, status: 500 }),
+		});
+
+		const excerpt = await getWebsiteExcerpt("cool-fridges.com");
+		expect(excerpt).toContain("For a home appliance brand like cool-fridges");
+		expect(excerpt).toContain("refrigerators, washing machines");
+		expect(excerpt).toContain("commonly compete with: Samsung, LG, Whirlpool, Electrolux, Panasonic, and Midea, Gree");
+		expect(excerpt).toContain("Category-level terms are sufficient");
+	});
+
+	it("keeps the no-industry branch to a generic reference shape (hill 2026-09-08)", async () => {
+		stubFetch({
+			jina: response({ ok: false, status: 401 }),
+			direct: response({ ok: false, status: 500 }),
+		});
+
+		const excerpt = await getWebsiteExcerpt("some-obscure-brand.example");
+		expect(excerpt).toContain("Reference shape for some-obscure-brand");
+		expect(excerpt).toContain("Competitors should mix global leaders and regional/local peers");
+		expect(excerpt).toContain("do not invent specific model numbers or evidence URLs");
 	});
 
 	it("caps the excerpt at 200 lines", async () => {

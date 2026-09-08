@@ -63,6 +63,73 @@ export async function getWebsiteExcerpt(url: string): Promise<string> {
 	return buildFallbackExcerpt(cleanUrl);
 }
 
+type IndustryProfile = {
+	label: string;
+	products: string;
+	global: string;
+	regional?: string;
+};
+
+/**
+ * v15 行业启发词典（仅关键词匹配，非品牌硬编码）：无法可靠推断行业时走通用
+ * 形状引导。home appliance 覆盖海尔场景（素材：qoder-cn 行业常识词典）。
+ */
+const INDUSTRY_HINTS: Array<{ match: RegExp; profile: IndustryProfile }> = [
+	{
+		match: /appliance|fridge|washer|kitchen|refrigerat|air\s?cond|water\s?heat|vacuum/i,
+		profile: {
+			label: "home appliance",
+			products:
+				"refrigerators, washing machines, air conditioners, kitchen appliances, water heaters, small home appliances",
+			global: "Samsung, LG, Whirlpool, Electrolux, Panasonic",
+			regional: "Midea, Gree",
+		},
+	},
+	{
+		match: /electronics|audio|wearable|smartphone|telecom|digital|display/i,
+		profile: {
+			label: "consumer electronics",
+			products: "smartphones, laptops, audio, wearables, smart-home devices",
+			global: "Apple, Samsung, Sony",
+			regional: "Xiaomi, Huawei",
+		},
+	},
+	{
+		match: /auto|car|motor|vehicle|truck|ev|drive/i,
+		profile: {
+			label: "automotive",
+			products: "sedans, SUVs, EVs, commercial vehicles",
+			global: "Toyota, Volkswagen, General Motors",
+			regional: "BYD, Geely",
+		},
+	},
+	{
+		match: /food|snack|drink|beverage|dairy|cosmetic|personal\s?care|beauty/i,
+		profile: {
+			label: "consumer goods",
+			products: "core product categories, sub-brands, everyday consumables",
+			global: "Procter & Gamble, Nestlé, Unilever",
+			regional: "leading local brands (match to the brand's markets)",
+		},
+	},
+	{
+		match: /saas|software|cloud|analytics|platform|ai|data/i,
+		profile: {
+			label: "software/SaaS",
+			products: "core platform, business tiers, developer tools",
+			global: "Microsoft, Salesforce, Google",
+			regional: "leading local SaaS providers (match to the brand's markets)",
+		},
+	},
+];
+
+function inferIndustry(hostname: string): IndustryProfile | undefined {
+	for (const hint of INDUSTRY_HINTS) {
+		if (hint.match.test(hostname)) return hint.profile;
+	}
+	return undefined;
+}
+
 function buildFallbackExcerpt(url: string): string {
 	let hostname = "";
 	try {
@@ -71,10 +138,28 @@ function buildFallbackExcerpt(url: string): string {
 		hostname = url;
 	}
 	const brand = hostname.split(".")[0];
-	return [
+	const profile = inferIndustry(hostname);
+	const lines = [
 		`Unable to retrieve live content from ${hostname} — all excerpt sources failed (network/region block).`,
-		`The brand operates at ${hostname}. Use well-known public knowledge about "${brand}": its product categories, flagship product lines and models, major direct competitors, and common aliases are public facts for established brands. Providing them from general knowledge is expected, not fabrication — do not leave productLines or competitors empty merely because the page text is unavailable.`,
-	].join("\n");
+		`Continue from well-known public knowledge about "${brand}": its product categories, major product lines, direct competitors, and common aliases are public facts for established brands. Providing them from general knowledge is expected — empty productLines or competitors is the real failure.`,
+		`Safety net: a product line or SKU whose evidenceUrl is missing or cannot be verified is kept as unverified for human review — it is never dropped wholesale. Approximate-but-real output is strictly better than empty output.`,
+	];
+	if (profile) {
+		const label = profile.label[0].toUpperCase() + profile.label.slice(1);
+		lines.push(
+			`For a ${profile.label} brand like ${brand}, typical product lines include: ${profile.products}. Category-level terms are sufficient; exact model names are not required.`,
+			`${label} brands commonly compete with: ${profile.global}${profile.regional ? `, and ${profile.regional}` : ""}.`,
+		);
+	} else {
+		lines.push(
+			`Reference shape for ${brand}: typical product lines include 3-6 category-level terms describing what the brand actually sells, drawn from your own knowledge of the brand; category-level approximations are acceptable, exact SKU or model numbers are not required.`,
+			`Competitors should mix global leaders and regional/local peers relevant to ${brand}'s markets.`,
+		);
+	}
+	lines.push(
+		`One caution: do not invent specific model numbers or evidence URLs — approximate category-level output is expected instead.`,
+	);
+	return lines.join("\n");
 }
 
 /**
