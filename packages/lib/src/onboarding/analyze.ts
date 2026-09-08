@@ -56,9 +56,11 @@ const promptSchema = z.object({
 });
 
 // Epic A-2 (V1.0): SKU 防幻觉 — evidenceUrl 必填，validateEvidence 兜底校验
+// Epic A-2 (V1.0) patch: model 改 nullable（不带 .optional()）— zod v4.1.11 + GLM-5.2 z.toJSONSchema 实证：
+// optional() 会被 GLM 当 required 校验失败（缺字段报错）；nullable() 单独足够让 json_schema 标 type:['string','null']
 const skuSchema = z.object({
 	name: z.string().describe("SKU product name (e.g. 'Haier BCD-470WGCTD1'). Distinct from product line."),
-	model: z.string().optional().describe("Model number if distinct from name (e.g. 'BCD-470WGCTD1')."),
+	model: z.string().nullable().describe("Model number if distinct from name (e.g. 'BCD-470WGCTD1'). May be null if name already encodes the model."),
 	oneLiner: z.string().describe("One-sentence distinguishing feature (e.g. '470L French-door, energy class A+++')."),
 	evidenceUrl: z
 		.string()

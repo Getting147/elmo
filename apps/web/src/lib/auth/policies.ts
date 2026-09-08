@@ -183,12 +183,27 @@ export function getAdminApiKeys(): string[] {
 }
 
 /**
- * Validate a Bearer API key from a request.
+ * Validate request auth — dual-mode (API key Bearer OR better-auth session cookie).
  * Convenience wrapper for use in API route handlers.
+ *
+ * Epic A-2 (V1.0) patch: 加 better-auth session cookie fallback —— UI fetch 走同源 cookie 路径，
+ * 不能要求 UI 侧读 API key；脚本/报告层用 Bearer API key。任一通过即视为已认证。
  */
-export function validateApiKeyFromRequest(request: Request): boolean {
+export async function validateApiKeyFromRequest(request: Request): Promise<boolean> {
+	// 1. Bearer API key 优先（脚本/CLI/报告层用）
 	const authHeader = request.headers.get("Authorization");
-	return evaluateApiKeyAuth(authHeader, getAdminApiKeys()) === "allow";
+	if (evaluateApiKeyAuth(authHeader, getAdminApiKeys()) === "allow") {
+		return true;
+	}
+	// 2. better-auth session cookie fallback（UI 端 wizard/fetch 同源调用）
+	try {
+		const { auth } = await import("./server");
+		const session = await auth.api.getSession({ headers: request.headers });
+		return session !== null && session !== undefined;
+	} catch {
+		// better-auth init 失败（缺 env 等）不阻断 API key 路径；此场景下未通过即未授权
+		return false;
+	}
 }
 
 // ============================================================================

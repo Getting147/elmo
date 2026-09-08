@@ -53,7 +53,7 @@ export function createApiHandler<P = Record<string, string>, B = undefined>(opts
 	handle: (ctx: ApiHandlerContext<P, B>) => Promise<Response | object>;
 }) {
 	return async ({ request, params }: { request: Request; params: Record<string, string> }): Promise<Response> => {
-		if (!validateApiKeyFromRequest(request)) {
+		if (!(await validateApiKeyFromRequest(request))) {
 			return errorResponse(401, "Unauthorized", "Valid API key required");
 		}
 

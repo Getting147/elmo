@@ -12,7 +12,7 @@
  *   4. API key authentication
  *   5. Read-only enforcement
  */
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	evaluateAdminRouteGuard,
 	evaluateApiKeyAuth,
@@ -691,6 +691,49 @@ describe("full access-control scenarios", () => {
 			expect(evaluateRequireOrgAccess(false)).toBe("deny");
 			expect(evaluateBrandRouteGuard(true)).toBe("allow");
 			expect(evaluateBrandRouteGuard(false)).toBe("not-found");
+		});
+	});
+
+	// ============================================================================
+	// 6. validateApiKeyFromRequest — dual auth (Bearer + session cookie) — Epic A-2 patch
+	// ============================================================================
+
+	describe("validateApiKeyFromRequest dual auth", () => {
+		// 动态 import('./server') 在 vitest 环境里 better-auth init 需要 BETTER_AUTH_SECRET 等 env；
+		// 我们覆盖纯 Bearer 路径，cookie 路径在生产 curl 实测（hill 复测）。
+		const VALID_KEY = "test-key-abc123";
+		const ORIGINAL_ENV = process.env.ADMIN_API_KEYS;
+
+		beforeAll(() => {
+			process.env.ADMIN_API_KEYS = VALID_KEY;
+		});
+
+		afterAll(() => {
+			if (ORIGINAL_ENV === undefined) delete process.env.ADMIN_API_KEYS;
+			else process.env.ADMIN_API_KEYS = ORIGINAL_ENV;
+		});
+
+		it("allows valid Bearer API key (returns true synchronously)", async () => {
+			const req = new Request("http://localhost/api/v1/test", {
+				headers: { Authorization: `Bearer ${VALID_KEY}` },
+			});
+			const { validateApiKeyFromRequest } = await import("@/lib/auth/policies");
+			expect(await validateApiKeyFromRequest(req)).toBe(true);
+		});
+
+		it("rejects invalid Bearer key + no session cookie", async () => {
+			const req = new Request("http://localhost/api/v1/test", {
+				headers: { Authorization: "Bearer wrong-key" },
+			});
+			const { validateApiKeyFromRequest } = await import("@/lib/auth/policies");
+			// better-auth session fallback 在 vitest 环境 init 失败抛错被 catch → 返 false
+			expect(await validateApiKeyFromRequest(req)).toBe(false);
+		});
+
+		it("rejects when Authorization header missing (no Bearer, no session cookie in test env)", async () => {
+			const req = new Request("http://localhost/api/v1/test");
+			const { validateApiKeyFromRequest } = await import("@/lib/auth/policies");
+			expect(await validateApiKeyFromRequest(req)).toBe(false);
 		});
 	});
 });
