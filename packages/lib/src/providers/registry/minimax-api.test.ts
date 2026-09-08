@@ -182,7 +182,7 @@ describe("minimax-api runStructuredResearch with thinking blocks", () => {
 	});
 });
 
-describe("normalizeM3Output (qoder-cn 拍板 A)", () => {
+describe("normalizeM3Output (qoder-cn 拍板 B-lite full-coverage)", () => {
 	it("fills missing additionalDomains/aliases/competitors with [] (rule 1)", () => {
 		const input = { brandName: "Haier" };
 		const out = normalizeM3Output(input) as Record<string, unknown>;
@@ -216,10 +216,44 @@ describe("normalizeM3Output (qoder-cn 拍板 A)", () => {
 		expect(out.productLines[0].skus[1].oneLiner).toBe("best");
 	});
 
-	it("does NOT overwrite existing top-level arrays (rule 4)", () => {
-		const input = { additionalDomains: ["haier.com"], aliases: ["海尔"], competitors: [{ name: "Midea" }] };
+	it("does NOT overwrite existing top-level arrays (rule 4 - basic no mutation)", () => {
+		const input = { additionalDomains: ["haier.com"], aliases: ["海尔"] };
 		const out = normalizeM3Output(input);
 		expect(out).toBe(input); // 引用相等（无修改）
+	});
+
+	it("normalizes competitor string items to full schema (B-lite rule: competitors[].*)", () => {
+		const input = { competitors: ["Midea", { name: "Gree" }, { name: "Hisense", website: "https://hisense.com" }] };
+		const out = normalizeM3Output(input) as {
+			competitors: Array<{ name: string; website: string; aliases: string[]; additionalDomains: string[]; domains: string[] }>;
+		};
+		expect(out.competitors[0]).toEqual({ name: "Midea", website: "", aliases: [], additionalDomains: [], domains: [] });
+		expect(out.competitors[1]).toEqual({ name: "Gree", website: "", aliases: [], additionalDomains: [], domains: [] });
+		expect(out.competitors[2].name).toBe("Hisense");
+		expect(out.competitors[2].website).toBe("https://hisense.com");
+		expect(out.competitors[2].aliases).toEqual([]);
+	});
+
+	it("normalizes productLines[].* full schema (B-lite rule: productLines[].*)", () => {
+		const input = {
+			productLines: [
+				{ skus: [{ model: "X1" }] }, // 缺 name/description/category + sku 缺 name/oneLiner
+			],
+		};
+		const out = normalizeM3Output(input) as {
+			productLines: Array<{
+				name: string;
+				description: string;
+				category: string;
+				skus: Array<{ name: string; model: unknown; oneLiner: string }>;
+			}>;
+		};
+		expect(out.productLines[0].name).toBe("");
+		expect(out.productLines[0].description).toBe("");
+		expect(out.productLines[0].category).toBe("");
+		expect(out.productLines[0].skus[0].name).toBe("");
+		expect(out.productLines[0].skus[0].model).toBe("X1"); // 已有不覆盖
+		expect(out.productLines[0].skus[0].oneLiner).toBe("");
 	});
 });
 

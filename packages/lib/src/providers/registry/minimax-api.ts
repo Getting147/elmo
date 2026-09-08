@@ -64,6 +64,21 @@ export function normalizeM3Output(parsed: unknown): unknown {
 	if (!Array.isArray(obj.additionalDomains)) obj.additionalDomains = [];
 	if (!Array.isArray(obj.aliases)) obj.aliases = [];
 	if (!Array.isArray(obj.competitors)) obj.competitors = [];
+	else {
+		obj.competitors = obj.competitors.map((c) => {
+			if (typeof c === "string") return { name: c, website: "", aliases: [], additionalDomains: [], domains: [] };
+			if (c && typeof c === "object") {
+				const item = c as Record<string, unknown>;
+				if (typeof item.name !== "string") item.name = "";
+				if (typeof item.website !== "string") item.website = "";
+				if (!Array.isArray(item.aliases)) item.aliases = [];
+				if (!Array.isArray(item.additionalDomains)) item.additionalDomains = [];
+				if (!Array.isArray(item.domains)) item.domains = [];
+				return item;
+			}
+			return { name: String(c ?? ""), website: "", aliases: [], additionalDomains: [], domains: [] };
+		});
+	}
 
 	if (Array.isArray(obj.suggestedPrompts)) {
 		obj.suggestedPrompts = obj.suggestedPrompts.map((p) => {
@@ -82,11 +97,17 @@ export function normalizeM3Output(parsed: unknown): unknown {
 		obj.productLines = obj.productLines.map((line) => {
 			if (!line || typeof line !== "object") return line;
 			const lineObj = line as Record<string, unknown>;
+			// FDEV 2026-09-08 v6 复测补漏：缺 productLines[].name / .description / .category
+			if (typeof lineObj.name !== "string") lineObj.name = "";
+			if (typeof lineObj.description !== "string") lineObj.description = "";
+			if (typeof lineObj.category !== "string") lineObj.category = "";
 			if (Array.isArray(lineObj.skus)) {
 				lineObj.skus = lineObj.skus.map((sku) => {
 					if (!sku || typeof sku !== "object") return sku;
 					const skuObj = sku as Record<string, unknown>;
 					// qoder-cn 完整规则 2/3 (mtsckhd73e8dc0f8806b): 缺 model → null, 缺 oneLiner → ""
+					// FDEV v6 补漏：skus[].name 缺也要补
+					if (typeof skuObj.name !== "string") skuObj.name = "";
 					if (typeof skuObj.model !== "string") skuObj.model = null;
 					if (typeof skuObj.oneLiner !== "string") skuObj.oneLiner = "";
 					return skuObj;
