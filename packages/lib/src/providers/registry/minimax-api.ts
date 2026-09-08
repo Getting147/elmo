@@ -148,18 +148,34 @@ async function minimaxChat(messages: { role: string; content: string }[], option
 	if (options?.maxTokens) body.max_tokens = options.maxTokens;
 	if (options?.responseFormat) body.response_format = options.responseFormat;
 
-	const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(body),
-	});
-	if (!res.ok) {
-		throw new Error(`MiniMax API error (${res.status}): ${await res.text()}`);
+	const controller = new AbortController();
+	// FDEV 2026-09-08 拍板：MiniMax M3 上次 600s 超时 hang（api 端响应慢/挂死），
+	// 加 120s 单次超时（不含 MAX_RETRIES 重试时间）；若超时 controller.abort 立即抛错，避免 pg-boss 600s 强杀。
+	const timeoutMs = 120_000;
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+	try {
+		const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
+			method: "POST",
+			signal: controller.signal,
+			headers: {
+				Authorization: "Bearer " + apiKey,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+		if (!res.ok) {
+			throw new Error(`MiniMax API error (${res.status}): ${await res.text()}`);
+		}
+		return res.json() as Promise<ChatResponse>;
+	} catch (err) {
+		if ((err as Error).name === "AbortError") {
+			throw new Error(`MiniMax API timeout after ${timeoutMs}ms (AbortError) - likely api hang`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timeoutId);
 	}
-	return res.json() as Promise<ChatResponse>;
 }
 
 async function runMinimax(
@@ -198,6 +214,8 @@ export const minimaxApi: Provider = {
 		// qoder-cn review 要点（06:28 f6811e1f）：minimax M3 输出可能含 <think>...</think> 思考块，
 		// 必须先剥离再 JSON.parse，否则 schema.parse 失败 → 整个 wizard 卡死。
 		// geo-api 9-5 实证：M3 thinking 模式触发条件是 max_tokens > 1024 或 response_format=json_object。
+		const startTs = Date.now();
+		console.log(`[minimax-api] runStructuredResearch start: model=${DEFAULT_MODEL}, promptLen=${prompt.length}`);
 		const data = await minimaxChat(
 			[
 				{
@@ -208,9 +226,12 @@ export const minimaxApi: Provider = {
 			],
 			{ model: DEFAULT_MODEL, responseFormat: { type: "json_object" } },
 		);
+		console.log(`[minimax-api] LLM responded in ${Date.now() - startTs}ms`);
 		const rawText = data?.choices?.[0]?.message?.content ?? "{}";
+		console.log(`[minimax-api] rawText length=${rawText.length}, first100=${rawText.slice(0,100).replace(/\n/g, " ")}`);
 		const cleaned = stripThinkingBlocks(rawText);
 		const parsed = JSON.parse(cleaned);
+		console.log(`[minimax-api] parsed keys=${Object.keys(parsed).join(",")}`);
 		// qoder-cn 拍板 A（2026-09-08 07:19 mtsc9awxa729ffc3d620）：MiniMax M3 是推理模型，
 		// 对 Zod schema 不严格遵循。runStructuredResearch 内做 post-normalize 兜底，
 		// schema 保持 strict 不动以避免弱化 GPT 路径契约。
