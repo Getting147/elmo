@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { stripThinkingBlocks } from "./minimax-api";
+import { stripThinkingBlocks, normalizeM3Output } from "./minimax-api";
 
 const fetchMock = vi.fn();
 
@@ -179,6 +179,47 @@ describe("minimax-api runStructuredResearch with thinking blocks", () => {
 			schema,
 		});
 		expect(result.object).toEqual({ name: "Haier" });
+	});
+});
+
+describe("normalizeM3Output (qoder-cn 拍板 A)", () => {
+	it("fills missing additionalDomains/aliases/competitors with [] (rule 1)", () => {
+		const input = { brandName: "Haier" };
+		const out = normalizeM3Output(input) as Record<string, unknown>;
+		expect(out.additionalDomains).toEqual([]);
+		expect(out.aliases).toEqual([]);
+		expect(out.competitors).toEqual([]);
+		expect(out.brandName).toBe("Haier"); // 已有字段不覆盖（rule 4）
+	});
+
+	it("converts string suggestedPrompts items to {prompt, tags: []} (rule 2)", () => {
+		const input = { suggestedPrompts: ["prompt A", { prompt: "B" }] };
+		const out = normalizeM3Output(input) as { suggestedPrompts: unknown[] };
+		expect(out.suggestedPrompts).toEqual([
+			{ prompt: "prompt A", tags: [] },
+			{ prompt: "B", tags: [] },
+		]);
+	});
+
+	it("fills sku.model=null + sku.oneLiner='' when missing (rule 3)", () => {
+		const input = {
+			productLines: [
+				{ name: "Air Conditioner", skus: [{ name: "AC-1" }, { name: "AC-2", model: "X1", oneLiner: "best" }] },
+			],
+		};
+		const out = normalizeM3Output(input) as {
+			productLines: Array<{ skus: Array<{ name: string; model: unknown; oneLiner: unknown }> }>;
+		};
+		expect(out.productLines[0].skus[0].model).toBeNull();
+		expect(out.productLines[0].skus[0].oneLiner).toBe("");
+		expect(out.productLines[0].skus[1].model).toBe("X1"); // 已有不覆盖
+		expect(out.productLines[0].skus[1].oneLiner).toBe("best");
+	});
+
+	it("does NOT overwrite existing top-level arrays (rule 4)", () => {
+		const input = { additionalDomains: ["haier.com"], aliases: ["海尔"], competitors: [{ name: "Midea" }] };
+		const out = normalizeM3Output(input);
+		expect(out).toBe(input); // 引用相等（无修改）
 	});
 });
 

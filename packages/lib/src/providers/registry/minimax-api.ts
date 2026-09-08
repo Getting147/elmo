@@ -46,6 +46,59 @@ function isRetryableStatus(status: number): boolean {
 	return status === 429 || (status >= 500 && status < 600);
 }
 
+/**
+ * qoder-cn 拍板 A（mtsc9awxa729ffc3d620 + hill 补全 2/3 mtsckd0n + mtsckhd73e8dc0f8806b）：
+ * MiniMax M3 是推理模型，对 Zod schema 不严格遵循。runStructuredResearch 在拿到 parsed JSON
+ * 后、schema.parse 前做 post-normalize 兜底；schema 保持 strict 不动避免弱化 GPT 路径契约。
+ *
+ * 规则：
+ *   ① 顶层缺 additionalDomains / aliases / competitors → []
+ *   ② suggestedPrompts 字符串项 → {prompt: 原文, tags: []}；对象缺 tags → []
+ *   ③ productLines[].skus[].model 缺 → null；oneLiner 缺 → ""
+ *   ④ 已有字段不覆盖
+ */
+export function normalizeM3Output(parsed: unknown): unknown {
+	if (!parsed || typeof parsed !== "object") return parsed;
+	const obj = parsed as Record<string, unknown>;
+
+	if (!Array.isArray(obj.additionalDomains)) obj.additionalDomains = [];
+	if (!Array.isArray(obj.aliases)) obj.aliases = [];
+	if (!Array.isArray(obj.competitors)) obj.competitors = [];
+
+	if (Array.isArray(obj.suggestedPrompts)) {
+		obj.suggestedPrompts = obj.suggestedPrompts.map((p) => {
+			if (typeof p === "string") return { prompt: p, tags: [] };
+			if (p && typeof p === "object") {
+				const item = p as Record<string, unknown>;
+				if (!Array.isArray(item.tags)) item.tags = [];
+				if (typeof item.prompt !== "string") item.prompt = String(item.prompt ?? "");
+				return item;
+			}
+			return { prompt: String(p ?? ""), tags: [] };
+		});
+	}
+
+	if (Array.isArray(obj.productLines)) {
+		obj.productLines = obj.productLines.map((line) => {
+			if (!line || typeof line !== "object") return line;
+			const lineObj = line as Record<string, unknown>;
+			if (Array.isArray(lineObj.skus)) {
+				lineObj.skus = lineObj.skus.map((sku) => {
+					if (!sku || typeof sku !== "object") return sku;
+					const skuObj = sku as Record<string, unknown>;
+					// qoder-cn 完整规则 2/3 (mtsckhd73e8dc0f8806b): 缺 model → null, 缺 oneLiner → ""
+					if (typeof skuObj.model !== "string") skuObj.model = null;
+					if (typeof skuObj.oneLiner !== "string") skuObj.oneLiner = "";
+					return skuObj;
+				});
+			}
+			return lineObj;
+		});
+	}
+
+	return obj;
+}
+
 /** 带指数退避的 fetch 包装（429/5xx 自动重试 N 次） */
 async function fetchWithRetry(
 	input: string,
@@ -158,7 +211,14 @@ export const minimaxApi: Provider = {
 		const rawText = data?.choices?.[0]?.message?.content ?? "{}";
 		const cleaned = stripThinkingBlocks(rawText);
 		const parsed = JSON.parse(cleaned);
-		const validated = schema.parse(parsed) as T;
+		// qoder-cn 拍板 A（2026-09-08 07:19 mtsc9awxa729ffc3d620）：MiniMax M3 是推理模型，
+		// 对 Zod schema 不严格遵循。runStructuredResearch 内做 post-normalize 兜底，
+		// schema 保持 strict 不动以避免弱化 GPT 路径契约。
+		// 规则：① 顶层缺 additionalDomains/aliases/competitors → 默认 []
+		//       ② suggestedPrompts 字符串数组 → 转 {prompt: str, tags: []}
+		//       ③ productLines[].skus[].model/oneLiner 缺字段补默认值
+		const normalized = normalizeM3Output(parsed);
+		const validated = schema.parse(normalized) as T;
 		return {
 			object: validated,
 			modelVersion: data?.model ?? DEFAULT_MODEL,
