@@ -143,13 +143,16 @@ describe("getWebsiteExcerpt", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
-	it("returns an empty string when both tiers fail", async () => {
+	it("returns a common-knowledge fallback excerpt when both tiers fail (hill 2026-09-08)", async () => {
 		stubFetch({
 			jina: response({ ok: false, status: 401 }),
 			direct: response({ ok: false, status: 500 }),
 		});
 
-		expect(await getWebsiteExcerpt("acme.com")).toBe("");
+		const excerpt = await getWebsiteExcerpt("acme.com");
+		expect(excerpt).toContain("Unable to retrieve live content from acme.com");
+		expect(excerpt).toContain("well-known public knowledge about \"acme\"");
+		expect(excerpt).toContain("do not leave productLines or competitors empty");
 	});
 
 	it("caps the excerpt at 200 lines", async () => {

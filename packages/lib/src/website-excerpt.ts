@@ -57,7 +57,24 @@ export async function getWebsiteExcerpt(url: string): Promise<string> {
 	}
 
 	console.error(`[website-excerpt] all sources failed for ${cleanUrl}`);
-	return "";
+	// hill 2026-09-08: 双源全失败时不再返回 ""（空 excerpt → M3 无输入 → 防幻觉
+	// 不编 → productLines/competitors 全空）。改返回常识授权占位：告知模型抓取
+	// 失败 + 明确产品线/竞品/别名属公开常识、基于通用知识提供不算编造。
+	return buildFallbackExcerpt(cleanUrl);
+}
+
+function buildFallbackExcerpt(url: string): string {
+	let hostname = "";
+	try {
+		hostname = new URL(url).hostname.replace(/^www\./, "");
+	} catch {
+		hostname = url;
+	}
+	const brand = hostname.split(".")[0];
+	return [
+		`Unable to retrieve live content from ${hostname} — all excerpt sources failed (network/region block).`,
+		`The brand operates at ${hostname}. Use well-known public knowledge about "${brand}": its product categories, flagship product lines and models, major direct competitors, and common aliases are public facts for established brands. Providing them from general knowledge is expected, not fabrication — do not leave productLines or competitors empty merely because the page text is unavailable.`,
+	].join("\n");
 }
 
 /**
