@@ -116,6 +116,10 @@ export function normalizeM3Output(parsed: unknown): unknown {
 					if (typeof skuObj.evidenceUrl !== "string") skuObj.evidenceUrl = null;
 					return skuObj;
 				});
+			} else {
+				// v16 (2026-09-08): 类别级行允许 skus 缺/空 — 缺 skus key 补 []，否则
+				// schema.parse 对缺失必填 key 报错 → M3 宁可整节清空也不出部分行
+				lineObj.skus = [];
 			}
 			return lineObj;
 		});
@@ -214,6 +218,9 @@ async function runMinimax(
 
 	return {
 		textContent: text,
+		// ScrapeResult 契约要求（#382 后 minimax 未同步）：minimax 无 webSearch 工具
+		rawOutput: data,
+		webQueries: [],
 		citations: [],
 		modelVersion: data?.model ?? model,
 	};

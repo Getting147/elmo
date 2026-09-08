@@ -36,12 +36,19 @@ const ALIAS_GUIDANCE =
 
 const competitorSchema = z.object({
 	name: z.string().describe("Company name"),
+	// v16 (2026-09-08): domains/aliases 改 nullable — 只给名字的竞品行也有效。
+	// nullable（非 optional）沿用 evidenceUrl 先例：strict json_schema 路径下
+	// optional 字段会被模型当 required 处理；nullable 让字段必在但允许 null。
 	domains: z
 		.array(z.string())
+		.nullable()
 		.describe(
-			`All domains owned by this company — hostnames only, no protocol, no www, no path (e.g. "example.com"). Include the primary website plus any regional ccTLDs or alternate spellings the company also uses. At least one domain.`,
+			`All domains owned by this company — hostnames only, no protocol, no www, no path (e.g. "example.com"). Include the primary website plus any regional ccTLDs or alternate spellings the company also uses. May be null/empty when only the company name is confidently known.`,
 		),
-	aliases: z.array(z.string()).describe(`Other names the company is commonly known by. ${ALIAS_GUIDANCE}`),
+	aliases: z
+		.array(z.string())
+		.nullable()
+		.describe(`Other names the company is commonly known by. ${ALIAS_GUIDANCE} May be null/empty when none are confidently known.`),
 });
 
 const promptSchema = z.object({
@@ -74,8 +81,9 @@ const productLineSchema = z.object({
 	name: z.string().describe("Product line name (e.g. 'Refrigerators'). One line per top-level category."),
 	skus: z
 		.array(skuSchema)
-		.min(1)
-		.describe("1-10 SKUs in this line. Each SKU MUST cite evidenceUrl pointing to a crawled page."),
+		.describe(
+			"0-10 SKUs in this line. Each SKU MUST cite evidenceUrl pointing to a crawled page. Use an EMPTY array for a category-level line whose concrete models you cannot verify — a real category with skus:[] is valid and better than dropping the line or emptying the whole productLines section.",
+		),
 });
 
 const summarySchema = z.string().describe(
@@ -107,7 +115,7 @@ function buildSchema(args: { maxCompetitors: number; maxPrompts: number; maxProd
 		competitors: z
 			.array(competitorSchema)
 			.describe(
-				`Up to ${args.maxCompetitors} direct competitors that sell similar products to a similar audience. Always output 3-5 real competitors (with their own domains) — competitor knowledge is public/common knowledge for any established brand; leave empty ONLY when you genuinely cannot name any.`,
+				`Up to ${args.maxCompetitors} direct competitors that sell similar products to a similar audience. Always output 3-5 real competitors — competitor knowledge is public/common knowledge for any established brand; leave empty ONLY when you genuinely cannot name any. Partial entries are valid: a competitor whose domains/aliases you cannot confirm should still be listed with name only (domains: null) — never drop the row for missing domains.`,
 			),
 		suggestedPrompts: z
 			.array(promptSchema)
@@ -383,6 +391,7 @@ function buildPrompt(args: {
 	const productGuidance = args.includeProducts
 		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
 For productLines: ALWAYS output 2-3 real product lines (top-level categories, e.g. "Refrigerators", "Washing Machines"), each with 1-2 real SKUs. SKUs must be real models you are confident about — do not invent model numbers. Prefer an evidenceUrl (a page where the SKU actually appears, no query string) when you have one; if a SKU is confidently real but no exact page was retrievable, leave evidenceUrl null — it will be flagged for human confirmation rather than dropped. Never invent a URL. Product-line and model knowledge is common knowledge for established brands: output real lines/models even when the excerpt is thin — never omit the whole section for lack of a URL.
+PARTIAL LINES ARE VALID: if you are confident a brand makes a category (e.g. "Air Conditioners") but cannot name a specific real model, output the line with skus: [] (an empty list) — a category-level line is useful and will be flagged for human review; it is far better than skipping the line or emptying the whole productLines section.
 For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded).`
 		: "";
 
@@ -393,6 +402,8 @@ ${scopeNote}${excerptBlock}
 Use web search to verify facts. Never invent information — return empty arrays only when information is genuinely unavailable.
 
 Competitors and aliases are common-knowledge fields: list the brand's well-known direct competitors (3-8 names with their own domains) and the brand's common aliases (abbreviations, parent-company names, widely used short forms) whenever you are reasonably confident — do not leave them empty just because the excerpt is thin. Return empty arrays only for fields where you truly have no signal.
+
+PARTIAL ENTRIES ARE VALID: if you can name a real competitor but cannot confirm its domains or aliases, output the row with just the name (set domains and aliases to null) — never drop a real competitor row or empty the whole competitors array because one sub-field is unverifiable.
 
 You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}${productGuidance}`;
 }
@@ -441,20 +452,38 @@ function normalize(args: {
 	const competitors: OnboardingCompetitor[] = [];
 	if (includeCompetitors) {
 		const seenCompetitorDomains = new Set<string>();
+		const seenCompetitorNames = new Set<string>();
 		for (const c of raw.competitors ?? []) {
 			if (competitors.length >= maxCompetitors) break;
+			const compName = (c.name ?? "").trim();
+			if (!compName) continue;
+			const lowerName = compName.toLowerCase();
+			// v16 (2026-09-08): 只给名字的竞品行也有效。区分两种 cleaned 空：
+			// raw 无 domains（null/[]）→ name-only 行保留；raw 有 domains 但全被
+			// owned/invalid 过滤 → 自我竞品/垃圾行，沿用旧语义丢弃。
+			const rawDomains = c.domains ?? [];
 			const cleaned = uniqueLowercase(
-				(c.domains ?? [])
+				rawDomains
 					.map((d) => cleanAndValidateDomain(d))
 					.filter((d): d is string => d !== null && !ownedDomains.has(d)),
 			);
-			if (cleaned.length === 0) continue;
+			if (seenCompetitorNames.has(lowerName)) continue;
+			if (cleaned.length === 0) {
+				if (rawDomains.length > 0) continue;
+				seenCompetitorNames.add(lowerName);
+				competitors.push({
+					name: compName,
+					domains: [],
+					aliases: filterRedundantAliases(uniqueTrim(c.aliases ?? []), compName),
+				});
+				continue;
+			}
 			// Dedupe at the competitor level: if any of this competitor's domains
 			// already belong to a competitor we kept, skip the whole entry.
 			if (cleaned.some((d) => seenCompetitorDomains.has(d))) continue;
 			for (const d of cleaned) seenCompetitorDomains.add(d);
+			seenCompetitorNames.add(lowerName);
 
-			const compName = c.name.trim();
 			competitors.push({
 				name: compName,
 				domains: cleaned,
@@ -535,7 +564,16 @@ function normalize(args: {
 						evidenceUrl: s.evidenceUrl?.trim() || "",
 					})),
 			};
-			if (!line.name || line.skus.length === 0) continue;
+			// v16 (2026-09-08): 类别级行（skus:[]）不再整行丢弃 — 进 unverified 待人工复核
+			if (!line.name) continue;
+			if (line.skus.length === 0) {
+				unverified.push({
+					line,
+					reason:
+						"NO_SKU_DETAIL: category-level line without verifiable model specifics — confirm or add SKUs before approving",
+				});
+				continue;
+			}
 
 			// evidence 校验 — 仅在 crawledPageTexts 非空时校验
 			if (crawledPageTexts.size === 0) {

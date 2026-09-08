@@ -17,6 +17,19 @@ import { describe, expect, it } from "vitest";
 import { normalizeAnalysisResult } from "./analyze";
 import { crawledPageTextsFixture, KNOWN_PRODUCT_URL, KNOWN_SKU, KNOWN_SKU_OCR_VARIANT, HALLUCINATED_SKU, UNKNOWN_URL } from "./__fixtures__/crawled-pages";
 
+// 提升到模块顶层：H1 组 + v16 partial entries 组共用（v16 组需要 maxCompetitors>0 覆盖竞品行）
+const analysisContextBase = {
+	website: "haier.com",
+	analysisUrl: "https://haier.com",
+	brandNameHint: "Haier",
+	prompt: "test prompt",
+	schema: undefined as never,
+	maxCompetitors: 0,
+	maxPrompts: 0,
+	maxProducts: 5,
+	crawledPageTexts: crawledPageTextsFixture,
+};
+
 describe("analyzeBrand — 老调用兼容（maxProducts 默认 10，crawledPageTexts 默认空）", () => {
 	it("直接构造 AnalysisContext 验证默认 maxProducts=10 + crawledPageTexts.size=0（避免网络抓取）", () => {
 		// 老调用兼容验证: 直接断言默认参数(避免 buildAnalysisContext 触发网络抓取)
@@ -81,18 +94,6 @@ describe("analyzeBrand — 老调用兼容（maxProducts 默认 10，crawledPage
 });
 
 describe("analyzeBrand — 新调用带 crawledPageTexts（H1-1/1-2/1-5 evidence 分流）", () => {
-	const analysisContextBase = {
-		website: "haier.com",
-		analysisUrl: "https://haier.com",
-		brandNameHint: "Haier",
-		prompt: "test prompt",
-		schema: undefined as never,
-		maxCompetitors: 0,
-		maxPrompts: 0,
-		maxProducts: 5,
-		crawledPageTexts: crawledPageTextsFixture,
-	};
-
 	it("H1-1: SKU name 精确匹配 evidenceUrl 页文本 → confirmed", () => {
 		const result = normalizeAnalysisResult(
 			{
@@ -240,5 +241,105 @@ describe("analyzeBrand — 新调用带 crawledPageTexts（H1-1/1-2/1-5 evidence
 		);
 		expect(result.summary?.length).toBe(200);
 		expect(result.description?.length).toBe(1000);
+	});
+});
+
+describe("v16 partial entries（hill 2026-09-08 schema 放宽探针）", () => {
+	it("只给名字的竞品行（domains null/[]）保留为 name-only 行", () => {
+		const result = normalizeAnalysisResult(
+			{
+				brandName: "Haier",
+				additionalDomains: [],
+				aliases: [],
+				competitors: [
+					{ name: "Midea", domains: null, aliases: [] },
+					{ name: "Gree", domains: [], aliases: null },
+					{ name: "Samsung", domains: ["samsung.com"], aliases: [] },
+				],
+				suggestedPrompts: [],
+				productLines: [],
+			} as never,
+			{ ...analysisContextBase, maxCompetitors: 5 },
+		);
+		expect(result.competitors).toHaveLength(3);
+		expect(result.competitors[0]).toEqual({ name: "Midea", domains: [], aliases: [] });
+		expect(result.competitors[1]).toEqual({ name: "Gree", domains: [], aliases: [] });
+		expect(result.competitors[2]).toMatchObject({ name: "Samsung", domains: ["samsung.com"] });
+	});
+
+	it("name-only 竞品同名去重；只有自有域/垃圾域的竞品仍丢弃（旧语义不回归）", () => {
+		const result = normalizeAnalysisResult(
+			{
+				brandName: "Haier",
+				additionalDomains: [],
+				aliases: [],
+				competitors: [
+					{ name: "Midea", domains: null, aliases: [] },
+					{ name: "midea", domains: [], aliases: [] },
+					{ name: "Self Reference", domains: ["haier.com"], aliases: [] },
+					{ name: "Bad Domain", domains: ["not a domain"], aliases: [] },
+				],
+				suggestedPrompts: [],
+				productLines: [],
+			} as never,
+			{ ...analysisContextBase, maxCompetitors: 5 },
+		);
+		expect(result.competitors).toHaveLength(1);
+		expect(result.competitors[0]).toEqual({ name: "Midea", domains: [], aliases: [] });
+	});
+
+	it("类别级产品行（skus: []）保留进 unverified (NO_SKU_DETAIL)，不整行丢弃", () => {
+		const result = normalizeAnalysisResult(
+			{
+				brandName: "Haier",
+				additionalDomains: [],
+				aliases: [],
+				competitors: [],
+				suggestedPrompts: [],
+				summary: "Haier home appliances",
+				description: "Global home appliance manufacturer",
+				productLines: [
+					{ name: "Air Conditioners", skus: [] },
+					{
+						name: "Refrigerators",
+						skus: [{ name: KNOWN_SKU, oneLiner: "French-door", evidenceUrl: KNOWN_PRODUCT_URL }],
+					},
+				],
+			} as never,
+			analysisContextBase,
+		);
+		expect(result.productLines?.confirmed.length).toBe(1);
+		expect(result.productLines?.unverified.length).toBe(1);
+		expect(result.productLines?.unverified[0].line).toEqual({ name: "Air Conditioners", skus: [] });
+		expect(result.productLines?.unverified[0].reason).toContain("NO_SKU_DETAIL");
+	});
+
+	it("无 crawledPageTexts 老调用：类别级行同样进 unverified（不冒充 confirmed）", () => {
+		const result = normalizeAnalysisResult(
+			{
+				brandName: "Haier",
+				additionalDomains: [],
+				aliases: [],
+				competitors: [],
+				suggestedPrompts: [],
+				summary: "Haier home appliances",
+				description: "Global home appliance manufacturer",
+				productLines: [{ name: "Water Heaters", skus: [] }],
+			} as never,
+			{
+				website: "haier.com",
+				analysisUrl: "https://haier.com",
+				brandNameHint: "Haier",
+				prompt: "test prompt",
+				schema: undefined as never,
+				maxCompetitors: 0,
+				maxPrompts: 0,
+				maxProducts: 10,
+				crawledPageTexts: new Map(),
+			},
+		);
+		expect(result.productLines?.confirmed.length).toBe(0);
+		expect(result.productLines?.unverified.length).toBe(1);
+		expect(result.productLines?.unverified[0].reason).toContain("NO_SKU_DETAIL");
 	});
 });

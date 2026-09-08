@@ -255,6 +255,20 @@ describe("normalizeM3Output (qoder-cn 拍板 B-lite full-coverage)", () => {
 		expect(out.productLines[0].skus[0].model).toBe("X1"); // 已有不覆盖
 		expect(out.productLines[0].skus[0].oneLiner).toBe("");
 	});
+
+	it("v16: productLines[].skus missing key → [] (category-level row survives schema.parse)", () => {
+		const input = {
+			productLines: [
+				{ name: "Air Conditioners" }, // 缺 skus key
+				{ name: "Refrigerators", skus: [{ name: "RF-1", oneLiner: "x" }] },
+			],
+		};
+		const out = normalizeM3Output(input) as {
+			productLines: Array<{ name: string; skus: unknown[] }>;
+		};
+		expect(out.productLines[0].skus).toEqual([]);
+		expect(out.productLines[1].skus).toHaveLength(1); // 已有 skus 不覆盖
+	});
 });
 
 describe("minimax-api 429 retry", () => {
