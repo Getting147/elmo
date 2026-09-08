@@ -1,18 +1,16 @@
 /**
  * MiniMax-M3 provider — Epic A-2 (V1.0) patch.
  *
- * @ai-sdk/openai 兼容模式：传 custom baseURL 即可调用 MiniMax API（OpenAI 协议兼容）。
- * 不用引入 @ai-sdk/openai-compatible（避免新增依赖，@ai-sdk/openai ^4.0.27 已支持 baseURL 参数）。
+ * OpenAI-compatible chat/completions endpoint at https://api.minimaxi.com/v1/.
+ * fetch 直调（参考 mistral-api.ts mistralPost 先例）——避开 @ai-sdk/openai 模型名校验坑。
  *
  * geo-api real.py 9-5 实证：MiniMax-M3 + JSON 输出跑通。
  *
  * qoder-cn review 要点：minimax 无 webSearch 工具（不像 OpenAI Responses API），
- * 所以 runStructuredResearch 永远不传 tools/webSearch — 内部直接 default webSearch=false。
+ * runStructuredResearch 永远不开 webSearch — 调用方 schema 直出 JSON object。
  *
  * qoder-cn 配额情报：2056 上限历史已充值恢复；provider 内做 429 指数退避重试（2 次 1s/3s）。
  */
-import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, Output } from "ai";
 import { getCredential } from "../../secrets";
 import { warnIfOutputCapped } from "../config";
 import type {
@@ -22,6 +20,7 @@ import type {
 	StructuredResearchOptions,
 	StructuredResearchResult,
 } from "../types";
+import { z } from "zod";
 
 const DEFAULT_MODEL = "MiniMax-M3";
 const BASE_URL = "https://api.minimaxi.com/v1";
@@ -33,43 +32,67 @@ function isRetryableStatus(status: number): boolean {
 	return status === 429 || (status >= 500 && status < 600);
 }
 
-/** 从异常对象提取可重试状态码（AI SDK 抛 AI_APICallError 含 statusCode） */
-function getRetryableStatus(err: unknown): number | null {
-	if (typeof err !== "object" || err === null) return null;
-	const anyErr = err as { statusCode?: number; status?: number; response?: { status?: number } };
-	const code = anyErr.statusCode ?? anyErr.status ?? anyErr.response?.status;
-	return typeof code === "number" ? code : null;
-}
-
-/** 带指数退避的 generateText 包装（429/5xx 自动重试 N 次） */
-async function generateTextWithRetry(
-	fn: () => Promise<ReturnType<typeof generateText>>,
-): Promise<Awaited<ReturnType<typeof generateText>>> {
+/** 带指数退避的 fetch 包装（429/5xx 自动重试 N 次） */
+async function fetchWithRetry(
+	input: string,
+	init: RequestInit,
+): Promise<Response> {
 	let lastErr: unknown;
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		try {
-			return await fn();
+			const res = await fetch(input, init);
+			if (isRetryableStatus(res.status)) {
+				if (attempt === MAX_RETRIES) return res; // 最后一次让上层读 body 抛
+				await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt] ?? 3000));
+				continue;
+			}
+			return res;
 		} catch (err) {
 			lastErr = err;
-			const status = getRetryableStatus(err);
-			if (status === null || !isRetryableStatus(status)) throw err;
 			if (attempt === MAX_RETRIES) break;
-			const delayMs = RETRY_DELAYS_MS[attempt] ?? 3000;
-			await new Promise((r) => setTimeout(r, delayMs));
+			await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt] ?? 3000));
 		}
 	}
 	throw lastErr;
 }
 
-function getMinimaxProvider() {
+interface ChatChoice {
+	message?: { content?: string };
+	finish_reason?: string;
+}
+
+interface ChatResponse {
+	model?: string;
+	choices?: ChatChoice[];
+}
+
+/** 调用 minimax chat/completions，返回 text + raw + modelVersion */
+async function minimaxChat(messages: { role: string; content: string }[], options?: {
+	model?: string;
+	maxTokens?: number;
+	responseFormat?: object;
+}): Promise<ChatResponse> {
 	const apiKey = getCredential("MINIMAX_API_KEY");
-	if (!apiKey) {
-		throw new Error("MINIMAX_API_KEY not configured");
-	}
-	return createOpenAI({
-		baseURL: BASE_URL,
-		apiKey,
+	if (!apiKey) throw new Error("MINIMAX_API_KEY not configured");
+	const body: Record<string, unknown> = {
+		model: options?.model ?? DEFAULT_MODEL,
+		messages,
+	};
+	if (options?.maxTokens) body.max_tokens = options.maxTokens;
+	if (options?.responseFormat) body.response_format = options.responseFormat;
+
+	const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
 	});
+	if (!res.ok) {
+		throw new Error(`MiniMax API error (${res.status}): ${await res.text()}`);
+	}
+	return res.json() as Promise<ChatResponse>;
 }
 
 async function runMinimax(
@@ -77,19 +100,14 @@ async function runMinimax(
 	model: string,
 	_options?: ProviderOptions,
 ): Promise<ScrapeResult> {
-	const result = await generateTextWithRetry(() =>
-		generateText({
-			model: getMinimaxProvider()(model),
-			prompt,
-		}),
-	);
-
-	warnIfOutputCapped("minimax-api", model, result.finishReason);
+	const data = await minimaxChat([{ role: "user", content: prompt }], { model });
+	const text = data?.choices?.[0]?.message?.content ?? "";
+	warnIfOutputCapped("minimax-api", model, data?.choices?.[0]?.finish_reason);
 
 	return {
-		textContent: result.text,
+		textContent: text,
 		citations: [],
-		modelVersion: model,
+		modelVersion: data?.model ?? model,
 	};
 }
 
@@ -102,7 +120,7 @@ export const minimaxApi: Provider = {
 	},
 
 	async run(model: string, prompt: string, options?: ProviderOptions): Promise<ScrapeResult> {
-		const version = options?.version ?? DEFAULT_MODEL;
+		const version = options?.version ?? model ?? DEFAULT_MODEL;
 		return runMinimax(prompt, version, options);
 	},
 
@@ -111,16 +129,23 @@ export const minimaxApi: Provider = {
 		schema,
 	}: StructuredResearchOptions<T>): Promise<StructuredResearchResult<T>> {
 		// qoder-cn review 要点：minimax 无 webSearch 工具，固定不开
-		const result = await generateTextWithRetry(() =>
-			generateText({
-				model: getMinimaxProvider()(DEFAULT_MODEL),
-				output: Output.object({ schema }),
-				prompt,
-			}),
+		// 用 response_format json_object 引导输出 JSON；调用方传入的 zod schema 在 provider 内解析校验
+		const data = await minimaxChat(
+			[
+				{
+					role: "system",
+					content: "You are a precise JSON extractor. Respond only with a single JSON object matching the requested schema.",
+				},
+				{ role: "user", content: prompt },
+			],
+			{ model: DEFAULT_MODEL, responseFormat: { type: "json_object" } },
 		);
+		const text = data?.choices?.[0]?.message?.content ?? "{}";
+		const parsed = JSON.parse(text);
+		const validated = schema.parse(parsed) as T;
 		return {
-			object: result.output as T,
-			modelVersion: DEFAULT_MODEL,
+			object: validated,
+			modelVersion: data?.model ?? DEFAULT_MODEL,
 		};
 	},
 };
