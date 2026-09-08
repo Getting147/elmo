@@ -166,7 +166,9 @@ describe("analyzeBrand", () => {
 				// + kebab-cases + dedupes + caps at 3 per prompt.
 				{ prompt: "Best Widgets", tags: ["Industrial Supplies", "Manufacturing"] },
 				{ prompt: "best widgets", tags: ["industrial-supplies"] }, // duplicate after lowercasing
-				{ prompt: "acme alternative", tags: ["alternatives", "industrial supplies", "buying guide", "extra-tag"] },
+				// Owner 2026-09-08: branded prompts ("acme …") are dropped by the
+				// unbranded guard — keep the tag-cap case generic instead.
+				{ prompt: "widget alternatives", tags: ["alternatives", "industrial supplies", "buying guide", "extra-tag"] },
 			],
 		});
 
@@ -192,7 +194,7 @@ describe("analyzeBrand", () => {
 		expect(result.suggestedPrompts).toEqual([
 			{ prompt: "best widgets", tags: ["industrial-supplies", "manufacturing"] },
 			{
-				prompt: "acme alternative",
+				prompt: "widget alternatives",
 				// "industrial supplies" → "industrial-supplies", capped at 3 (extra-tag dropped)
 				tags: ["alternatives", "industrial-supplies", "buying-guide"],
 			},

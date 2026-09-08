@@ -107,7 +107,7 @@ function buildSchema(args: { maxCompetitors: number; maxPrompts: number; maxProd
 		competitors: z
 			.array(competitorSchema)
 			.describe(
-				`Up to ${args.maxCompetitors} direct competitors that sell similar products to a similar audience. Empty if uncertain.`,
+				`Up to ${args.maxCompetitors} direct competitors that sell similar products to a similar audience. Always output 3-5 real competitors (with their own domains) — competitor knowledge is public/common knowledge for any established brand; leave empty ONLY when you genuinely cannot name any.`,
 			),
 		suggestedPrompts: z
 			.array(promptSchema)
@@ -382,7 +382,7 @@ function buildPrompt(args: {
 	// (≥15 words). 反映 Owner "用户真实问法"倾向。
 	const productGuidance = args.includeProducts
 		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
-For productLines: list the brand's real product lines (top-level categories), each with 1-10 SKUs. SKUs must be real models you are confident about — do not invent model numbers. Prefer an evidenceUrl (a page where the SKU actually appears, no query string) when you have one; if a SKU is confidently real but no exact page was retrievable, leave evidenceUrl null — it will be flagged for human confirmation rather than dropped. Never invent a URL. Omitting an entire product line because one URL is missing is wrong: name-level product knowledge is common knowledge, list it.
+For productLines: ALWAYS output 2-3 real product lines (top-level categories, e.g. "Refrigerators", "Washing Machines"), each with 1-2 real SKUs. SKUs must be real models you are confident about — do not invent model numbers. Prefer an evidenceUrl (a page where the SKU actually appears, no query string) when you have one; if a SKU is confidently real but no exact page was retrievable, leave evidenceUrl null — it will be flagged for human confirmation rather than dropped. Never invent a URL. Product-line and model knowledge is common knowledge for established brands: output real lines/models even when the excerpt is thin — never omit the whole section for lack of a URL.
 For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded).`
 		: "";
 
