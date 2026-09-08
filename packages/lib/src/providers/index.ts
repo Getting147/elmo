@@ -11,6 +11,7 @@ import { openrouter } from "./registry/openrouter";
 import { perplexityApi } from "./registry/perplexity-api";
 import { geminiApi } from "./registry/gemini-api";
 import { stub } from "./registry/stub";
+import { minimaxApi } from "./registry/minimax-api";
 
 export type {
 	Provider,
@@ -39,6 +40,7 @@ const providerMap: Record<string, Provider> = {
 	openrouter,
 	"perplexity-api": perplexityApi,
 	"gemini-api": geminiApi,
+	"minimax-api": minimaxApi,
 	stub,
 };
 
