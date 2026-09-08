@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const aiMock = vi.hoisted(() => ({ generateText: vi.fn() }));
-const openaiCompatibleMock = vi.hoisted(() => ({
+const openaiMock = vi.hoisted(() => ({
 	model: vi.fn(() => "mock-minimax-model"),
 }));
 
@@ -10,8 +10,8 @@ vi.mock("ai", () => ({
 	Output: { object: vi.fn(() => ({ __isOutputObject: true })) },
 }));
 
-vi.mock("@ai-sdk/openai-compatible", () => ({
-	createOpenAICompatible: vi.fn(() => openaiCompatibleMock.model),
+vi.mock("@ai-sdk/openai", () => ({
+	createOpenAI: vi.fn(() => openaiMock.model),
 }));
 
 import { minimaxApi } from "./minimax-api";

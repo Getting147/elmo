@@ -1,7 +1,9 @@
 /**
  * MiniMax-M3 provider — Epic A-2 (V1.0) patch.
  *
- * OpenAI-compatible chat/completions endpoint at https://api.minimaxi.com/v1/.
+ * @ai-sdk/openai 兼容模式：传 custom baseURL 即可调用 MiniMax API（OpenAI 协议兼容）。
+ * 不用引入 @ai-sdk/openai-compatible（避免新增依赖，@ai-sdk/openai ^4.0.27 已支持 baseURL 参数）。
+ *
  * geo-api real.py 9-5 实证：MiniMax-M3 + JSON 输出跑通。
  *
  * qoder-cn review 要点：minimax 无 webSearch 工具（不像 OpenAI Responses API），
@@ -9,7 +11,7 @@
  *
  * qoder-cn 配额情报：2056 上限历史已充值恢复；provider 内做 429 指数退避重试（2 次 1s/3s）。
  */
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
 import { getCredential } from "../../secrets";
 import { warnIfOutputCapped } from "../config";
@@ -26,7 +28,7 @@ const BASE_URL = "https://api.minimaxi.com/v1";
 const MAX_RETRIES = 2;
 const RETRY_DELAYS_MS = [1000, 3000];
 
-/** 是否可重试的 HTTP 状态（含 429 限流 + 5xx 服务器错误 + AI_APICallError 子集） */
+/** 是否可重试的 HTTP 状态（含 429 限流 + 5xx 服务器错误） */
 function isRetryableStatus(status: number): boolean {
 	return status === 429 || (status >= 500 && status < 600);
 }
@@ -64,10 +66,9 @@ function getMinimaxProvider() {
 	if (!apiKey) {
 		throw new Error("MINIMAX_API_KEY not configured");
 	}
-	return createOpenAICompatible({
-		name: "minimax",
-		apiKey,
+	return createOpenAI({
 		baseURL: BASE_URL,
+		apiKey,
 	});
 }
 
