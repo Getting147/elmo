@@ -13,7 +13,12 @@ import { createMiddleware } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { getDeployment } from "@/lib/config/server";
 import openApiSpec from "@workspace/api-spec";
-import { evaluateDeploymentPolicy, evaluateReadOnly, evaluateApiKeyAuth, getAdminApiKeys } from "@/lib/auth/policies";
+import {
+	evaluateDeploymentPolicy,
+	evaluateReadOnly,
+	getAdminApiKeys,
+	validateApiKeyFromRequest,
+} from "@/lib/auth/policies";
 
 /**
  * Global request middleware - provides deployment config context
@@ -80,16 +85,16 @@ export const readOnlyMiddleware = createMiddleware({ type: "function" }).server(
 
 /**
  * API key authentication middleware for public API routes (/api/v1/*).
- * Validates Bearer token against ADMIN_API_KEYS environment variable.
+ * Accepts Bearer API key (ADMIN_API_KEYS) or better-auth session cookie
+ * so UI cookie requests and external API-key callers both pass.
  */
 export const apiKeyMiddleware = createMiddleware().server(async ({ next }) => {
 	const request = getRequest();
-	const authHeader = request.headers.get("Authorization");
 
-	const result = evaluateApiKeyAuth(authHeader, getAdminApiKeys());
+	const ok = await validateApiKeyFromRequest(request);
 
-	if (result !== "allow") {
-		throw new Response(JSON.stringify({ error: result.error, message: result.message }), {
+	if (!ok) {
+		throw new Response(JSON.stringify({ error: "Unauthorized", message: "Valid API key or session required" }), {
 			status: 401,
 			headers: { "Content-Type": "application/json" },
 		});
