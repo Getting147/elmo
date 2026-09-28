@@ -48,3 +48,20 @@ function computeHash(input: string): string {
 	const { createHash } = require("node:crypto") as typeof import("node:crypto");
 	return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
+
+// ------------------------------------------------------------------
+// PG error code extraction (v17 fix, 2026-09-21 生产回归)
+// ------------------------------------------------------------------
+
+/** Drizzle pg 错误 shape（err.cause 为原始 pg error） */
+export type PgError = { code?: string; constraint?: string; message?: string; cause?: PgError };
+
+/**
+ * 提取 PG SQLSTATE — Drizzle 把 pg 错误包装为 DrizzleQueryError，SQLSTATE 在 err.cause.code。
+ * 生产实证（2026-09-21 星河国际 500）：err.code 恒 undefined（DrizzleQueryError 自身无 code），
+ * 只查 err.code 会漏判 23505 → idempotency 直返失效 → 重复研究请求 500。
+ */
+export function pgErrorCode(err: unknown): string | undefined {
+	const e = err as PgError | null | undefined;
+	return e?.code ?? e?.cause?.code;
+}

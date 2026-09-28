@@ -22,15 +22,13 @@ import {
 	DEFAULT_DRAFT_TTL_MS,
 	hashUrlForDraft,
 	computeExpiresAt,
+	pgErrorCode,
 } from "./draft-research-utils";
 
 export { DEFAULT_DRAFT_TTL_MS, hashUrlForDraft, computeExpiresAt };
 
 /** PG 23505 unique_violation SQLSTATE */
 const PG_UNIQUE_VIOLATION = "23505";
-
-/** Drizzle pg 龙卷风错误类型（不导出，type-only import） */
-type PgError = { code?: string; constraint?: string; message?: string };
 
 /**
  * 清理同 url_hash 的 failed/expired 行（避免 partial unique 冲突 + 释放空间）。
@@ -100,7 +98,7 @@ export async function createDraft(args: {
 		return { id: inserted.id, alreadyExisted: false };
 	} catch (err) {
 		// Partial unique conflict → 返 existing active draft（idempotency 活态直返）
-		if ((err as PgError).code === PG_UNIQUE_VIOLATION) {
+		if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
 			const existing = await db.query.draftResearch.findFirst({
 				where: and(
 					eq(draftResearch.brandId, brandId),

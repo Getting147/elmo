@@ -15,6 +15,7 @@ import {
 	hashUrlForDraft,
 	computeExpiresAt,
 	cleanUrl,
+	pgErrorCode,
 } from "./draft-research-utils";
 
 describe("I3-6 hashUrlForDraft — 真实实现（SHA-256(cleanUrl) 前 16 hex）", () => {
@@ -154,5 +155,30 @@ describe("F1-8 idempotency 矩阵", () => {
 			["applied", "confirmed", "done", "failed", "pending_review", "rolled_back"].sort(),
 		);
 		expect(idempotencyMatrix.failed).toContain("覆盖");
+	});
+});
+
+describe("PG-23505 判定（生产回归：DrizzleQueryError 包装形态，2026-09-21 星河国际 500）", () => {
+	it("raw pg error（err.code 直挂）→ 命中", () => {
+		expect(pgErrorCode({ code: "23505" })).toBe("23505");
+	});
+
+	it("DrizzleQueryError 包装（err.cause.code）→ 命中（生产实证形态）", () => {
+		// 生产 web 日志：DrizzleQueryError: Failed query ... cause: { code: '23505', severity: 'ERROR' }
+		expect(
+			pgErrorCode({
+				name: "DrizzleQueryError",
+				message: 'Failed query: insert into "draft_research" ...',
+				cause: { code: "23505", severity: "ERROR" },
+			}),
+		).toBe("23505");
+	});
+
+	it("其他 code 透传 / 无 code → undefined（重抛路径）", () => {
+		expect(pgErrorCode({ code: "42P01" })).toBe("42P01");
+		expect(pgErrorCode({ cause: { code: "08006" } })).toBe("08006");
+		expect(pgErrorCode(new Error("network"))).toBeUndefined();
+		expect(pgErrorCode(null)).toBeUndefined();
+		expect(pgErrorCode(undefined)).toBeUndefined();
 	});
 });
