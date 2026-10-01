@@ -34,26 +34,26 @@
 		"./markets": "./src/markets.ts"
 	},
 	"dependencies": {
-		"@ai-sdk/anthropic": "^4.0.27",
-		"@ai-sdk/openai": "^4.0.27",
-		"@anthropic-ai/sdk": "^0.115.0",
-		"@better-auth/sso": "^1.6.25",
-		"@brightdata/sdk": "^1.1.0",
+		"@ai-sdk/anthropic": "^4.0.65",
+		"@ai-sdk/openai": "^4.0.78",
+		"@anthropic-ai/sdk": "^0.128.0",
+		"@better-auth/sso": "^1.7.6",
+		"@brightdata/sdk": "^1.2.0",
 		"@mozilla/readability": "^0.6.0",
 		"@workspace/config": "workspace:*",
-		"ai": "^7.0.48",
-		"better-auth": "^1.6.25",
-		"dataforseo-client": "^2.1.2",
-		"drizzle-orm": "^0.45.2",
-		"jose": "6.2.7",
+		"ai": "^7.0.116",
+		"better-auth": "^1.7.6",
+		"dataforseo-client": "^2.1.7",
+		"drizzle-orm": "^0.45.3",
+		"jose": "6.2.12",
 		"linkedom": "^0.18.13",
 		"olostep": "^1.2.2",
-		"pg": "^8.22.0",
-		"zod": "^4.4.3"
+		"pg": "^8.23.0",
+		"zod": "^4.6.5"
 	},
 	"devDependencies": {
-		"@types/pg": "^8.20.3",
-		"drizzle-kit": "^0.31.10",
+		"@types/pg": "^8.23.1",
+		"drizzle-kit": "^0.31.11",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.10"
 	}
