@@ -87,3 +87,19 @@ apps/web/storybook-static/
 .claude/settings.local.json
 .claude/worktrees/
 .readonlydb
+
+# 生产诊断临时产物（hill 本地排查用，脚本已归入 scripts/prod/）
+npm-cache/
+**/npm-cache/
+prod_dump_out.txt
+rep_list.txt
+report_scan.txt
+drop_scan.txt
+rescan_final.txt
+rescan_v2.txt
+scan_inter.txt
+diag_out.txt
+diag_cookie.mjs
+/prod-*.mjs
+/prod_*.mjs
+/prod_*.txt
