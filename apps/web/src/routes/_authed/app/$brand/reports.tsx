@@ -19,15 +19,18 @@ export const Route = createFileRoute("/_authed/app/$brand/reports")({
 const TXT: Record<string, Record<string, string>> = {
 	zh: {
 		title: "9 章诊断报告",
-		subtitle: "基于真实多引擎采样生成的品牌 AI 可见度诊断报告",
+		subtitle: "品牌诊断报告（本地合成演示；未执行真实多引擎采样与真实评估）",
 		empty: "该品牌暂无诊断报告",
 		emptyHint: "诊断报告由系统在完成采样与评估后自动生成，或由顾问在服务器端为品牌生成。完成采样后请稍后刷新。",
 		generated: "生成时间",
-		download: "下载 PDF",
+		download: "下载演示 PDF",
+		downloadReal: "下载 PDF",
 		noPdf: "PDF 未同步",
 		gates: "质量门禁",
 		of: "/",
 		passed: "通过",
+		demoPassed: "固定演示通过",
+		demoNotice: "合成数据；固定演示门禁，未执行真实评估",
 		samples: "采样样本",
 		window: "数据窗口",
 		refresh: "刷新",
@@ -35,16 +38,19 @@ const TXT: Record<string, Record<string, string>> = {
 	},
 	en: {
 		title: "9-Chapter Diagnostic Report",
-		subtitle: "Brand AI visibility diagnostic report based on real multi-engine sampling",
+		subtitle: "Brand Diagnostic Report (Local synthetic demo; no real multi-engine sampling)",
 		empty: "No diagnostic report for this brand yet",
 		emptyHint:
 			"Diagnostic reports are generated automatically after sampling completes, or generated on the server for the brand. Refresh after sampling finishes.",
 		generated: "Generated",
-		download: "Download PDF",
+		download: "Download Demo PDF",
+		downloadReal: "Download PDF",
 		noPdf: "PDF not synced",
 		gates: "Quality Gates",
 		of: "/",
 		passed: "passed",
+		demoPassed: "demo passed",
+		demoNotice: "Synthetic data; fixed demo gates, real evaluation was not executed",
 		samples: "Samples",
 		window: "Window",
 		refresh: "Refresh",
@@ -124,19 +130,32 @@ function BrandReportsPageComponent() {
 									{r.clientCode} · {new Date(r.generatedAt).toLocaleString(language === "zh" ? "zh-CN" : "en-US")}
 								</div>
 								<span
-									className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-										r.gatesPassed >= r.gatesTotal && r.gatesTotal > 0
-											? "bg-green-100 text-green-700"
-											: r.gatesPassed >= Math.ceil((r.gatesTotal * 6) / 8)
-												? "bg-amber-100 text-amber-700"
-												: "bg-red-100 text-red-700"
+									className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+										r.isDemo
+											? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300"
+											: r.gatesPassed >= r.gatesTotal && r.gatesTotal > 0
+												? "bg-green-100 text-green-700"
+												: r.gatesPassed >= Math.ceil((r.gatesTotal * 6) / 8)
+													? "bg-amber-100 text-amber-700"
+													: "bg-red-100 text-red-700"
 									}`}
 								>
 									{t.gates} {r.gatesPassed}
 									{t.of}
-									{r.gatesTotal} {t.passed}
+									{r.gatesTotal} {r.isDemo ? t.demoPassed : t.passed}
 								</span>
 							</div>
+							{r.isDemo && (
+								<div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 px-3 py-2 rounded-lg text-xs leading-relaxed">
+									<div className="font-semibold flex items-center gap-1.5 mb-0.5">
+										<span>⚠️</span>
+										<span>{t.demoNotice}</span>
+									</div>
+									<div className="text-amber-700 dark:text-amber-400">
+										当前门禁为固定演示值，未执行真实多引擎采样与 Q1–Q8 评估。
+									</div>
+								</div>
+							)}
 							<div className="grid grid-cols-2 gap-2 text-sm">
 								<div className="text-muted-foreground">{t.samples}</div>
 								<div className="font-semibold text-right">{r.meta.totalSamples ?? "—"}</div>
@@ -155,7 +174,7 @@ function BrandReportsPageComponent() {
 									className="inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-blue-700 transition-colors shadow-md cursor-pointer"
 								>
 									<IconDownload size={16} />
-									{t.download}
+									{r.isDemo ? t.download : t.downloadReal}
 								</a>
 							) : (
 								<div className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-muted text-muted-foreground">
