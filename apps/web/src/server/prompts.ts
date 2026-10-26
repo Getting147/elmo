@@ -599,12 +599,13 @@ export const updatePromptsFn = createServerFn({ method: "POST" })
 			});
 		});
 
-		const newPromptIds = saved.filter((p) => !existingIds.has(p.id)).map((p) => p.id);
-		if (newPromptIds.length > 0) {
-			createMultiplePromptJobSchedulers(newPromptIds).catch((err) =>
-				console.error("Failed to create job schedulers for new prompts:", err),
-			);
-		}
+		// REPORT-001E: 默认手动模式，封住问题创建/导入时自动入队采样，避免浪费 Token
+		// const newPromptIds = saved.filter((p) => !existingIds.has(p.id)).map((p) => p.id);
+		// if (newPromptIds.length > 0) {
+		// 	createMultiplePromptJobSchedulers(newPromptIds).catch((err) =>
+		// 		console.error("Failed to create job schedulers for new prompts:", err),
+		// 	);
+		// }
 
 		return saved;
 	});

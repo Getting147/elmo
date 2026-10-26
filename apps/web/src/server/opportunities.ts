@@ -479,9 +479,7 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 		await requireOrgAccess(session.user.id, data.brandId);
 		const language = data.language === "zh" ? "zh" : "en";
 
-		// Serve the most recent stored report for THIS language while it's fresh.
-		// Every generation is kept (append-only); we regenerate only when the
-		// latest for that language is stale.
+		// REPORT-001E: 页面只读已有分析，严禁在 GET/刷新时隐式调用 LLM 生成
 		const [latest] = await db
 			.select()
 			.from(brandOpportunities)
@@ -494,10 +492,44 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 			.orderBy(desc(brandOpportunities.createdAt))
 			.limit(1);
 		const lastEvaluatedAt = latest?.createdAt.toISOString() ?? null;
-		const isFresh = latest && Date.now() - new Date(latest.createdAt).getTime() < REFRESH_AFTER_DAYS * 86_400_000;
-		if (latest && isFresh) {
-			return { report: latest.report as OpportunitiesReport, reason: null, generatedFor: null, lastEvaluatedAt };
+		if (latest) {
+			return {
+				report: latest.report as OpportunitiesReport,
+				reason: null,
+				generatedFor: null,
+				lastEvaluatedAt,
+			};
 		}
+
+		// 无历史生成记录，明确返回待生成，不触发隐藏付费
+		return {
+			report: null,
+			reason: "insufficient-data",
+			generatedFor: null,
+			lastEvaluatedAt: null,
+		};
+	});
+
+// 显式触发更新分析的 Server Function（仅限显式 POST 操作）
+export const triggerOpportunitiesAnalysisFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string(), timezone: z.string().default("UTC"), language: z.enum(["en", "zh"]).default("en") }))
+	.handler(async ({ data }): Promise<OpportunitiesResponse> => {
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
+		const language = data.language === "zh" ? "zh" : "en";
+
+		const [latest] = await db
+			.select()
+			.from(brandOpportunities)
+			.where(
+				and(
+					eq(brandOpportunities.brandId, data.brandId),
+					eq(brandOpportunities.language, language),
+				),
+			)
+			.orderBy(desc(brandOpportunities.createdAt))
+			.limit(1);
+		const lastEvaluatedAt = latest?.createdAt.toISOString() ?? null;
 
 		const digest = await buildDigest(data.brandId, data.timezone);
 		if (!digest) {
@@ -511,7 +543,6 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 		}.`;
 		const generated = await generateValidReport(prompt);
 		if (!generated) {
-			// Couldn't get a schema-valid report — serve the last good one if we have it.
 			if (latest)
 				return { report: latest.report as OpportunitiesReport, reason: null, generatedFor: null, lastEvaluatedAt };
 			throw new Error("Failed to generate a valid opportunities report");

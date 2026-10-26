@@ -31,6 +31,7 @@ export interface ProcessPromptData {
 	cadenceHours?: number; // Hours until next run (for self-rescheduling)
 	/** Cycles in a row where every run failed, carried forward to size the backoff. */
 	consecutiveFailures?: number;
+	manualTriggered?: boolean;
 }
 
 /**
@@ -68,31 +69,10 @@ interface PromptContext {
 /**
  * Schedule the next run for a prompt.
  *
- * Normally that's one cadence away; after a cycle where every run failed it's
- * the shorter backoff from failureBackoffHours, and `consecutiveFailures` rides
- * along on the job so the next failure can lengthen it again.
+ * REPORT-001E: 默认手动模式，封住所有自动续排入口，直接拦截返回。
  */
 async function scheduleNextRun(promptId: string, cadenceHours: number, consecutiveFailures: number): Promise<void> {
-	const delayHours = failureBackoffHours(consecutiveFailures, cadenceHours);
-	const startAfterSeconds = Math.round(delayHours * 60 * 60);
-
-	try {
-		await boss.send(
-			"process-prompt",
-			{ promptId, cadenceHours, consecutiveFailures },
-			{
-				singletonKey: `prompt-${promptId}`,
-				singletonSeconds: startAfterSeconds, // Prevent duplicates until the next attempt is due
-				startAfter: startAfterSeconds,
-				...PROMPT_JOB_OPTIONS,
-			},
-		);
-		const reason = consecutiveFailures > 0 ? ` (backing off after ${consecutiveFailures} failed cycle(s))` : "";
-		console.log(`Scheduled next run for prompt ${promptId} in ${delayHours}h${reason}`);
-	} catch (error) {
-		console.error(`Failed to schedule next run for prompt ${promptId}:`, error);
-		// Don't throw - we don't want to fail the job just because rescheduling failed
-	}
+	console.log(`[Manual Mode] 自动续排已封禁：跳过为 prompt ${promptId} 续排下一次运行`);
 }
 
 /**
@@ -337,12 +317,18 @@ async function runModelIteration({
  * on a backoff when nothing did.
  */
 export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<void> {
-	const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
-
 	// pg-boss v12 passes an array of jobs - process each one
 	for (const job of jobs) {
 		const { promptId, cadenceHours: providedCadence, consecutiveFailures = 0 } = job.data;
 		console.log(`Processing prompt ${promptId}`);
+
+		// REPORT-001E: 遗留周期任务/重启补发防护。执行边界默认拒绝未获显式人工触发的采样任务
+		if (!job.data.manualTriggered) {
+			console.warn(`[Safety Guard] 拦截未经人工显式确认的遗留采样任务 (promptId=${promptId})，拒绝外发并直接结束`);
+			continue;
+		}
+
+		const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
 
 		// Get cadence hours - use provided value or look it up
 		const cadenceHours = providedCadence ?? (await getCadenceHours(promptId));
@@ -362,9 +348,7 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 
 		// Check if prompt and brand are enabled
 		if (!prompt.enabled || !brand.enabled) {
-			console.log(`Prompt ${promptId} or brand ${brand.id} is disabled, skipping but rescheduling`);
-			// Still reschedule - the prompt might be enabled later
-			await scheduleNextRun(promptId, cadenceHours, 0);
+			console.log(`Prompt ${promptId} or brand ${brand.id} is disabled, skipping`);
 			continue;
 		}
 
@@ -419,10 +403,7 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 			failed_runs: failures.length,
 		});
 
-		// A cycle where nothing came back means the targets themselves are
-		// failing, so the next attempt backs off instead of running on cadence.
-		// Anything that produced a run clears the streak.
-		const failedCycles = runPromises.length > 0 && successCount === 0 ? consecutiveFailures + 1 : 0;
-		await scheduleNextRun(promptId, cadenceHours, failedCycles);
+		// REPORT-001E: 单次有限执行结束，严禁自动续排下一轮采样
+		console.log(`Prompt ${promptId} run finished (manual mode, no auto-reschedule)`);
 	}
 }
