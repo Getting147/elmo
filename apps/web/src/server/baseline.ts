@@ -287,6 +287,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		z.object({
 			brandId: z.string(),
 			snapshotId: z.string(),
+			runId: z.string().optional(),
 			mode: z.enum(["synthetic", "real"]).default("synthetic"),
 			requestBudget: z.number().int().min(1).max(500).default(30),
 			maxRetries: z.number().int().min(0).max(3).default(0),
@@ -308,7 +309,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
 		await requireBaselineOperatorAccess(session, organizationId);
 
-		const runId = `run_${brand.id.toLowerCase()}_${Date.now()}`;
+		const runId = data.runId || `run_${brand.id.toLowerCase()}_${Date.now()}`;
 		const idempotencyKey =
 			data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${data.snapshotId}`;
 
@@ -340,8 +341,8 @@ export const registerBaselineServerAuthFn = createServerFn({ method: "POST" })
 		z.object({
 			brandId: z.string(),
 			snapshotId: z.string(),
-			runId: z.string().optional(),
-			snapshotHash: z.string().optional(),
+			runId: z.string().min(1, "runId 必须明确指定"),
+			snapshotHash: z.string().min(1, "snapshotHash 必须明确指定"),
 			modelName: z.string().default("doubao-seed-2-1-pro-260628"),
 			webSearch: z.boolean().default(true),
 			maxOutputTokens: z.number().int().optional(),
@@ -547,6 +548,87 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			callerId: session.user.id,
 			body: payload,
 		});
+	});
+
+// ============================================================================
+// 7.1. 查询指定任务最新或指定版本人工分析 (GET /runs/{run_id}/analysis) (E2-R04)
+// ============================================================================
+
+export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			runId: z.string(),
+			analysisId: z.string().optional(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		const path = data.analysisId
+			? `/api/baseline/v1/runs/${encodeURIComponent(data.runId)}/analysis?analysis_id=${encodeURIComponent(data.analysisId)}`
+			: `/api/baseline/v1/runs/${encodeURIComponent(data.runId)}/analysis`;
+
+		try {
+			return await callBaselineBackend({
+				method: "GET",
+				path,
+				organizationId,
+				brandId: brand.id,
+				callerId: session.user.id,
+			});
+		} catch (err: any) {
+			if (err.message?.includes("404") || err.message?.includes("analysis_not_found")) {
+				return null;
+			}
+			throw err;
+		}
+	});
+
+// ============================================================================
+// 7.2. 查询报告修订列表与状态 (GET /reports/{report_id}) (E2-R04)
+// ============================================================================
+
+export const getBaselineReportFn = createServerFn({ method: "GET" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			reportId: z.string(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		try {
+			return await callBaselineBackend({
+				method: "GET",
+				path: `/api/baseline/v1/reports/${encodeURIComponent(data.reportId)}`,
+				organizationId,
+				brandId: brand.id,
+				callerId: session.user.id,
+			});
+		} catch (err: any) {
+			if (err.message?.includes("404") || err.message?.includes("report_not_found")) {
+				return null;
+			}
+			throw err;
+		}
 	});
 
 // ============================================================================

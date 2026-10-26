@@ -33,7 +33,8 @@ async function main() {
 	console.log("🌱 开始初始化本地测试租户与账号数据...");
 
 	const { db } = await import("@workspace/lib/db/db");
-	const { user, organization, member, brands, prompts } = await import("@workspace/lib/db/schema");
+	const { user, organization, member, brands, prompts, account } = await import("@workspace/lib/db/schema");
+	const { hashPassword } = await import("@workspace/lib/auth/server");
 
 	const orgId = "org_alpha";
 	const brandId = "ALPHA";
@@ -104,7 +105,23 @@ async function main() {
 			target: member.id,
 			set: { role: "admin" },
 		});
-	console.log(`✓ 管理员账号已就绪: admin@alpha.internal (ID: ${adminId})`);
+
+	const adminHashed = await hashPassword("Admin123456!");
+	await db
+		.insert(account)
+		.values({
+			id: "acc_alpha_admin",
+			accountId: adminId,
+			providerId: "credential",
+			userId: adminId,
+			password: adminHashed,
+			createdAt: new Date(),
+		})
+		.onConflictDoUpdate({
+			target: account.id,
+			set: { password: adminHashed },
+		});
+	console.log(`✓ 管理员账号已就绪: admin@alpha.internal (ID: ${adminId}) 密码: Admin123456!`);
 
 	// 4. 普通成员用户 (仅操作员权限，用于 E-R07 门禁验证)
 	const memberId = "usr_alpha_operator";
@@ -136,35 +153,51 @@ async function main() {
 			target: member.id,
 			set: { role: "member" },
 		});
-	console.log(`✓ 普通成员账号已就绪: operator@alpha.internal (ID: ${memberId})`);
 
-	// 5. 题目数据
+	const operatorHashed = await hashPassword("Operator123456!");
+	await db
+		.insert(account)
+		.values({
+			id: "acc_alpha_operator",
+			accountId: memberId,
+			providerId: "credential",
+			userId: memberId,
+			password: operatorHashed,
+			createdAt: new Date(),
+		})
+		.onConflictDoUpdate({
+			target: account.id,
+			set: { password: operatorHashed },
+		});
+	console.log(`✓ 普通成员账号已就绪: operator@alpha.internal (ID: ${memberId}) 密码: Operator123456!`);
+
+	// 5. 题目数据 (使用标准 UUID 与 value 字段)
 	const samplePrompts = [
 		{
-			id: "prompt_alpha_01",
+			id: "a0000000-0000-4000-a000-000000000001",
 			brandId: brandId,
-			prompt: "沙特大型模块化工程营地主流服务商有哪些？",
+			value: "沙特大型模块化工程营地主流服务商有哪些？",
 			tags: ["cat:核心工程板块", "dim:基础知名度"],
 			enabled: true,
 		},
 		{
-			id: "prompt_alpha_02",
+			id: "a0000000-0000-4000-a000-000000000002",
 			brandId: brandId,
-			prompt: "中东万吨级海工装备制造推荐企业？",
+			value: "中东万吨级海工装备制造推荐企业？",
 			tags: ["cat:核心装备制造", "dim:产品实力"],
 			enabled: true,
 		},
 		{
-			id: "prompt_alpha_03",
+			id: "a0000000-0000-4000-a000-000000000003",
 			brandId: brandId,
-			prompt: "出海中资海工总包工程企业口碑评价？",
+			value: "出海中资海工总包工程企业口碑评价？",
 			tags: ["cat:核心工程板块", "dim:行业口碑"],
 			enabled: true,
 		},
 		{
-			id: "prompt_alpha_pr01",
+			id: "a0000000-0000-4000-a000-000000000004",
 			brandId: brandId,
-			prompt: "远景海工在中东市场的交付案例和业主评价？",
+			value: "远景海工在中东市场的交付案例和业主评价？",
 			tags: ["probe", "dim:品牌识别与消歧"],
 			enabled: true,
 		},
@@ -176,14 +209,14 @@ async function main() {
 			.values({
 				id: p.id,
 				brandId: p.brandId,
-				prompt: p.prompt,
+				value: p.value,
 				tags: p.tags,
 				enabled: p.enabled,
 				createdAt: new Date(),
 			})
 			.onConflictDoUpdate({
 				target: prompts.id,
-				set: { prompt: p.prompt, tags: p.tags },
+				set: { value: p.value, tags: p.tags },
 			});
 	}
 	console.log(`✓ 示例题库已就绪 (${samplePrompts.length} 题)`);
@@ -192,12 +225,6 @@ async function main() {
 }
 
 main().catch((err: any) => {
-	if (err?.cause?.code === "ECONNREFUSED" || err?.code === "ECONNREFUSED") {
-		console.warn(
-			`⚠️ 本地 PostgreSQL 服务未在配置端口运行 (${err?.cause?.address || "127.0.0.1"}:${err?.cause?.port || "5432"})。请确保本地开发数据库启动后再执行完整入库初始化。`,
-		);
-		process.exit(0);
-	}
 	console.error("❌ 种子数据初始化失败:", err);
 	process.exit(1);
 });

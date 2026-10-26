@@ -14,6 +14,8 @@ import {
 	generateBaselineReportRevisionFn,
 	reviewBaselineReportRevisionFn,
 	listBaselineRunsFn,
+	getBaselineAnalysisFn,
+	getBaselineReportFn,
 } from "@/server/baseline";
 import {
 	IconFileText,
@@ -75,6 +77,7 @@ function BrandReportsPage() {
 	const {
 		data: profileData,
 		isLoading: profileLoading,
+		error: profileError,
 		refetch: refetchProfile,
 	} = useQuery({
 		queryKey: ["baseline-profile", brandId],
@@ -83,7 +86,11 @@ function BrandReportsPage() {
 	});
 
 	// 2. 查询最近任务列表 (E-R06)
-	const { data: runsListData, refetch: refetchRunsList } = useQuery({
+	const {
+		data: runsListData,
+		error: runsListError,
+		refetch: refetchRunsList,
+	} = useQuery({
 		queryKey: ["baseline-runs-list", brandId],
 		queryFn: () => listBaselineRunsFn({ data: { brandId: brandId! } }),
 		enabled: !!brandId && activeTab === "portal",
@@ -92,6 +99,7 @@ function BrandReportsPage() {
 	// 3. 查询当前正在查看的 run 详情
 	const {
 		data: runData,
+		error: runError,
 		refetch: refetchRun,
 		isFetching: runFetching,
 	} = useQuery({
@@ -124,6 +132,30 @@ function BrandReportsPage() {
 			(runData?.status === "completed" || runData?.status === "partial"),
 	});
 
+	// 5.1. 查询当前 run 的最新人工分析版本 (E2-R04: 刷新恢复与版本切换)
+	const {
+		data: analysisData,
+		error: analysisQueryError,
+		refetch: refetchAnalysis,
+	} = useQuery({
+		queryKey: ["baseline-analysis", brandId, activeRunId],
+		queryFn: () => getBaselineAnalysisFn({ data: { brandId: brandId!, runId: activeRunId } }),
+		enabled: !!brandId && !!activeRunId,
+		retry: 1,
+	});
+
+	// 5.2. 查询当前 run 的报告及其修订版本列表 (E2-R04)
+	const {
+		data: reportData,
+		error: reportQueryError,
+		refetch: refetchReport,
+	} = useQuery({
+		queryKey: ["baseline-report", brandId, activeRunId],
+		queryFn: () => getBaselineReportFn({ data: { brandId: brandId!, reportId: `rpt_${activeRunId}` } }),
+		enabled: !!brandId && !!activeRunId,
+		retry: 1,
+	});
+
 	// 6. 旧报告查询（保留历史能力）
 	const { data: legacyReports, refetch: refetchLegacy } = useQuery({
 		queryKey: ["brand-reports-legacy", brandId],
@@ -131,10 +163,57 @@ function BrandReportsPage() {
 		enabled: !!brandId && activeTab === "legacy",
 	});
 
-	// 切换 run 时的清理与恢复 (E-R06)
+	// 恢复服务端持久化的人工分析 (E2-R04)
+	useEffect(() => {
+		if (analysisData) {
+			setActiveAnalysisId(analysisData.analysis_id || "");
+			setAnalystName(analysisData.analyst_name || "");
+			setExecutiveConclusion(analysisData.payload?.executive_conclusion || "");
+			setKeyFindings(
+				Array.isArray(analysisData.payload?.key_findings)
+					? analysisData.payload.key_findings.join("\n")
+					: analysisData.payload?.key_findings || "",
+			);
+			setBrandIdentityAudit(analysisData.payload?.brand_identity_audit || "");
+			setContentGapsInput(
+				Array.isArray(analysisData.payload?.content_gaps)
+					? analysisData.payload.content_gaps.join("\n")
+					: analysisData.payload?.content_gaps || "",
+			);
+			if (Array.isArray(analysisData.payload?.action_plan)) {
+				setActionPlanInput(
+					analysisData.payload.action_plan
+						.map((ap: any) => `${ap.priority}: [${ap.finding}] ${ap.action} (交付物: ${ap.deliverable})`)
+						.join("\n"),
+				);
+			}
+		}
+	}, [analysisData]);
+
+	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04)
+	useEffect(() => {
+		if (reportData?.revisions && reportData.revisions.length > 0) {
+			const revs = reportData.revisions;
+			const latestRev = revs[revs.length - 1];
+			if (!activeRevisionId || !revs.some((r: any) => r.revision_id === activeRevisionId)) {
+				setActiveRevisionId(latestRev.revision_id);
+			}
+			const nextNum = revs.length + 1;
+			setRevisionInput(`rev_${nextNum < 10 ? `0${nextNum}` : nextNum}`);
+		}
+	}, [reportData, activeRevisionId]);
+
+	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
 	const handleSelectRun = (runId: string) => {
 		setActiveRunId(runId);
+		// 切换 run 时清空所有表单项，防止旧任务数据串入新任务
 		setActiveAnalysisId("");
+		setAnalystName("");
+		setExecutiveConclusion("");
+		setKeyFindings("");
+		setBrandIdentityAudit("");
+		setContentGapsInput("");
+		setActionPlanInput("");
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
 		setActionError(null);
@@ -222,6 +301,7 @@ function BrandReportsPage() {
 		onSuccess: (res) => {
 			setActiveAnalysisId(res.analysis_id);
 			setActionError(null);
+			refetchAnalysis();
 		},
 		onError: (err: any) => setActionError(`保存人工分析失败: ${err.message}`),
 	});
@@ -243,6 +323,7 @@ function BrandReportsPage() {
 			const currentNum = parseInt(res.revision_id.replace(/^rev_/, ""), 10) || 1;
 			setRevisionInput(`rev_${String(currentNum + 1).padStart(2, "0")}`);
 			setActionError(null);
+			refetchReport();
 		},
 		onError: (err: any) => setActionError(`生成报告修订失败: ${err.message}`),
 	});
@@ -261,6 +342,7 @@ function BrandReportsPage() {
 		onSuccess: (res) => {
 			setReviewNotice(`审核操作完成：状态已更新为 ${res.review_status}（审核主体: ${res.reviewer}）`);
 			setActionError(null);
+			refetchReport();
 		},
 		onError: (err: any) => {
 			// 合成数据批准被拒绝是预期内的严格机器门禁行为 (D-R06 / D-R07)
@@ -321,6 +403,18 @@ function BrandReportsPage() {
 			</div>
 
 			{/* 错误与状态提示 */}
+			{(runsListError || runError || profileError) && (
+				<div className="bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
+					<IconAlertTriangle className="mt-0.5 shrink-0" size={18} />
+					<div className="flex-1">
+						<span className="font-semibold">诊断服务通信异常：</span>
+						{(runsListError as any)?.message ||
+							(runError as any)?.message ||
+							(profileError as any)?.message ||
+							"无法连接到诊断后端服务，请检查服务运行状态与内部网络连接"}
+					</div>
+				</div>
+			)}
 			{actionError && (
 				<div className="bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
 					<IconAlertTriangle className="mt-0.5 shrink-0" size={18} />
@@ -640,6 +734,28 @@ function BrandReportsPage() {
 								</div>
 							</div>
 
+							{/* 失败任务原因与安全恢复说明 (E2-R04) */}
+							{runData?.status === "failed" && (
+								<div className="bg-red-50/70 dark:bg-red-950/30 border border-red-300 dark:border-red-800 rounded-lg p-4 text-xs flex flex-col gap-2">
+									<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
+										<IconAlertTriangle size={16} />
+										<span>诊断任务执行中止 (终态: failed)</span>
+									</div>
+									<div className="text-red-600 dark:text-red-400">
+										<span className="font-semibold">错误分类: </span>
+										<span className="font-mono">{runData.error_category || "execution_failed"}</span>
+									</div>
+									{runData.error_message && (
+										<div className="text-muted-foreground bg-background/60 p-2 rounded border font-mono">
+											{runData.error_message}
+										</div>
+									)}
+									<div className="text-muted-foreground mt-1">
+										💡 <span className="font-semibold text-foreground">安全恢复提示：</span>任务因上述原因已安全中止并进入保护终态，未产生隐式续排或失控计费。快照数据已完整保留，可在排除配置或凭证问题后重新发起单次执行，无需重新创建题库快照。
+									</div>
+								</div>
+							)}
+
 							{/* 客观指标卡片 (A 模块) */}
 							{metricsData && (
 								<div className="flex flex-col gap-3 border-t pt-4">
@@ -677,10 +793,17 @@ function BrandReportsPage() {
 										<div className="bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 p-3 rounded-lg">
 											<span className="text-xs text-muted-foreground">自有域名引用占比</span>
 											<div className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-1">
-												{metricsData.domain_metrics?.own_domain_citation_rate_text || "0.0%"}
+												{metricsData.domain_metrics?.own_domain_citation_rate ??
+													(metricsData.domain_metrics?.total_citations != null
+														? metricsData.domain_metrics.total_citations > 0
+															? `${((metricsData.domain_metrics.own_domain_citations / metricsData.domain_metrics.total_citations) * 100).toFixed(1)}%`
+															: "不适用"
+														: "待核")}
 											</div>
 											<span className="text-xs text-muted-foreground">
-												自有引用 {metricsData.domain_metrics?.own_domain_citations_count ?? 0} / 总引用 {metricsData.domain_metrics?.total_citations_count ?? 0}
+												{metricsData.domain_metrics?.own_domain_citations != null && metricsData.domain_metrics?.total_citations != null
+													? `自有引用 ${metricsData.domain_metrics.own_domain_citations} / 总引用 ${metricsData.domain_metrics.total_citations}`
+													: "待核"}
 											</span>
 										</div>
 									</div>
@@ -975,8 +1098,8 @@ function BrandReportsPage() {
 						</div>
 					)}
 
-					{/* 步骤 5: 生成报告修订、审核与受控下载 (E-R06: 支持 rev_02 递增，不撞 rev_01) */}
-					{activeAnalysisId && (
+					{/* 步骤 5: 生成报告修订、审核与受控下载 (E-R06: 支持 rev_02 递增，不撞 rev_01；支持历史修订查看与下载) */}
+					{(activeAnalysisId || (reportData?.revisions && reportData.revisions.length > 0)) && (
 						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
@@ -989,6 +1112,35 @@ function BrandReportsPage() {
 									当前产物修订号: <span className="font-mono font-bold text-foreground">{activeRevisionId || "待生成"}</span>
 								</div>
 							</div>
+
+							{/* 已有修订版本切换 (E2-R04: 支持已有历史版本选择与受控下载，无需重新生成) */}
+							{reportData?.revisions && reportData.revisions.length > 0 && (
+								<div className="flex items-center gap-2 flex-wrap text-xs bg-muted/20 p-3 rounded-lg border">
+									<span className="font-semibold text-muted-foreground shrink-0">已生成修订版本:</span>
+									<div className="flex items-center gap-1.5 flex-wrap">
+										{reportData.revisions.map((rev: any) => {
+											const isSelected = activeRevisionId === rev.revision_id;
+											return (
+												<button
+													key={rev.revision_id}
+													type="button"
+													onClick={() => setActiveRevisionId(rev.revision_id)}
+													className={`px-3 py-1 rounded-md font-mono text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+														isSelected
+															? "bg-indigo-600 text-white shadow-sm"
+															: "bg-background border text-foreground hover:bg-muted"
+													}`}
+												>
+													<span>{rev.revision_id}</span>
+													<span className="text-[10px] opacity-80">
+														({rev.status === "approved" ? "已批准" : rev.status === "rejected" ? "已退回" : "草稿"})
+													</span>
+												</button>
+											);
+										})}
+									</div>
+								</div>
+							)}
 
 							{/* 生成操作 */}
 							<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-muted/30 p-3 rounded-lg text-xs">

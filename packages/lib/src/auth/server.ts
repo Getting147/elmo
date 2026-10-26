@@ -130,3 +130,5 @@ export function createAuth(options?: CreateAuthOptions) {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+export { hashPassword } from "better-auth/crypto";

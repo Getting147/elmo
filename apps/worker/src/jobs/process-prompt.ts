@@ -322,21 +322,12 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 		const { promptId, cadenceHours: providedCadence, consecutiveFailures = 0 } = job.data;
 		console.log(`Processing prompt ${promptId}`);
 
-		// REPORT-001E: D->C 保持唯一采集责任。旧 worker provider 路径默认完全禁发外部请求。
-		// 严禁仅凭布尔标记 manualTriggered 绕过，防止无持久授权的重放或注入 (E-R03)
-		if (process.env.ENABLE_LEGACY_WORKER_PROVIDER !== "true") {
-			console.warn(
-				`[Safety Guard] 拦截旧 worker provider 路径采样任务 (promptId=${promptId})：本轮 D->C 保持唯一采集责任，旧 provider 默认完全禁发`,
-			);
-			continue;
-		}
-
-		if (!job.data?.manualTriggered) {
-			console.warn(
-				`[Safety Guard] 拦截未经人工显式确认的遗留采样任务 (promptId=${promptId})，拒绝外发并直接结束`,
-			);
-			continue;
-		}
+		// REPORT-001E: D->C 保持唯一采集责任。旧 worker provider 路径已不受支持并永久封死 (E2-R03)。
+		// 严禁通过任何环境变量 (如 ENABLE_LEGACY_WORKER_PROVIDER) 或布尔标记 (如 manualTriggered) 重新开启，防止无持久人工 run 授权与幂等的重放或注入。
+		console.warn(
+			`[Safety Guard] 拦截旧 worker provider 路径采样任务 (promptId=${promptId})：本轮 D->C 保持唯一采集责任，旧 provider 路径已永久封死，拒绝任何外部采集请求`,
+		);
+		continue;
 
 		const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
 

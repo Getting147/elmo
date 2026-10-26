@@ -32,37 +32,47 @@ export function hasReportAccess(session: SessionLike): boolean {
 	return session.user.hasReportGeneratorAccess === true;
 }
 
-export async function checkOrgAccess(userId: string, orgOrBrandId: string): Promise<boolean> {
-	// 1. Direct check: is userId a member of this organization?
+export async function checkOrgAccess(userId: string, organizationId: string): Promise<boolean> {
+	// 严格核验组织成员身份：明确分开组织鉴权与品牌解析，严禁在组织校验失败时进行猜测式 fallback (E2-R01)
 	const [directRow] = await db
 		.select({ id: member.id })
 		.from(member)
-		.where(and(eq(member.userId, userId), eq(member.organizationId, orgOrBrandId)))
+		.where(and(eq(member.userId, userId), eq(member.organizationId, organizationId)))
 		.limit(1);
-	if (directRow) return true;
+	return !!directRow;
+}
 
-	// 2. If orgOrBrandId is actually a brandId (brand.id !== brand.organizationId):
+export async function checkBrandAccess(userId: string, brandId: string): Promise<boolean> {
+	// 明确的品牌访问权限核验 helper (E2-R01)
 	const [brandRow] = await db
 		.select({ organizationId: brands.organizationId })
 		.from(brands)
-		.where(eq(brands.id, orgOrBrandId))
+		.where(eq(brands.id, brandId))
 		.limit(1);
 	if (brandRow?.organizationId) {
-		const [brandOrgRow] = await db
-			.select({ id: member.id })
-			.from(member)
-			.where(and(eq(member.userId, userId), eq(member.organizationId, brandRow.organizationId)))
-			.limit(1);
-		return !!brandOrgRow;
+		return checkOrgAccess(userId, brandRow.organizationId);
 	}
-
-	return false;
+	// 若尚未创建品牌记录（例如 onboarding 阶段），回退检查用户是否属于以该 ID 为组织 ID 的成员
+	return checkOrgAccess(userId, brandId);
 }
 
 export async function requireOrgAccess(userId: string, orgId: string): Promise<void> {
 	if (!(await checkOrgAccess(userId, orgId))) {
 		throw new Error("Forbidden: No access to this organization");
 	}
+}
+
+export async function requireBrandAccess(userId: string, brandId: string): Promise<string> {
+	const [brandRow] = await db
+		.select({ organizationId: brands.organizationId })
+		.from(brands)
+		.where(eq(brands.id, brandId))
+		.limit(1);
+	const targetOrgId = brandRow?.organizationId || brandId;
+	if (!(await checkOrgAccess(userId, targetOrgId))) {
+		throw new Error("Forbidden: No access to this brand");
+	}
+	return targetOrgId;
 }
 
 export async function listUserOrganizations(userId: string): Promise<{ id: string; name: string }[]> {
