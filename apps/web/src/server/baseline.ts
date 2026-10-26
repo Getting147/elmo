@@ -282,6 +282,24 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 // 3. 手动创建单次有限诊断任务 (REPORT-001E)
 // ============================================================================
 
+interface AutoBoundRealRunRecord {
+	runId: string;
+	idempotencyKey: string;
+	modelName?: string;
+	webSearch?: boolean;
+	requestBudget: number;
+	maxRetries: number;
+	rawRequestedBudget: number;
+	rawRequestedRetries: number;
+}
+
+// 记录已受理的 real 模式自动绑定映射，确保授权消费后相同操作原样重放保持稳定身份与有效参数 (E7-R01)
+const autoBoundRealRunRegistry = new Map<string, AutoBoundRealRunRecord>();
+
+function getAutoBoundRegistryKey(organizationId: string, brandId: string, snapshotId: string): string {
+	return `${organizationId}:${brandId}:${snapshotId}`;
+}
+
 export const createBaselineRunFn = createServerFn({ method: "POST" })
 	.validator(
 		z.object({
@@ -316,8 +334,9 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		let maxRetries = data.maxRetries;
 		let idempotencyKey = data.idempotencyKey;
 
-		// real 模式下查询并绑定当前快照未消费的活跃服务端授权，并对齐执行参数约束 (E5-R01, E6-R02)
+		// real 模式下查询并绑定当前快照未消费的活跃服务端授权，或在重放时恢复首次受理的操作身份与有效参数 (E5-R01, E6-R02, E7-R01)
 		if (data.mode === "real") {
+			const regKey = getAutoBoundRegistryKey(organizationId, brand.id, data.snapshotId);
 			try {
 				const authRes = await callBaselineBackend({
 					method: "GET",
@@ -342,6 +361,80 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 					}
 					if (authRes.authorization.retry_limit !== undefined) {
 						maxRetries = Math.min(maxRetries, authRes.authorization.retry_limit);
+					}
+					if (!idempotencyKey) {
+						idempotencyKey = `idemp_${brand.id.toLowerCase()}_${runId}`;
+					}
+					// 固定并保存首次受理的操作身份和最终有效参数 (E7-R01)
+					autoBoundRealRunRegistry.set(regKey, {
+						runId: runId!,
+						idempotencyKey,
+						modelName,
+						webSearch,
+						requestBudget,
+						maxRetries,
+						rawRequestedBudget: data.requestBudget,
+						rawRequestedRetries: data.maxRetries,
+					});
+				} else if (!runId) {
+					// 授权已消费或未返回活跃授权：检查是否为同操作重放，先恢复原映射再查验原 run (E7-R01)
+					let remembered = autoBoundRealRunRegistry.get(regKey);
+					if (!remembered) {
+						// 容错降级：若因进程重启导致内存缓存丢失，从后端既有任务中恢复首次受理的操作身份
+						try {
+							const runsRes = await callBaselineBackend<{ items: any[]; total: number }>({
+								method: "GET",
+								path: "/api/baseline/v1/runs?limit=50",
+								organizationId,
+								brandId: brand.id,
+								callerId: session.user.id,
+							});
+							const existingReal = runsRes?.items?.find(
+								(r) => r.snapshot_id === data.snapshotId && r.mode === "real",
+							);
+							if (existingReal?.run_id) {
+								const detail = await callBaselineBackend<any>({
+									method: "GET",
+									path: `/api/baseline/v1/runs/${encodeURIComponent(existingReal.run_id)}`,
+									organizationId,
+									brandId: brand.id,
+									callerId: session.user.id,
+								});
+								if (detail?.run_id) {
+									remembered = {
+										runId: detail.run_id,
+										idempotencyKey:
+											detail.idempotency_key || `idemp_${brand.id.toLowerCase()}_${detail.run_id}`,
+										modelName: detail.model_name,
+										webSearch:
+											detail.web_search !== undefined ? Boolean(detail.web_search) : undefined,
+										requestBudget: detail.request_budget,
+										maxRetries: detail.max_retries,
+										rawRequestedBudget: detail.request_budget,
+										rawRequestedRetries: detail.max_retries,
+									};
+									autoBoundRealRunRegistry.set(regKey, remembered);
+								}
+							}
+						} catch {
+							// 保持容错，由后端门禁判定
+						}
+					}
+					if (remembered) {
+						runId = remembered.runId;
+						idempotencyKey = remembered.idempotencyKey;
+						if (!modelName && remembered.modelName) {
+							modelName = remembered.modelName;
+						}
+						if (webSearch === undefined && remembered.webSearch !== undefined) {
+							webSearch = remembered.webSearch;
+						}
+						if (data.requestBudget === remembered.rawRequestedBudget) {
+							requestBudget = remembered.requestBudget;
+						}
+						if (data.maxRetries === remembered.rawRequestedRetries) {
+							maxRetries = remembered.maxRetries;
+						}
 					}
 				}
 			} catch {
