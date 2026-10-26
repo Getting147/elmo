@@ -291,6 +291,8 @@ interface AutoBoundRealRunRecord {
 	maxRetries: number;
 	rawRequestedBudget: number;
 	rawRequestedRetries: number;
+	authRequestLimit?: number;
+	authRetryLimit?: number;
 }
 
 // 记录已受理的 real 模式自动绑定映射，确保授权消费后相同操作原样重放保持稳定身份与有效参数 (E7-R01)
@@ -334,17 +336,40 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		let maxRetries = data.maxRetries;
 		let idempotencyKey = data.idempotencyKey;
 
-		// real 模式下查询并绑定当前快照未消费的活跃服务端授权，或在重放时恢复首次受理的操作身份与有效参数 (E5-R01, E6-R02, E7-R01)
+		// real 模式下查询并绑定当前快照未消费的活跃服务端授权，或在重放时恢复首次受理的操作身份与有效参数 (E5-R01, E6-R02, E7-R01, E8-R01)
 		if (data.mode === "real") {
 			const regKey = getAutoBoundRegistryKey(organizationId, brand.id, data.snapshotId);
 			try {
-				const authRes = await callBaselineBackend({
+				const authRes = await callBaselineBackend<{
+					authorization?: {
+						auth_id: string;
+						run_id?: string;
+						model_name?: string;
+						request_limit?: number;
+						retry_limit?: number;
+						web_search?: boolean | number;
+						max_output_tokens?: number;
+						max_tool_calls?: number;
+					} | null;
+					latest_authorization?: {
+						auth_id: string;
+						run_id?: string;
+						consumed_run_id?: string;
+						model_name?: string;
+						request_limit?: number;
+						retry_limit?: number;
+						web_search?: boolean | number;
+						max_output_tokens?: number;
+						max_tool_calls?: number;
+					} | null;
+				}>({
 					method: "GET",
 					path: `/api/baseline/v1/auth/authorizations?snapshot_id=${encodeURIComponent(data.snapshotId)}`,
 					organizationId,
 					brandId: brand.id,
 					callerId: session.user.id,
 				});
+
 				if (authRes?.authorization?.run_id) {
 					if (!runId) {
 						runId = authRes.authorization.run_id;
@@ -365,7 +390,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 					if (!idempotencyKey) {
 						idempotencyKey = `idemp_${brand.id.toLowerCase()}_${runId}`;
 					}
-					// 固定并保存首次受理的操作身份和最终有效参数 (E7-R01)
+					// 固定并保存首次受理的操作身份和最终有效参数 (E7-R01, E8-R01)
 					autoBoundRealRunRegistry.set(regKey, {
 						runId: runId!,
 						idempotencyKey,
@@ -375,46 +400,75 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 						maxRetries,
 						rawRequestedBudget: data.requestBudget,
 						rawRequestedRetries: data.maxRetries,
+						authRequestLimit: authRes.authorization.request_limit,
+						authRetryLimit: authRes.authorization.retry_limit,
 					});
 				} else if (!runId) {
-					// 授权已消费或未返回活跃授权：检查是否为同操作重放，先恢复原映射再查验原 run (E7-R01)
+					// 授权已消费或未返回活跃授权：检查是否为同操作重放，先恢复原映射再查验原 run (E7-R01, E8-R01)
 					let remembered = autoBoundRealRunRegistry.get(regKey);
 					if (!remembered) {
-						// 容错降级：若因进程重启导致内存缓存丢失，从后端既有任务中恢复首次受理的操作身份
+						// 容错降级：若因进程重启导致内存缓存丢失，从后端既有任务与授权中恢复首次受理的操作身份及完整执行契约 (E8-R01)
 						try {
-							const runsRes = await callBaselineBackend<{ items: any[]; total: number }>({
-								method: "GET",
-								path: "/api/baseline/v1/runs?limit=50",
-								organizationId,
-								brandId: brand.id,
-								callerId: session.user.id,
-							});
-							const existingReal = runsRes?.items?.find(
-								(r) => r.snapshot_id === data.snapshotId && r.mode === "real",
-							);
-							if (existingReal?.run_id) {
-								const detail = await callBaselineBackend<any>({
+							const latestAuth = authRes?.latest_authorization;
+							const targetRunId = latestAuth?.consumed_run_id || latestAuth?.run_id;
+							let detail: any = null;
+							if (targetRunId) {
+								detail = await callBaselineBackend<any>({
 									method: "GET",
-									path: `/api/baseline/v1/runs/${encodeURIComponent(existingReal.run_id)}`,
+									path: `/api/baseline/v1/runs/${encodeURIComponent(targetRunId)}`,
 									organizationId,
 									brandId: brand.id,
 									callerId: session.user.id,
 								});
-								if (detail?.run_id) {
-									remembered = {
-										runId: detail.run_id,
-										idempotencyKey:
-											detail.idempotency_key || `idemp_${brand.id.toLowerCase()}_${detail.run_id}`,
-										modelName: detail.model_name,
-										webSearch:
-											detail.web_search !== undefined ? Boolean(detail.web_search) : undefined,
-										requestBudget: detail.request_budget,
-										maxRetries: detail.max_retries,
-										rawRequestedBudget: detail.request_budget,
-										rawRequestedRetries: detail.max_retries,
-									};
-									autoBoundRealRunRegistry.set(regKey, remembered);
+							}
+							if (!detail?.run_id) {
+								// 容错兜底：若授权未直接指向 targetRunId，再查验 runs 列表
+								const runsRes = await callBaselineBackend<{ items: any[]; total: number }>({
+									method: "GET",
+									path: "/api/baseline/v1/runs?limit=50",
+									organizationId,
+									brandId: brand.id,
+									callerId: session.user.id,
+								});
+								const existingReal = runsRes?.items?.find(
+									(r) => r.snapshot_id === data.snapshotId && r.mode === "real",
+								);
+								if (existingReal?.run_id) {
+									detail = await callBaselineBackend<any>({
+										method: "GET",
+										path: `/api/baseline/v1/runs/${encodeURIComponent(existingReal.run_id)}`,
+										organizationId,
+										brandId: brand.id,
+										callerId: session.user.id,
+									});
 								}
+							}
+
+							if (detail?.run_id) {
+								const boundModel = detail.model_name || latestAuth?.model_name;
+								const boundWebSearch =
+									detail.web_search !== undefined
+										? Boolean(detail.web_search)
+										: latestAuth?.web_search !== undefined
+											? Boolean(latestAuth.web_search)
+											: undefined;
+								const authRequestLimit = latestAuth?.request_limit;
+								const authRetryLimit = latestAuth?.retry_limit;
+
+								remembered = {
+									runId: detail.run_id,
+									idempotencyKey:
+										detail.idempotency_key || `idemp_${brand.id.toLowerCase()}_${detail.run_id}`,
+									modelName: boundModel,
+									webSearch: boundWebSearch,
+									requestBudget: detail.request_budget,
+									maxRetries: detail.max_retries,
+									rawRequestedBudget: detail.request_budget,
+									rawRequestedRetries: detail.max_retries,
+									authRequestLimit,
+									authRetryLimit,
+								};
+								autoBoundRealRunRegistry.set(regKey, remembered);
 							}
 						} catch {
 							// 保持容错，由后端门禁判定
@@ -429,11 +483,33 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 						if (webSearch === undefined && remembered.webSearch !== undefined) {
 							webSearch = remembered.webSearch;
 						}
-						if (data.requestBudget === remembered.rawRequestedBudget) {
-							requestBudget = remembered.requestBudget;
+						// 区分原始请求与首次收紧后的有效限制 (E8-R01):
+						// 1. 若授权存在 request_limit/retry_limit，按相同的收紧逻辑重新计算有效值：Math.min(data.requestBudget, authLimit)
+						// 2. 若原始请求值与记录的 rawRequested 一致，或计算出的有效值与已保存有效限制一致，则恢复原有效参数；若请求者真正更改了预算，则保留更改值交由 D 进行 409 冲突拒绝
+						let resolvedBudget = data.requestBudget;
+						if (remembered.authRequestLimit) {
+							resolvedBudget = Math.min(data.requestBudget, remembered.authRequestLimit);
 						}
-						if (data.maxRetries === remembered.rawRequestedRetries) {
+						if (
+							data.requestBudget === remembered.rawRequestedBudget ||
+							resolvedBudget === remembered.requestBudget
+						) {
+							requestBudget = remembered.requestBudget;
+						} else {
+							requestBudget = resolvedBudget;
+						}
+
+						let resolvedRetries = data.maxRetries;
+						if (remembered.authRetryLimit !== undefined) {
+							resolvedRetries = Math.min(data.maxRetries, remembered.authRetryLimit);
+						}
+						if (
+							data.maxRetries === remembered.rawRequestedRetries ||
+							resolvedRetries === remembered.maxRetries
+						) {
 							maxRetries = remembered.maxRetries;
+						} else {
+							maxRetries = resolvedRetries;
 						}
 					}
 				}
