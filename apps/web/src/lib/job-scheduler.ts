@@ -180,11 +180,11 @@ export async function sendImmediatePromptJob(promptId: string): Promise<boolean>
 
 		await boss.send(
 			"process-prompt",
-			{ promptId, cadenceHours },
+			{ promptId, cadenceHours, manualTriggered: true },
 			{
-				retryLimit: 3,
+				retryLimit: 0,
 				retryDelay: 60,
-				retryBackoff: true,
+				retryBackoff: false,
 				expireInSeconds: 60 * 15,
 			},
 		);

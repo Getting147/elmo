@@ -44,24 +44,26 @@ const getBrandData = createServerFn({ method: "GET" })
 		}> => {
 			const session = await requireAuthSession();
 
+			// 1. Get brand data from DB first (if exists) to resolve true organizationId
+			const brand = await db.query.brands.findFirst({
+				where: eq(brands.id, data.brandId),
+			});
+
+			const effectiveOrgId = brand?.organizationId || data.brandId;
+
 			// Verify access
-			const hasAccess = await checkOrgAccess(session.user.id, data.brandId);
+			const hasAccess = await checkOrgAccess(session.user.id, effectiveOrgId);
 			if (!hasAccess) {
 				return { brand: null, brandName: null, isAdmin: false, hasReportAccess: false, hasAccess: false, deleted: false };
 			}
 
 			// Get brand metadata (name from org membership — org exists even if not in DB yet)
 			const orgs = await listUserOrganizations(session.user.id);
-			const orgMeta = orgs.find((o) => o.id === data.brandId);
-			const brandName = orgMeta?.name || data.brandId;
+			const orgMeta = orgs.find((o) => o.id === effectiveOrgId);
+			const brandName = brand?.name || orgMeta?.name || data.brandId;
 
 			const admin = isAdmin(session);
 			const reportAccess = hasReportAccess(session);
-
-			// Get brand data from DB
-			const brand = await db.query.brands.findFirst({
-				where: eq(brands.id, data.brandId),
-			});
 
 			if (!brand) {
 				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, deleted: false };

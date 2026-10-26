@@ -10,7 +10,7 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 import { getAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
-import { BASELINE_API_URL, BASELINE_SERVICE_TOKEN, getBrandAndOrg } from "@/server/baseline";
+import { getBaselineConfig, getBrandAndOrg } from "@/server/baseline.server";
 
 export const Route = createFileRoute("/api/baseline/download")({
 	server: {
@@ -58,15 +58,25 @@ export const Route = createFileRoute("/api/baseline/download")({
 				}
 
 				// 2. 代理向 Python 后端请求受控产物
-				const targetUrl = `${BASELINE_API_URL}/api/baseline/v1/reports/${reportId}/revisions/${revisionId}/download?format=${format}`;
+				let config: { apiUrl: string; serviceToken: string };
+				try {
+					config = getBaselineConfig();
+				} catch (err: any) {
+					return new Response(
+						JSON.stringify({ error: "server_config_error", message: err.message }),
+						{ status: 500, headers: { "Content-Type": "application/json" } },
+					);
+				}
+
+				const targetUrl = `${config.apiUrl}/api/baseline/v1/reports/${reportId}/revisions/${revisionId}/download?format=${format}`;
 				try {
 					const pyResp = await fetch(targetUrl, {
 						method: "GET",
 						headers: {
-							"X-Service-Token": BASELINE_SERVICE_TOKEN,
+							"X-Service-Token": config.serviceToken,
 							"X-Organization-Id": orgId,
 							"X-Brand-Id": brandId,
-							"X-Caller-Id": (session.user as any).name || session.user.id,
+							"X-Caller-Id": session.user.id,
 						},
 					});
 

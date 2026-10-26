@@ -32,13 +32,31 @@ export function hasReportAccess(session: SessionLike): boolean {
 	return session.user.hasReportGeneratorAccess === true;
 }
 
-export async function checkOrgAccess(userId: string, orgId: string): Promise<boolean> {
-	const [row] = await db
+export async function checkOrgAccess(userId: string, orgOrBrandId: string): Promise<boolean> {
+	// 1. Direct check: is userId a member of this organization?
+	const [directRow] = await db
 		.select({ id: member.id })
 		.from(member)
-		.where(and(eq(member.userId, userId), eq(member.organizationId, orgId)))
+		.where(and(eq(member.userId, userId), eq(member.organizationId, orgOrBrandId)))
 		.limit(1);
-	return !!row;
+	if (directRow) return true;
+
+	// 2. If orgOrBrandId is actually a brandId (brand.id !== brand.organizationId):
+	const [brandRow] = await db
+		.select({ organizationId: brands.organizationId })
+		.from(brands)
+		.where(eq(brands.id, orgOrBrandId))
+		.limit(1);
+	if (brandRow?.organizationId) {
+		const [brandOrgRow] = await db
+			.select({ id: member.id })
+			.from(member)
+			.where(and(eq(member.userId, userId), eq(member.organizationId, brandRow.organizationId)))
+			.limit(1);
+		return !!brandOrgRow;
+	}
+
+	return false;
 }
 
 export async function requireOrgAccess(userId: string, orgId: string): Promise<void> {

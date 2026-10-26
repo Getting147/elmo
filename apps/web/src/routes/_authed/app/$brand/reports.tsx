@@ -1,24 +1,8 @@
-/**
- * /app/$brand/reports — elmo 统一基线诊断闭环与报告工作台 (REPORT-001E)
- *
- * 核心目标：
- * 内部操作员只登录 elmo，即可完成：
- * 选择客户 → 核对多业务资料及问题 → 确认本轮输入 → 手动创建有限诊断任务
- * → 查看进度、回答、引用和指标 → 填写诊断与优先行动 → 生成报告修订 → 审核及受控下载。
- *
- * 守卫规则：
- * 1. 监测由页面明确操作触发一次有限运行，不自动定时续采；
- * 2. elmo 服务端鉴权代理 D 的受控产物，严禁浏览器直连 Python 后端；
- * 3. 严格展示 A 模块客观指标与多业务维度，不在前端重算分母；
- * 4. 合成数据报告显式标明测试草稿，正式批准门禁将受控拒绝。
- */
-
+import { useState, useEffect } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useState } from "react";
-import { useLanguage } from "@/lib/language-context";
 import { useBrand } from "@/hooks/use-brands";
-import { getBrandReports, type BrandReportSummary } from "@/server/report-files";
+import { getBrandReports } from "@/server/report-files";
 import {
 	getBrandBaselineProfileFn,
 	freezeBaselineInputsFn,
@@ -41,45 +25,49 @@ import {
 	IconAlertTriangle,
 	IconPlayerPlay,
 	IconLock,
-	IconDeviceFloppy,
-	IconEye,
-	IconShieldCheck,
-	IconHistory,
 	IconChartBar,
 	IconListCheck,
+	IconDeviceFloppy,
+	IconShieldCheck,
+	IconChevronDown,
+	IconChevronUp,
 } from "@tabler/icons-react";
 
 export const Route = createFileRoute("/_authed/app/$brand/reports")({
-	component: BrandReportsPageComponent,
+	component: BrandReportsPage,
 });
 
-function BrandReportsPageComponent() {
-	const { language } = useLanguage();
-	const isZh = language === "zh";
-	const { brandId, brand } = useBrand();
+function BrandReportsPage() {
+	const { brand: brandId } = Route.useParams();
+	const { brand } = useBrand(brandId);
+	const isZh = typeof navigator !== "undefined" ? navigator.language?.startsWith("zh") : true;
 
-	// 顶级视图切换：诊断闭环工作台 vs 历史归档报告
+	// 顶栏 Tab: portal (诊断工作台) vs legacy (历史报告)
 	const [activeTab, setActiveTab] = useState<"portal" | "legacy">("portal");
 
-	// 工作台子流程状态
+	// 工作台状态机
 	const [frozenSnapshot, setFrozenSnapshot] = useState<any>(null);
 	const [activeRunId, setActiveRunId] = useState<string>("");
 	const [activeAnalysisId, setActiveAnalysisId] = useState<string>("");
-	const [activeRevisionId, setActiveRevisionId] = useState<string>("");
+	const [activeRevisionId, setActiveRevisionId] = useState<string>("rev_01");
+	const [revisionInput, setRevisionInput] = useState<string>("rev_01");
+	const [executionMode, setExecutionMode] = useState<"synthetic" | "real">("synthetic");
 	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 
-	// 人工分析表单状态
-	const [analystName, setAnalystName] = useState<string>("王分析师");
-	const [executiveConclusion, setExecutiveConclusion] = useState<string>(
-		"本轮基线诊断显示，品牌在核心业务板块具备良好行业口碑，但自然提及率仍待提高。",
-	);
-	const [keyFindings, setKeyFindings] = useState<string>(
-		"主体识别探针清晰可辨\n自有官网已形成稳定引用\n多业务板块检索词覆盖需强化",
-	);
-	const [actionPlanInput, setActionPlanInput] = useState<string>(
-		"P01|在海外官网增设出海工程光伏标杆案例专题页|P1|直接契合海湾寻源问法|多语种项目业绩专题集|次月同一问题复测",
-	);
+	// 题库分类人工补齐状态 (E-R04)
+	const [dimensionOverrides, setDimensionOverrides] = useState<Record<string, string>>({});
+
+	// 逐题回答展开状态 (E-R06)
+	const [expandedQuestions, setExpandedQuestions] = useState<Record<string, boolean>>({});
+
+	// 人工分析表单状态 (E-R05: 移除一切预填伪造数据，全部默认空或显式占位)
+	const [analystName, setAnalystName] = useState<string>("");
+	const [executiveConclusion, setExecutiveConclusion] = useState<string>("");
+	const [keyFindings, setKeyFindings] = useState<string>("");
+	const [brandIdentityAudit, setBrandIdentityAudit] = useState<string>("");
+	const [contentGapsInput, setContentGapsInput] = useState<string>("");
+	const [actionPlanInput, setActionPlanInput] = useState<string>("");
 
 	const brandName = brand?.name || brandId || "";
 
@@ -94,7 +82,14 @@ function BrandReportsPageComponent() {
 		enabled: !!brandId && activeTab === "portal",
 	});
 
-	// 2. 查询当前正在查看的 run 详情
+	// 2. 查询最近任务列表 (E-R06)
+	const { data: runsListData, refetch: refetchRunsList } = useQuery({
+		queryKey: ["baseline-runs-list", brandId],
+		queryFn: () => listBaselineRunsFn({ data: { brandId: brandId! } }),
+		enabled: !!brandId && activeTab === "portal",
+	});
+
+	// 3. 查询当前正在查看的 run 详情
 	const {
 		data: runData,
 		refetch: refetchRun,
@@ -109,25 +104,24 @@ function BrandReportsPageComponent() {
 		},
 	});
 
-	// 3. 查询当前 run 的逐题证据
+	// 4. 查询当前 run 的逐题证据
 	const { data: evidenceData, refetch: refetchEvidence } = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId } }),
-		enabled: !!brandId && !!activeRunId && (runData?.status === "completed" || runData?.status === "partial"),
+		enabled:
+			!!brandId &&
+			!!activeRunId &&
+			(runData?.status === "completed" || runData?.status === "partial"),
 	});
 
-	// 4. 查询当前 run 的客观统计指标
+	// 5. 查询当前 run 的客观统计指标
 	const { data: metricsData, refetch: refetchMetrics } = useQuery({
 		queryKey: ["baseline-metrics", brandId, activeRunId],
 		queryFn: () => getBaselineMetricsFn({ data: { brandId: brandId!, runId: activeRunId } }),
-		enabled: !!brandId && !!activeRunId && (runData?.status === "completed" || runData?.status === "partial"),
-	});
-
-	// 5. 查询最近任务列表
-	const { data: runsListData, refetch: refetchRunsList } = useQuery({
-		queryKey: ["baseline-runs-list", brandId],
-		queryFn: () => listBaselineRunsFn({ data: { brandId: brandId! } }),
-		enabled: !!brandId && activeTab === "portal",
+		enabled:
+			!!brandId &&
+			!!activeRunId &&
+			(runData?.status === "completed" || runData?.status === "partial"),
 	});
 
 	// 6. 旧报告查询（保留历史能力）
@@ -137,10 +131,26 @@ function BrandReportsPageComponent() {
 		enabled: !!brandId && activeTab === "legacy",
 	});
 
+	// 切换 run 时的清理与恢复 (E-R06)
+	const handleSelectRun = (runId: string) => {
+		setActiveRunId(runId);
+		setActiveAnalysisId("");
+		setActiveRevisionId("rev_01");
+		setRevisionInput("rev_01");
+		setActionError(null);
+		setReviewNotice(null);
+	};
+
 	// Mutations
 	const freezeMutation = useMutation({
 		mutationFn: (versionLabel: string) =>
-			freezeBaselineInputsFn({ data: { brandId: brandId!, versionLabel } }),
+			freezeBaselineInputsFn({
+				data: {
+					brandId: brandId!,
+					versionLabel,
+					dimensionOverrides,
+				},
+			}),
 		onSuccess: (res) => {
 			setFrozenSnapshot(res);
 			setActionError(null);
@@ -154,13 +164,18 @@ function BrandReportsPageComponent() {
 				data: {
 					brandId: brandId!,
 					snapshotId,
+					mode: executionMode,
 					requestBudget: 30,
 					maxRetries: 0,
 				},
 			}),
 		onSuccess: (res) => {
 			setActiveRunId(res.run_id);
+			setActiveAnalysisId("");
+			setActiveRevisionId("rev_01");
+			setRevisionInput("rev_01");
 			setActionError(null);
+			setReviewNotice(null);
 			refetchRunsList();
 		},
 		onError: (err: any) => setActionError(`创建监测任务失败: ${err.message}`),
@@ -169,16 +184,20 @@ function BrandReportsPageComponent() {
 	const saveAnalysisMutation = useMutation({
 		mutationFn: () => {
 			const lines = actionPlanInput.split("\n").filter((l) => l.trim().length > 0);
+			if (lines.length === 0) {
+				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P1/P2/P3) | 决策依据 | 交付物 | 验证方式");
+			}
+
 			const actionPlan = lines.map((line) => {
-				const [code, act, prio, rat, deliv, verif] = line.split("|").map((s) => s.trim());
+				const parts = line.split("|").map((s) => s.trim());
 				return {
-					finding: `针对 ${code || "P01"} 的诊断发现`,
-					evidence_refs: [code || "P01"],
-					action: act || "加强业务官网内容索引",
-					priority: (prio as "P1" | "P2" | "P3") || "P1",
-					priority_rationale: rat || "直接影响主流 AI 引擎引用置信度",
-					deliverable: deliv || "官方技术专栏发布",
-					verification_method: verif || "次月同一问题复测",
+					finding: parts[0] ? `针对 ${parts[0]} 的实测发现` : "待补充实测发现",
+					evidence_refs: parts[0] ? [parts[0]] : [],
+					action: parts[1] || "待补充行动方案",
+					priority: (["P1", "P2", "P3"].includes(parts[2]) ? parts[2] : "P2") as "P1" | "P2" | "P3",
+					priority_rationale: parts[3] || "待补充优先级依据",
+					deliverable: parts[4] || "待补充交付件",
+					verification_method: parts[5] || "待补充验证方法",
 				};
 			});
 
@@ -186,40 +205,17 @@ function BrandReportsPageComponent() {
 				data: {
 					brandId: brandId!,
 					runId: activeRunId,
-					analystName: analystName.trim() || "王分析师",
-					executiveConclusion: executiveConclusion.trim(),
-					keyFindings: keyFindings.split("\n").map((s) => s.trim()).filter((s) => s.length > 0),
-					brandIdentityAudit: "主体识别清晰，与同名企业无混淆",
-					rootCauses: [
-						{
-							cause_id: "RC01",
-							title: "海外工程项目业绩多语种收录不足",
-							observed_facts: ["实测模型回答主要引用综合经贸名录"],
-							analytic_judgements: ["企业出海典型业绩未被搜索引擎有效索引"],
-							unverified_hypotheses: ["可能受海外CDN反爬阻断"],
-						},
-					],
-					channelGaps: [
-						{
-							channel_type: "企业官网/同业官网",
-							citation_count: 1,
-							citation_share_text: "50.0%",
-							actionability: "高",
-							strategic_note: "维护好现有官网英文案例",
-						},
-					],
-					contentGaps: "缺少波斯湾区域大型海上光伏项目签约快讯",
-					actionPlan: actionPlan.length > 0 ? actionPlan : [
-						{
-							finding: "核心板块提及偏低",
-							evidence_refs: ["P01"],
-							action: "在海外官网增设标杆案例专页",
-							priority: "P1",
-							priority_rationale: "直接契合客户寻源问法",
-							deliverable: "多语种项目业绩专题集",
-							verification_method: "次月同一问题复测",
-						},
-					],
+					analystName: analystName.trim() || "未具名分析师",
+					executiveConclusion: executiveConclusion.trim() || "待补充执行结论",
+					keyFindings: keyFindings
+						.split("\n")
+						.map((s) => s.trim())
+						.filter((s) => s.length > 0),
+					brandIdentityAudit: brandIdentityAudit.trim() || "待人工核实与完善",
+					contentGaps: contentGapsInput.trim() || "待人工补充内容资产缺口",
+					rootCauses: [],
+					channelGaps: [],
+					actionPlan,
 				},
 			});
 		},
@@ -236,13 +232,16 @@ function BrandReportsPageComponent() {
 				data: {
 					brandId: brandId!,
 					runId: activeRunId,
-					revisionId,
+					revisionId: revisionId.trim() || "rev_01",
 					analysisId: activeAnalysisId,
-					draftNotice: "内部评估草稿（rev_01 · 合成验证）",
+					draftNotice: `内部评估草稿（${revisionId.trim() || "rev_01"} · 离线验证）`,
 				},
 			}),
 		onSuccess: (res) => {
 			setActiveRevisionId(res.revision_id);
+			// 自动预推下一个 revision 编号供继续修改 (E-R06)
+			const currentNum = parseInt(res.revision_id.replace(/^rev_/, ""), 10) || 1;
+			setRevisionInput(`rev_${String(currentNum + 1).padStart(2, "0")}`);
 			setActionError(null);
 		},
 		onError: (err: any) => setActionError(`生成报告修订失败: ${err.message}`),
@@ -260,13 +259,13 @@ function BrandReportsPageComponent() {
 				},
 			}),
 		onSuccess: (res) => {
-			setReviewNotice(`审核操作完成：状态已更新为 ${res.review_status}（审核人: ${res.reviewer}）`);
+			setReviewNotice(`审核操作完成：状态已更新为 ${res.review_status}（审核主体: ${res.reviewer}）`);
 			setActionError(null);
 		},
 		onError: (err: any) => {
 			// 合成数据批准被拒绝是预期内的严格机器门禁行为 (D-R06 / D-R07)
 			setReviewNotice(null);
-			setActionError(`门禁审核拦截 (预期安全防线): ${err.message}`);
+			setActionError(`门禁审核拦截 (安全防线): ${err.message}`);
 		},
 	});
 
@@ -291,7 +290,7 @@ function BrandReportsPageComponent() {
 							{brandName} · 诊断闭环与报告工作台
 						</h1>
 						<p className="text-muted-foreground text-sm mt-0.5">
-							豆包基线统一操作闭环（内部操作员专用 · 手动单次监测模式 · 封禁自动续采）
+							统一诊断操作门户（内部操作员专用 · 手动单次监测模式 · 封禁自动续采）
 						</p>
 					</div>
 				</div>
@@ -301,7 +300,9 @@ function BrandReportsPageComponent() {
 					<button
 						onClick={() => setActiveTab("portal")}
 						className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-							activeTab === "portal" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+							activeTab === "portal"
+								? "bg-background shadow-sm text-foreground"
+								: "text-muted-foreground hover:text-foreground"
 						}`}
 					>
 						统一诊断工作台
@@ -309,7 +310,9 @@ function BrandReportsPageComponent() {
 					<button
 						onClick={() => setActiveTab("legacy")}
 						className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-							activeTab === "legacy" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+							activeTab === "legacy"
+								? "bg-background shadow-sm text-foreground"
+								: "text-muted-foreground hover:text-foreground"
 						}`}
 					>
 						历史归档报告
@@ -321,13 +324,19 @@ function BrandReportsPageComponent() {
 			{actionError && (
 				<div className="bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
 					<IconAlertTriangle className="mt-0.5 shrink-0" size={18} />
-					<div>{actionError}</div>
+					<div className="flex-1">{actionError}</div>
+					<button onClick={() => setActionError(null)} className="text-xs hover:underline">
+						关闭
+					</button>
 				</div>
 			)}
 			{reviewNotice && (
 				<div className="bg-green-50 dark:bg-green-950/40 border border-green-300 dark:border-green-800 text-green-700 dark:text-green-300 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
 					<IconCheck className="mt-0.5 shrink-0" size={18} />
-					<div>{reviewNotice}</div>
+					<div className="flex-1">{reviewNotice}</div>
+					<button onClick={() => setReviewNotice(null)} className="text-xs hover:underline">
+						关闭
+					</button>
 				</div>
 			)}
 
@@ -336,14 +345,38 @@ function BrandReportsPageComponent() {
 			{/* ========================================================================= */}
 			{activeTab === "portal" && (
 				<div className="flex flex-col gap-8">
-					{/* 步骤 1: 客户资料与多业务题集核对 */}
+					{/* 历史 Run 选择区 (E-R06: 恢复历史任务选择与状态处理) */}
+					{runsListData?.items && runsListData.items.length > 0 && (
+						<div className="bg-muted/30 border rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">
+							<div className="flex items-center gap-2">
+								<span className="font-semibold text-foreground">切换已有监测任务:</span>
+								<select
+									value={activeRunId}
+									onChange={(e) => handleSelectRun(e.target.value)}
+									className="border rounded-md px-2 py-1.5 bg-background font-mono text-xs max-w-xs"
+								>
+									<option value="">-- 选择已有任务查看/处理 --</option>
+									{runsListData.items.map((r: any) => (
+										<option key={r.run_id} value={r.run_id}>
+											{r.run_id} ({r.mode} · {r.status} · {r.created_at?.slice(0, 16)})
+										</option>
+									))}
+								</select>
+							</div>
+							<div className="text-muted-foreground">
+								历史已发起总任务数: <span className="font-semibold text-foreground">{runsListData.total}</span>
+							</div>
+						</div>
+					)}
+
+					{/* 步骤 1: 客户资料与多业务题集核对 (E-R04) */}
 					<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 						<div className="flex items-center justify-between border-b pb-3">
 							<div className="flex items-center gap-2 font-semibold text-base">
 								<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
 									1
 								</span>
-								核对主数据与冻结输入快照
+								核对主数据与题集（支持多业务分类补齐）
 							</div>
 							<button
 								onClick={() => refetchProfile()}
@@ -356,25 +389,86 @@ function BrandReportsPageComponent() {
 						{profileLoading ? (
 							<div className="h-20 animate-pulse bg-muted rounded-lg" />
 						) : (
-							<div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-								<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
-									<span className="text-muted-foreground text-xs">品牌名称与域名</span>
-									<span className="font-semibold">{profileData?.brand.name}</span>
-									<span className="text-xs text-muted-foreground">{profileData?.brand.website || "无主域名"}</span>
+							<div className="flex flex-col gap-4">
+								<div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+									<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
+										<span className="text-muted-foreground text-xs">品牌名称与主域名</span>
+										<span className="font-semibold">{profileData?.brand.name}</span>
+										<span className="text-xs text-muted-foreground">{profileData?.brand.website || "无主域名"}</span>
+										{(profileData?.brand.additionalDomains?.length ?? 0) > 0 && (
+											<span className="text-[11px] text-muted-foreground">
+												附加域名: {profileData?.brand.additionalDomains.join(", ")}
+											</span>
+										)}
+									</div>
+									<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
+										<span className="text-muted-foreground text-xs">业务产品线 (Product Lines)</span>
+										<span className="font-semibold">
+											{profileData?.brand.productLines?.length ?? 0} 条业务板块
+										</span>
+										<span className="text-xs text-muted-foreground truncate">
+											{profileData?.brand.productLines?.map((pl: any) => pl.name).join(" / ") || "未配置业务线"}
+										</span>
+									</div>
+									<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
+										<span className="text-muted-foreground text-xs">多业务题集结构</span>
+										<span className="font-semibold">
+											共 {profileData?.summary.totalPrompts ?? 0} 题 (正式题 {profileData?.summary.formalCount ?? 0} / 探针 {profileData?.summary.probeCount ?? 0})
+										</span>
+										<span className="text-xs text-muted-foreground">
+											{(profileData?.summary.unclassifiedCount ?? 0) > 0 ? (
+												<span className="text-amber-600 dark:text-amber-400 font-semibold">
+													⚠️ 有 {profileData?.summary.unclassifiedCount} 题尚未分类
+												</span>
+											) : (
+												"全部题目已绑定业务分类"
+											)}
+										</span>
+									</div>
 								</div>
-								<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
-									<span className="text-muted-foreground text-xs">竞品监测数量</span>
-									<span className="font-semibold">{profileData?.competitors.length ?? 0} 家竞品</span>
-									<span className="text-xs text-muted-foreground truncate">
-										{profileData?.competitors.map((c: any) => c.name).join(", ") || "无竞品"}
-									</span>
-								</div>
-								<div className="bg-muted/40 p-3 rounded-lg flex flex-col gap-1">
-									<span className="text-muted-foreground text-xs">多业务题集结构</span>
-									<span className="font-semibold">
-										共 {profileData?.summary.totalPrompts ?? 0} 题 (正式题 {profileData?.summary.formalCount ?? 0} / 探针 {profileData?.summary.probeCount ?? 0})
-									</span>
-									<span className="text-xs text-muted-foreground">业务板块已分类映射</span>
+
+								{/* 完整题文明细展示与人工分类补齐表 (E-R04) */}
+								<div className="border rounded-lg overflow-hidden text-xs">
+									<div className="bg-muted/60 px-3 py-2 font-semibold text-muted-foreground flex items-center justify-between">
+										<span>待确认题目明细（核验分类与题型，分类缺失须在此补齐）</span>
+										<span>已选 {profileData?.prompts.length ?? 0} 题</span>
+									</div>
+									<div className="divide-y max-h-56 overflow-y-auto">
+										{profileData?.prompts.map((p: any) => (
+											<div key={p.id} className="p-2.5 flex items-center justify-between gap-3 hover:bg-muted/20">
+												<div className="flex items-center gap-2 flex-1">
+													<span className="font-mono font-bold text-muted-foreground w-12 shrink-0">
+														[{p.code}]
+													</span>
+													<span className="text-foreground">{p.text}</span>
+													{p.isProbe && (
+														<span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 shrink-0">
+															主体探针
+														</span>
+													)}
+												</div>
+												<div className="flex items-center gap-2 shrink-0">
+													<span className="text-muted-foreground text-[11px]">业务维度:</span>
+													<input
+														type="text"
+														placeholder="输入业务板块"
+														value={dimensionOverrides[p.id] ?? (p.unclassified ? "" : p.dimensionName)}
+														onChange={(e) =>
+															setDimensionOverrides({
+																...dimensionOverrides,
+																[p.id]: e.target.value,
+															})
+														}
+														className={`border rounded px-2 py-1 text-xs w-32 bg-background ${
+															p.unclassified && !dimensionOverrides[p.id]
+																? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20"
+																: ""
+														}`}
+													/>
+												</div>
+											</div>
+										))}
+									</div>
 								</div>
 							</div>
 						)}
@@ -384,24 +478,32 @@ function BrandReportsPageComponent() {
 							<div className="text-xs text-muted-foreground">
 								{frozenSnapshot ? (
 									<span className="text-green-600 dark:text-green-400 font-medium inline-flex items-center gap-1">
-										<IconCheck size={14} /> 已冻结快照 ID: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
+										<IconCheck size={14} /> 已冻结不可变快照: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
 									</span>
 								) : (
-									"确认档案与题目无误后，冻结为不可变快照以便执行基线采样"
+									"确认档案与题目无误后，冻结为不可变快照以供基线执行"
 								)}
 							</div>
 							<button
 								onClick={() => freezeMutation.mutate("v1.0")}
-								disabled={freezeMutation.isPending || !profileData || profileData.summary.totalPrompts === 0}
+								disabled={
+									freezeMutation.isPending ||
+									!profileData ||
+									profileData.summary.totalPrompts === 0
+								}
 								className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
 							>
 								<IconLock size={15} />
-								{freezeMutation.isPending ? "冻结中..." : frozenSnapshot ? "重新冻结新版本" : "确认并冻结本轮输入"}
+								{freezeMutation.isPending
+									? "冻结中..."
+									: frozenSnapshot
+										? "重新冻结新快照"
+										: "确认并冻结本轮输入"}
 							</button>
 						</div>
 					</div>
 
-					{/* 步骤 2: 手动发起单次有限监测 (前置摘要 + 防并发) */}
+					{/* 步骤 2: 手动发起单次有限监测 (前置摘要 + 模式选择 + 防并发) */}
 					<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 						<div className="flex items-center justify-between border-b pb-3">
 							<div className="flex items-center gap-2 font-semibold text-base">
@@ -410,9 +512,17 @@ function BrandReportsPageComponent() {
 								</span>
 								执行本次监测（手动单次 · 费用边界确认）
 							</div>
-							{runsListData?.items?.length ? (
-								<span className="text-xs text-muted-foreground">历史任务数: {runsListData.total}</span>
-							) : null}
+							<div className="flex items-center gap-2 text-xs">
+								<span className="text-muted-foreground">执行模式:</span>
+								<select
+									value={executionMode}
+									onChange={(e) => setExecutionMode(e.target.value as any)}
+									className="border rounded px-2 py-1 bg-background text-xs font-semibold"
+								>
+									<option value="synthetic">离线合成模式 (Synthetic · Mock)</option>
+									<option value="real">真实执行受控分支 (Real · 需服务端授权)</option>
+								</select>
+							</div>
 						</div>
 
 						{/* 任务前摘要卡片 */}
@@ -427,8 +537,8 @@ function BrandReportsPageComponent() {
 									<span className="font-semibold ml-1">豆包方舟 (Ark)</span>
 								</div>
 								<div>
-									<span className="text-muted-foreground">模型规格：</span>
-									<span className="font-semibold ml-1">doubao-seed-2-1-pro-260628</span>
+									<span className="text-muted-foreground">运行模式：</span>
+									<span className="font-semibold ml-1 uppercase">{executionMode}</span>
 								</div>
 								<div>
 									<span className="text-muted-foreground">最大请求上限：</span>
@@ -436,11 +546,13 @@ function BrandReportsPageComponent() {
 								</div>
 								<div>
 									<span className="text-muted-foreground">费用说明：</span>
-									<span className="font-semibold ml-1 text-amber-700 dark:text-amber-300">费用待核 (按实结算)</span>
+									<span className="font-semibold ml-1 text-amber-700 dark:text-amber-300">
+										{executionMode === "real" ? "受控预算硬上限 (待审核)" : "离线零费用"}
+									</span>
 								</div>
 							</div>
 							<p className="text-xs text-muted-foreground mt-1">
-								⚠️ 说明：本轮仅执行一次有限诊断，任务完成后绝不自动创建下一轮；当前为离线合成验证，真实 Key 尚未开启。
+								⚠️ 安全声明：本轮仅执行一次有限诊断，任务完成后绝不自动创建下一轮；真实模式需服务端开关显式开启且配置有效凭据，未授权将触发拦截守卫。
 							</p>
 						</div>
 
@@ -455,16 +567,14 @@ function BrandReportsPageComponent() {
 									"请先冻结输入快照，再发起执行本次有限监测"
 								)}
 							</div>
-							<div className="flex items-center gap-2">
-								<button
-									onClick={() => createRunMutation.mutate(frozenSnapshot.snapshot_id)}
-									disabled={!frozenSnapshot || createRunMutation.isPending}
-									className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-green-700 transition-colors disabled:opacity-50"
-								>
-									<IconPlayerPlay size={15} />
-									{createRunMutation.isPending ? "正在发起..." : "执行本次监测"}
-								</button>
-							</div>
+							<button
+								onClick={() => createRunMutation.mutate(frozenSnapshot.snapshot_id)}
+								disabled={!frozenSnapshot || createRunMutation.isPending}
+								className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-green-700 transition-colors disabled:opacity-50"
+							>
+								<IconPlayerPlay size={15} />
+								{createRunMutation.isPending ? "正在发起..." : "启动本次诊断任务"}
+							</button>
 						</div>
 					</div>
 
@@ -597,7 +707,9 @@ function BrandReportsPageComponent() {
 																<td className="p-2">{bg.planned_questions}</td>
 																<td className="p-2">{bg.effective_sample_count}</td>
 																<td className="p-2">{bg.effective_mention_count}</td>
-																<td className="p-2 font-semibold text-blue-600">{bg.effective_mention_rate_text}</td>
+																<td className="p-2 font-semibold text-blue-600">
+																	{bg.effective_mention_rate_text}
+																</td>
 															</tr>
 														))}
 													</tbody>
@@ -608,7 +720,7 @@ function BrandReportsPageComponent() {
 								</div>
 							)}
 
-							{/* 逐题证据明细 (正式题与探针隔离展示) */}
+							{/* 逐题证据明细 (E-R06: 支持完整回答查看与实际引用展示) */}
 							{evidenceData && (
 								<div className="flex flex-col gap-3 border-t pt-4">
 									<div className="text-sm font-semibold flex items-center gap-1.5">
@@ -620,24 +732,68 @@ function BrandReportsPageComponent() {
 										<span className="text-xs font-bold text-muted-foreground uppercase">
 											核心正式题 ({evidenceData.formal_questions?.length ?? 0})
 										</span>
-										{evidenceData.formal_questions?.map((q: any) => (
-											<div key={q.question_code} className="border rounded-lg p-3 text-xs flex flex-col gap-1.5 bg-muted/10">
-												<div className="flex items-center justify-between font-semibold">
-													<span>[{q.question_code}] {q.question_text}</span>
-													<span className="text-muted-foreground text-[10px] bg-muted px-2 py-0.5 rounded">
-														{q.dimension_name}
-													</span>
+										{evidenceData.formal_questions?.map((q: any) => {
+											const isExpanded = !!expandedQuestions[q.question_code];
+											return (
+												<div
+													key={q.question_code}
+													className="border rounded-lg p-3 text-xs flex flex-col gap-2 bg-muted/10"
+												>
+													<div className="flex items-center justify-between font-semibold">
+														<span className="text-foreground">
+															[{q.question_code}] {q.question_text}
+														</span>
+														<div className="flex items-center gap-2">
+															<span className="text-muted-foreground text-[10px] bg-muted px-2 py-0.5 rounded">
+																{q.dimension_name}
+															</span>
+															<button
+																onClick={() =>
+																	setExpandedQuestions({
+																		...expandedQuestions,
+																		[q.question_code]: !isExpanded,
+																	})
+																}
+																className="p-1 hover:bg-muted rounded text-muted-foreground"
+															>
+																{isExpanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+															</button>
+														</div>
+													</div>
+
+													<div className="text-muted-foreground bg-background p-2.5 rounded border leading-relaxed">
+														<span className="font-semibold text-foreground">💬 模型实测回答：</span>
+														{isExpanded
+															? q.answer_text || "无有效回答"
+															: q.answer_text
+																? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
+																: "无有效回答"}
+													</div>
+
+													{/* 实际引用列表展示 (E-R06) */}
+													{q.citations?.length > 0 && isExpanded && (
+														<div className="bg-muted/40 p-2 rounded text-[11px] flex flex-col gap-1">
+															<span className="font-semibold text-muted-foreground">引用来源明细：</span>
+															<ul className="list-disc pl-4 space-y-0.5">
+																{q.citations.map((c: any, cIdx: number) => (
+																	<li key={cIdx} className="break-all">
+																		{c.url || c.domain || JSON.stringify(c)}
+																	</li>
+																))}
+															</ul>
+														</div>
+													)}
+
+													<div className="flex items-center gap-4 text-muted-foreground text-[11px]">
+														<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
+														<span>🔗 引用数: {q.citations?.length ?? 0}</span>
+														<span>
+															⚡ Token: {q.raw_usage?.total_tokens !== undefined && q.raw_usage?.total_tokens !== null ? q.raw_usage.total_tokens : "未知"}
+														</span>
+													</div>
 												</div>
-												<div className="text-muted-foreground line-clamp-2 bg-background p-2 rounded border">
-													💬 模型实测回答：{q.answer_text || "无有效回答"}
-												</div>
-												<div className="flex items-center gap-3 text-muted-foreground">
-													<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
-													<span>🔗 引用数: {q.citations?.length ?? 0}</span>
-													<span>⚡ Token: {q.raw_usage?.total_tokens ?? 0}</span>
-												</div>
-											</div>
-										))}
+											);
+										})}
 									</div>
 
 									{/* 探针题列表 */}
@@ -646,24 +802,67 @@ function BrandReportsPageComponent() {
 											<span className="text-xs font-bold text-muted-foreground uppercase">
 												主体识别探针 ({evidenceData.probe_questions.length})
 											</span>
-											{evidenceData.probe_questions.map((q: any) => (
-												<div key={q.question_code} className="border rounded-lg p-3 text-xs flex flex-col gap-1.5 bg-purple-50/20 dark:bg-purple-950/10 border-purple-200 dark:border-purple-800/40">
-													<div className="flex items-center justify-between font-semibold text-purple-950 dark:text-purple-200">
-														<span>[{q.question_code}] {q.question_text}</span>
-														<span className="text-[10px] bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300 px-2 py-0.5 rounded">
-															探针 · {q.dimension_name}
-														</span>
+											{evidenceData.probe_questions.map((q: any) => {
+												const isExpanded = !!expandedQuestions[q.question_code];
+												return (
+													<div
+														key={q.question_code}
+														className="border rounded-lg p-3 text-xs flex flex-col gap-2 bg-purple-50/20 dark:bg-purple-950/10 border-purple-200 dark:border-purple-800/40"
+													>
+														<div className="flex items-center justify-between font-semibold text-purple-950 dark:text-purple-200">
+															<span>
+																[{q.question_code}] {q.question_text}
+															</span>
+															<div className="flex items-center gap-2">
+																<span className="text-[10px] bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300 px-2 py-0.5 rounded">
+																	探针 · {q.dimension_name}
+																</span>
+																<button
+																	onClick={() =>
+																		setExpandedQuestions({
+																			...expandedQuestions,
+																			[q.question_code]: !isExpanded,
+																		})
+																	}
+																	className="p-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 rounded text-purple-700"
+																>
+																	{isExpanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+																</button>
+															</div>
+														</div>
+
+														<div className="text-muted-foreground bg-background p-2.5 rounded border leading-relaxed">
+															<span className="font-semibold text-foreground">💬 探针回答：</span>
+															{isExpanded
+																? q.answer_text || "无有效回答"
+																: q.answer_text
+																	? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
+																	: "无有效回答"}
+														</div>
+
+														{q.citations?.length > 0 && isExpanded && (
+															<div className="bg-purple-50/50 dark:bg-purple-950/30 p-2 rounded text-[11px] flex flex-col gap-1">
+																<span className="font-semibold text-purple-900 dark:text-purple-300">引用明细：</span>
+																<ul className="list-disc pl-4 space-y-0.5">
+																	{q.citations.map((c: any, cIdx: number) => (
+																		<li key={cIdx} className="break-all">
+																			{c.url || c.domain || JSON.stringify(c)}
+																		</li>
+																	))}
+																</ul>
+															</div>
+														)}
+
+														<div className="flex items-center gap-4 text-muted-foreground text-[11px]">
+															<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
+															<span>🔗 引用数: {q.citations?.length ?? 0}</span>
+															<span>
+																⚡ Token: {q.raw_usage?.total_tokens !== undefined && q.raw_usage?.total_tokens !== null ? q.raw_usage.total_tokens : "未知"}
+															</span>
+														</div>
 													</div>
-													<div className="text-muted-foreground line-clamp-2 bg-background p-2 rounded border">
-														💬 探针回答：{q.answer_text || "无有效回答"}
-													</div>
-													<div className="flex items-center gap-3 text-muted-foreground">
-														<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
-														<span>🔗 引用数: {q.citations?.length ?? 0}</span>
-														<span>⚡ Token: {q.raw_usage?.total_tokens ?? 0}</span>
-													</div>
-												</div>
-											))}
+												);
+											})}
 										</div>
 									)}
 								</div>
@@ -671,7 +870,7 @@ function BrandReportsPageComponent() {
 						</div>
 					)}
 
-					{/* 步骤 4: 录入人工成因诊断与优先行动清单 (B 模块) */}
+					{/* 步骤 4: 录入人工成因诊断与优先行动清单 (E-R05: 全部真实输入，严禁预填伪造内容) */}
 					{activeRunId && (runData?.status === "completed" || runData?.status === "partial") && (
 						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 							<div className="flex items-center justify-between border-b pb-3">
@@ -679,7 +878,7 @@ function BrandReportsPageComponent() {
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
 										4
 									</span>
-									填写成因诊断与优先行动清单（B 模块人工录入）
+									填写成因诊断与优先行动清单（B 模块人工录入 · 严格真实追溯）
 								</div>
 								<div className="text-xs text-muted-foreground">
 									{activeAnalysisId ? (
@@ -694,38 +893,62 @@ function BrandReportsPageComponent() {
 
 							<div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
 								<div className="flex flex-col gap-1.5">
-									<label className="font-semibold">分析师姓名</label>
+									<label className="font-semibold">分析师姓名 *</label>
 									<input
 										type="text"
+										placeholder="如: 张分析师"
 										value={analystName}
 										onChange={(e) => setAnalystName(e.target.value)}
 										className="border rounded-md px-3 py-1.5 bg-background"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
-									<label className="font-semibold">核心执行结论</label>
+									<label className="font-semibold">核心执行结论 *</label>
 									<input
 										type="text"
+										placeholder="输入本轮诊断总体结论..."
 										value={executiveConclusion}
 										onChange={(e) => setExecutiveConclusion(e.target.value)}
 										className="border rounded-md px-3 py-1.5 bg-background"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
-									<label className="font-semibold">关键发现清单（每行一条）</label>
+									<label className="font-semibold">关键发现清单 *（每行一条）</label>
 									<textarea
 										rows={3}
+										placeholder="例如:&#10;核心业务板块提及率偏低&#10;主体探针可准确识别&#10;竞品占位显著"
 										value={keyFindings}
 										onChange={(e) => setKeyFindings(e.target.value)}
 										className="border rounded-md p-2 bg-background font-mono"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
+									<label className="font-semibold">主体识别审核结论</label>
+									<input
+										type="text"
+										placeholder="主体识别清晰，无同名企业混淆（若未填显示待核）"
+										value={brandIdentityAudit}
+										onChange={(e) => setBrandIdentityAudit(e.target.value)}
+										className="border rounded-md px-3 py-1.5 bg-background"
+									/>
+								</div>
+								<div className="flex flex-col gap-1.5 md:col-span-2">
+									<label className="font-semibold">内容资产缺口分析</label>
+									<input
+										type="text"
+										placeholder="输入官方公开内容资产或索引缺口..."
+										value={contentGapsInput}
+										onChange={(e) => setContentGapsInput(e.target.value)}
+										className="border rounded-md px-3 py-1.5 bg-background"
+									/>
+								</div>
+								<div className="flex flex-col gap-1.5 md:col-span-2">
 									<label className="font-semibold">
-										优先行动清单 (格式: 题码|行动建议|优先级|理由|交付件|验证方法)
+										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P1/P2/P3) | 决策依据 | 交付物 | 验证方式)
 									</label>
 									<textarea
 										rows={3}
+										placeholder="Q01 | 在海外官网增设标杆案例专页 | P1 | 契合主流寻源问法 | 官方技术专题 | 次月复测"
 										value={actionPlanInput}
 										onChange={(e) => setActionPlanInput(e.target.value)}
 										className="border rounded-md p-2 bg-background font-mono"
@@ -736,7 +959,13 @@ function BrandReportsPageComponent() {
 							<div className="flex items-center justify-end pt-2">
 								<button
 									onClick={() => saveAnalysisMutation.mutate()}
-									disabled={saveAnalysisMutation.isPending}
+									disabled={
+										saveAnalysisMutation.isPending ||
+										!analystName.trim() ||
+										!executiveConclusion.trim() ||
+										!keyFindings.trim() ||
+										!actionPlanInput.trim()
+									}
 									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
 								>
 									<IconDeviceFloppy size={15} />
@@ -746,7 +975,7 @@ function BrandReportsPageComponent() {
 						</div>
 					)}
 
-					{/* 步骤 5: 生成报告修订、审核与受控下载 */}
+					{/* 步骤 5: 生成报告修订、审核与受控下载 (E-R06: 支持 rev_02 递增，不撞 rev_01) */}
 					{activeAnalysisId && (
 						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
@@ -757,26 +986,37 @@ function BrandReportsPageComponent() {
 									生成报告修订、审核门禁与受控下载
 								</div>
 								<div className="text-xs text-muted-foreground">
-									修订标识: {activeRevisionId || "待生成"}
+									当前产物修订号: <span className="font-mono font-bold text-foreground">{activeRevisionId || "待生成"}</span>
 								</div>
 							</div>
 
 							{/* 生成操作 */}
-							<div className="flex items-center justify-between bg-muted/30 p-3 rounded-lg text-xs">
-								<div>
-									<div className="font-semibold">装配不可变修订版本（rev_01）</div>
-									<div className="text-muted-foreground mt-0.5">
+							<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-muted/30 p-3 rounded-lg text-xs">
+								<div className="flex flex-col gap-1">
+									<div className="font-semibold">装配不可变修订版本</div>
+									<div className="text-muted-foreground">
 										将已有采集归档与当前人工分析版本装配，同版渲染导出 JSON, HTML, PDF 清单
 									</div>
 								</div>
-								<button
-									onClick={() => generateRevisionMutation.mutate("rev_01")}
-									disabled={generateRevisionMutation.isPending}
-									className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50"
-								>
-									<IconFileText size={15} />
-									{generateRevisionMutation.isPending ? "装配渲染中..." : "生成报告修订 (rev_01)"}
-								</button>
+								<div className="flex items-center gap-2">
+									<input
+										type="text"
+										value={revisionInput}
+										onChange={(e) => setRevisionInput(e.target.value)}
+										placeholder="rev_01"
+										className="border rounded px-2.5 py-1.5 w-24 bg-background font-mono text-xs"
+									/>
+									<button
+										onClick={() => generateRevisionMutation.mutate(revisionInput)}
+										disabled={generateRevisionMutation.isPending || !revisionInput.trim()}
+										className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 shrink-0"
+									>
+										<IconFileText size={15} />
+										{generateRevisionMutation.isPending
+											? "装配渲染中..."
+											: `生成修订 (${revisionInput})`}
+									</button>
+								</div>
 							</div>
 
 							{/* 审核与受控下载操作区 */}
@@ -784,9 +1024,9 @@ function BrandReportsPageComponent() {
 								<div className="flex flex-col gap-4 border-t pt-4">
 									<div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-muted/40 p-4 rounded-xl">
 										<div>
-											<span className="font-bold text-sm">报告审核门禁 (机器前置校验)</span>
+											<span className="font-bold text-sm">报告审核门禁 (机器前置校验 + 角色强门禁)</span>
 											<p className="text-xs text-muted-foreground mt-1">
-												严格机器门禁：合成数据报告严禁批准为正式客户件；点击“批准正式交付”将触发合规拦截；“退回草稿”将合规留痕。
+												严格机器门禁：合成数据报告严禁批准为正式客户件；非 Admin/Owner 角色无权批准。点击“批准正式交付”将触发合规拦截；“退回草稿”将合规留痕。
 											</p>
 										</div>
 										<div className="flex items-center gap-2 shrink-0">
@@ -873,7 +1113,10 @@ function BrandReportsPageComponent() {
 					{legacyReports && legacyReports.length > 0 ? (
 						<div className="grid md:grid-cols-2 gap-4">
 							{legacyReports.map((r) => (
-								<div key={r.file} className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-3">
+								<div
+									key={r.file}
+									className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-3"
+								>
 									<div className="flex items-center justify-between">
 										<div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
 											{r.clientCode} · {new Date(r.generatedAt).toLocaleString(isZh ? "zh-CN" : "en-US")}
@@ -893,7 +1136,9 @@ function BrandReportsPageComponent() {
 										<div className="font-semibold text-right">{r.meta.totalSamples ?? "—"}</div>
 										<div className="text-muted-foreground">数据窗口</div>
 										<div className="font-semibold text-right">
-											{r.meta.startDate && r.meta.endDate ? `${r.meta.startDate} ~ ${r.meta.endDate}` : "—"}
+											{r.meta.startDate && r.meta.endDate
+												? `${r.meta.startDate} ~ ${r.meta.endDate}`
+												: "—"}
 										</div>
 									</div>
 									{r.pdfUrl ? (

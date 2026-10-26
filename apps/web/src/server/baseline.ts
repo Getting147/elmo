@@ -1,92 +1,17 @@
 /**
- * /server/baseline.ts — elmo 与 Python 豆包基线微服务 (REPORT-001D/E) 服务端适配层
+ * /server/baseline.ts — elmo 与 Python 豆包基线微服务 (REPORT-001D/E) 服务端函数层
  *
- * 职责与约束：
- * 1. 严格复用 elmo 会话鉴权 (requireAuthSession) 与组织/品牌权限 (requireOrgAccess)；
- * 2. 服务端从 brand 查 organization，严禁假定 brandId === organizationId；
- * 3. 内部通信携带 X-Service-Token 与受控租户头，浏览器绝不直连 Python 后端，不暴露内部 Token 或 Key；
- * 4. 仅作为安全代理，不重算分母，不修改 A 模块指标契约，不伪造审核结果。
+ * 架构规范：
+ * 1. 严格只导出 createServerFn 服务端函数，绝不在此导出原生 Node/DB 依赖；
+ * 2. 数据库与敏感通信统一封装在 baseline.server.ts，由 .handler 内部动态按需加载，杜绝 Client Bundle 污染与 Buffer 崩溃；
+ * 3. 严格核验组织归属 (requireBaselineOperatorAccess) 与审核权限门禁 (requireBaselineReviewerAccess)；
+ * 4. 保持稳定的原问题 ID 映射 (original_prompt_id) 与题型编号 (Q01 / PR01)；
+ * 5. 缺失分类严禁静默伪造，阻断并提示人工补齐。
  */
 
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { db } from "@workspace/lib/db/db";
-import { brands, competitors, prompts, organization } from "@workspace/lib/db/schema";
-import { eq, and, isNull } from "drizzle-orm";
-import { requireAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
-
-export const BASELINE_API_URL =
-	process.env.BASELINE_API_URL || "http://127.0.0.1:8000";
-export const BASELINE_SERVICE_TOKEN =
-	process.env.BASELINE_SERVICE_TOKEN || "test-baseline-internal-token-secret-20261025";
-
-/**
- * 辅助：根据 brandId 安全解析其 organizationId 与品牌记录
- */
-export async function getBrandAndOrg(brandId: string) {
-	const [brand] = await db
-		.select()
-		.from(brands)
-		.where(and(eq(brands.id, brandId), isNull(brands.deletedAt)))
-		.limit(1);
-
-	if (!brand) {
-		throw new Error(`未找到品牌档案或该品牌已被删除: ${brandId}`);
-	}
-
-	return {
-		brand,
-		organizationId: brand.organizationId,
-	};
-}
-
-/**
- * 内部统一发起向 Python 后端的鉴权 HTTP 调用
- */
-export async function callBaselineBackend<T = any>(args: {
-	method: "GET" | "POST" | "PUT" | "DELETE";
-	path: string;
-	organizationId: string;
-	brandId: string;
-	callerId?: string;
-	body?: any;
-	adminToken?: string;
-}): Promise<T> {
-	const url = `${BASELINE_API_URL}${args.path}`;
-	const headers: Record<string, string> = {
-		"X-Service-Token": BASELINE_SERVICE_TOKEN,
-		"X-Organization-Id": args.organizationId,
-		"X-Brand-Id": args.brandId,
-		"X-Caller-Id": args.callerId || "elmo-server",
-		"Content-Type": "application/json",
-	};
-
-	if (args.adminToken) {
-		headers["X-Admin-Token"] = args.adminToken;
-	}
-
-	const resp = await fetch(url, {
-		method: args.method,
-		headers,
-		body: args.body ? JSON.stringify(args.body) : undefined,
-	});
-
-	if (!resp.ok) {
-		let errJson: any = null;
-		try {
-			errJson = await resp.json();
-		} catch {
-			// fallback
-		}
-		const msg = errJson?.detail?.message || errJson?.message || `HTTP ${resp.status} ${resp.statusText}`;
-		const err = new Error(msg);
-		(err as any).statusCode = resp.status;
-		(err as any).errorCategory = errJson?.detail?.error || errJson?.error;
-		throw err;
-	}
-
-	return (await resp.json()) as T;
-}
+import { requireAuthSession } from "@/lib/auth/helpers";
 
 // ============================================================================
 // 1. 获取当前品牌档案、多业务题集与基线输入摘要
@@ -96,48 +21,100 @@ export const getBrandBaselineProfileFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		const { db } = await import("@workspace/lib/db/db");
+		const { competitors, prompts, brandProductLines, brandCredentials } = await import("@workspace/lib/db/schema");
+		const { eq, and, asc } = await import("drizzle-orm");
 
 		const compList = await db
 			.select()
 			.from(competitors)
 			.where(eq(competitors.brandId, brand.id));
 
+		const productLinesList = await db
+			.select()
+			.from(brandProductLines)
+			.where(eq(brandProductLines.brandId, brand.id))
+			.orderBy(asc(brandProductLines.position));
+
+		const credentialsList = await db
+			.select()
+			.from(brandCredentials)
+			.where(eq(brandCredentials.brandId, brand.id));
+
 		const promptList = await db
 			.select()
 			.from(prompts)
-			.where(and(eq(prompts.brandId, brand.id), eq(prompts.enabled, true)));
+			.where(and(eq(prompts.brandId, brand.id), eq(prompts.enabled, true)))
+			.orderBy(asc(prompts.createdAt), asc(prompts.id));
 
-		const parsedPrompts = promptList.map((p, idx) => {
-			const isProbe = p.systemTags?.includes("probe") || p.tags?.includes("probe") || p.tags?.includes("is_probe") || false;
-			// 维度映射
-			const dimTag = p.tags?.find((t) => t.startsWith("dim:"))?.replace(/^dim:/, "") || "基础业务维度";
+		let formalIdx = 0;
+		let probeIdx = 0;
+
+		const parsedPrompts = promptList.map((p) => {
+			const isProbe =
+				p.systemTags?.includes("probe") ||
+				p.tags?.includes("probe") ||
+				p.tags?.includes("is_probe") ||
+				false;
+
+			const dimTag =
+				p.tags?.find((t) => t.startsWith("dim:"))?.replace(/^dim:/, "") ||
+				p.tags?.find((t) => t.startsWith("cat:"))?.replace(/^cat:/, "") ||
+				"";
+
+			const code = isProbe
+				? `PR${String(++probeIdx).padStart(2, "0")}`
+				: `Q${String(++formalIdx).padStart(2, "0")}`;
+
 			return {
 				id: p.id,
-				code: `P${String(idx + 1).padStart(2, "0")}`,
+				original_prompt_id: p.id,
+				code,
 				text: p.value,
 				keywordText: p.value.slice(0, 20),
-				dimensionName: dimTag,
+				dimensionName: dimTag || "未分类",
+				unclassified: !dimTag,
 				isProbe,
 			};
 		});
 
 		const formalCount = parsedPrompts.filter((p) => !p.isProbe).length;
 		const probeCount = parsedPrompts.filter((p) => p.isProbe).length;
+		const unclassifiedCount = parsedPrompts.filter((p) => p.unclassified).length;
 
 		return {
 			brand: {
 				id: brand.id,
 				name: brand.name,
 				website: brand.website,
+				additionalDomains: brand.additionalDomains || [],
 				aliases: brand.aliases || [],
+				summary: brand.summary || "",
+				description: brand.description || "",
+				productLines: productLinesList.map((pl) => ({
+					name: pl.name,
+					category: pl.category,
+					differentiators: pl.differentiators,
+				})),
+				credentials: credentialsList.map((cr) => ({
+					name: cr.name,
+					credType: cr.credType,
+				})),
 				organizationId,
 			},
 			competitors: compList.map((c) => ({
 				id: c.id,
 				name: c.name,
 				website: c.domains?.[0] || "",
+				domains: c.domains || [],
 				aliases: c.aliases || [],
 			})),
 			prompts: parsedPrompts,
@@ -145,6 +122,7 @@ export const getBrandBaselineProfileFn = createServerFn({ method: "GET" })
 				totalPrompts: parsedPrompts.length,
 				formalCount,
 				probeCount,
+				unclassifiedCount,
 			},
 		};
 	});
@@ -158,49 +136,123 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 		z.object({
 			brandId: z.string(),
 			versionLabel: z.string().default("v1.0"),
+			// 可选的人工补充分类映射: { [promptId]: "维度名称" }
+			dimensionOverrides: z.record(z.string(), z.string()).optional(),
 		}),
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		const { db } = await import("@workspace/lib/db/db");
+		const { competitors, prompts, brandProductLines, brandCredentials } = await import("@workspace/lib/db/schema");
+		const { eq, and, asc } = await import("drizzle-orm");
 
 		const compList = await db
 			.select()
 			.from(competitors)
 			.where(eq(competitors.brandId, brand.id));
 
+		const productLinesList = await db
+			.select()
+			.from(brandProductLines)
+			.where(eq(brandProductLines.brandId, brand.id))
+			.orderBy(asc(brandProductLines.position));
+
+		const credentialsList = await db
+			.select()
+			.from(brandCredentials)
+			.where(eq(brandCredentials.brandId, brand.id));
+
 		const promptList = await db
 			.select()
 			.from(prompts)
-			.where(and(eq(prompts.brandId, brand.id), eq(prompts.enabled, true)));
+			.where(and(eq(prompts.brandId, brand.id), eq(prompts.enabled, true)))
+			.orderBy(asc(prompts.createdAt), asc(prompts.id));
 
 		if (promptList.length === 0) {
 			throw new Error("当前品牌无可用问题，请先在问题管理中录入至少一个问题");
 		}
 
-		const parsedPrompts = promptList.map((p, idx) => {
-			const isProbe = p.systemTags?.includes("probe") || p.tags?.includes("probe") || p.tags?.includes("is_probe") || false;
-			const dimTag = p.tags?.find((t) => t.startsWith("dim:"))?.replace(/^dim:/, "") || "核心业务板块";
+		let formalIdx = 0;
+		let probeIdx = 0;
+		const unclassifiedList: string[] = [];
+
+		const parsedPrompts = promptList.map((p) => {
+			const isProbe =
+				p.systemTags?.includes("probe") ||
+				p.tags?.includes("probe") ||
+				p.tags?.includes("is_probe") ||
+				false;
+
+			const overrideDim = data.dimensionOverrides?.[p.id];
+			const dimTag =
+				overrideDim ||
+				p.tags?.find((t) => t.startsWith("dim:"))?.replace(/^dim:/, "") ||
+				p.tags?.find((t) => t.startsWith("cat:"))?.replace(/^cat:/, "") ||
+				"";
+
+			if (!dimTag) {
+				unclassifiedList.push(p.value);
+			}
+
+			const code = isProbe
+				? `PR${String(++probeIdx).padStart(2, "0")}`
+				: `Q${String(++formalIdx).padStart(2, "0")}`;
+
 			return {
-				code: isProbe ? `PR${String(idx + 1).padStart(2, "0")}` : `P${String(idx + 1).padStart(2, "0")}`,
+				code,
+				original_prompt_id: p.id,
 				text: p.value,
 				keyword_text: p.value.slice(0, 20),
-				dimension_name: dimTag,
+				dimension_name: dimTag || "未分类业务板块",
 				is_probe: isProbe,
 			};
 		});
 
-		const domain = brand.website ? [brand.website.replace(/^https?:\/\//, "").replace(/\/.*$/, "")] : [];
+		// 严格质量门禁：分类缺失阻断冻结并要求人工补齐 (E-R04)
+		if (unclassifiedList.length > 0) {
+			throw new Error(
+				`存在 ${unclassifiedList.length} 道未分类问题（例如: "${unclassifiedList[0]}"），必须人工指定业务板块或分类后再冻结输入。`,
+			);
+		}
+
+		// 规范提取品牌主域名与附加域名
+		const domains: string[] = [];
+		if (brand.website) {
+			domains.push(brand.website.replace(/^https?:\/\//, "").replace(/\/.*$/, ""));
+		}
+		if (Array.isArray(brand.additionalDomains)) {
+			for (const d of brand.additionalDomains) {
+				const clean = d.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+				if (clean && !domains.includes(clean)) domains.push(clean);
+			}
+		}
 
 		const freezePayload = {
 			profile: {
 				brand_id: brand.id,
 				brand_name: brand.name,
 				aliases: brand.aliases || [brand.name],
-				domains: domain,
+				domains,
 				disambiguation_keywords: [],
 				industry_keywords: [],
+				product_lines: productLinesList.map((pl) => ({
+					name: pl.name,
+					category: pl.category,
+					differentiators: pl.differentiators,
+				})),
+				credentials: credentialsList.map((cr) => ({
+					name: cr.name,
+					credType: cr.credType,
+				})),
 				competitors: compList.map((c) => ({
 					name: c.name,
 					aliases: c.aliases || [],
@@ -211,7 +263,7 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 			snapshot_meta: {
 				snapshot_id: `snap_${brand.id.toLowerCase()}_${Date.now()}`,
 				version_label: data.versionLabel,
-				confirmed_by: (session.user as any).name || session.user.id,
+				confirmed_by: session.user.id,
 				confirmed_at: new Date().toISOString().split("T")[0],
 			},
 		};
@@ -221,7 +273,7 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 			path: "/api/baseline/v1/inputs/freeze",
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 			body: freezePayload,
 		});
 	});
@@ -235,34 +287,103 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		z.object({
 			brandId: z.string(),
 			snapshotId: z.string(),
-			requestBudget: z.number().int().min(1).max(100).default(30),
+			mode: z.enum(["synthetic", "real"]).default("synthetic"),
+			requestBudget: z.number().int().min(1).max(500).default(30),
 			maxRetries: z.number().int().min(0).max(3).default(0),
 			idempotencyKey: z.string().optional(),
+			modelName: z.string().optional(),
+			webSearch: z.boolean().optional(),
+			maxOutputTokens: z.number().int().optional(),
+			maxToolCalls: z.number().int().optional(),
 		}),
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		const runId = `run_${brand.id.toLowerCase()}_${Date.now()}`;
-		const idempotencyKey = data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${data.snapshotId}`;
+		const idempotencyKey =
+			data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${data.snapshotId}`;
 
-		const payload = {
+		const payload: Record<string, any> = {
 			snapshot_id: data.snapshotId,
-			mode: "synthetic", // REPORT-001E: 首期使用合成模式进行受控验证
+			mode: data.mode,
 			run_id: runId,
 			idempotency_key: idempotencyKey,
 			request_budget: data.requestBudget,
 			max_retries: data.maxRetries,
 		};
+		if (data.modelName) payload.model_name = data.modelName;
+		if (data.webSearch !== undefined) payload.web_search = data.webSearch;
+		if (data.maxOutputTokens !== undefined) payload.max_output_tokens = data.maxOutputTokens;
+		if (data.maxToolCalls !== undefined) payload.max_tool_calls = data.maxToolCalls;
 
 		return callBaselineBackend({
 			method: "POST",
 			path: "/api/baseline/v1/runs",
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
+			body: payload,
+		});
+	});
+
+export const registerBaselineServerAuthFn = createServerFn({ method: "POST" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			snapshotId: z.string(),
+			runId: z.string().optional(),
+			snapshotHash: z.string().optional(),
+			modelName: z.string().default("doubao-seed-2-1-pro-260628"),
+			webSearch: z.boolean().default(true),
+			maxOutputTokens: z.number().int().optional(),
+			maxToolCalls: z.number().int().optional(),
+			requestLimit: z.number().int().min(1).max(500).default(30),
+			retryLimit: z.number().int().min(0).max(3).default(0),
+			targetBaseUrl: z.string().optional(),
+			expiresAt: z.string().optional(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineReviewerAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineReviewerAccess(session, organizationId);
+
+		const payload = {
+			snapshot_id: data.snapshotId,
+			run_id: data.runId,
+			snapshot_hash: data.snapshotHash,
+			model_name: data.modelName,
+			web_search: data.webSearch,
+			max_output_tokens: data.maxOutputTokens,
+			max_tool_calls: data.maxToolCalls,
+			request_limit: data.requestLimit,
+			retry_limit: data.retryLimit,
+			target_base_url: data.targetBaseUrl,
+			expires_at: data.expiresAt,
+			authorized_by: session.user.id,
+		};
+
+		return callBaselineBackend({
+			method: "POST",
+			path: "/api/baseline/v1/auth/authorizations",
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
 			body: payload,
 		});
 	});
@@ -275,15 +396,21 @@ export const getBaselineRunFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string(), runId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		return callBaselineBackend({
 			method: "GET",
 			path: `/api/baseline/v1/runs/${data.runId}`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 		});
 	});
 
@@ -295,15 +422,21 @@ export const getBaselineEvidenceFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string(), runId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		return callBaselineBackend({
 			method: "GET",
 			path: `/api/baseline/v1/runs/${data.runId}/evidence`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 		});
 	});
 
@@ -315,15 +448,21 @@ export const getBaselineMetricsFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string(), runId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		return callBaselineBackend({
 			method: "GET",
 			path: `/api/baseline/v1/runs/${data.runId}/metrics`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 		});
 	});
 
@@ -339,43 +478,55 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			analystName: z.string().min(1),
 			executiveConclusion: z.string().min(1),
 			keyFindings: z.array(z.string()).min(1),
-			brandIdentityAudit: z.string().default("主体识别清晰"),
-			rootCauses: z.array(
-				z.object({
-					cause_id: z.string(),
-					title: z.string(),
-					observed_facts: z.array(z.string()),
-					analytic_judgements: z.array(z.string()),
-					unverified_hypotheses: z.array(z.string()).default([]),
-				}),
-			).default([]),
-			channelGaps: z.array(
-				z.object({
-					channel_type: z.string(),
-					citation_count: z.number().int(),
-					citation_share_text: z.string(),
-					actionability: z.string(),
-					strategic_note: z.string(),
-				}),
-			).default([]),
-			contentGaps: z.string().default(""),
-			actionPlan: z.array(
-				z.object({
-					finding: z.string(),
-					evidence_refs: z.array(z.string()),
-					action: z.string(),
-					priority: z.enum(["P1", "P2", "P3"]),
-					priority_rationale: z.string(),
-					deliverable: z.string(),
-					verification_method: z.string(),
-				}),
-			).min(1),
+			brandIdentityAudit: z.string().default("待人工核实与完善"),
+			rootCauses: z
+				.array(
+					z.object({
+						cause_id: z.string(),
+						title: z.string(),
+						observed_facts: z.array(z.string()),
+						analytic_judgements: z.array(z.string()),
+						unverified_hypotheses: z.array(z.string()).default([]),
+					}),
+				)
+				.default([]),
+			channelGaps: z
+				.array(
+					z.object({
+						channel_type: z.string(),
+						citation_count: z.number().int(),
+						citation_share_text: z.string(),
+						actionability: z.string(),
+						strategic_note: z.string(),
+					}),
+				)
+				.default([]),
+			contentGaps: z.string().default("待人工补充内容资产缺口"),
+			actionPlan: z
+				.array(
+					z.object({
+						finding: z.string(),
+						evidence_refs: z.array(z.string()),
+						action: z.string(),
+						priority: z.enum(["P1", "P2", "P3"]),
+						priority_rationale: z.string(),
+						deliverable: z.string(),
+						verification_method: z.string(),
+					}),
+				)
+				.min(1),
 		}),
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		const payload = {
 			analyst_name: data.analystName,
@@ -393,7 +544,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			path: `/api/baseline/v1/runs/${data.runId}/analysis`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 			body: payload,
 		});
 	});
@@ -410,18 +561,25 @@ export const generateBaselineReportRevisionFn = createServerFn({ method: "POST" 
 			revisionId: z.string().default("rev_01"),
 			analysisId: z.string(),
 			clientSlug: z.string().optional(),
-			draftNotice: z.string().default("内部评估草稿（rev_01）"),
+			draftNotice: z.string().default("内部评估草稿"),
 		}),
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		const payload = {
 			revision_id: data.revisionId,
 			analysis_id: data.analysisId,
-			client_slug: data.clientSlug || brand.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, "_"),
+			client_slug:
+				data.clientSlug || brand.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, "_"),
 			draft_notice: data.draftNotice,
 		};
 
@@ -430,7 +588,7 @@ export const generateBaselineReportRevisionFn = createServerFn({ method: "POST" 
 			path: `/api/baseline/v1/runs/${data.runId}/reports`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 			body: payload,
 		});
 	});
@@ -451,12 +609,20 @@ export const reviewBaselineReportRevisionFn = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineReviewerAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		// 角色强门禁：普通 member 严禁审核批准，必须为 org owner/admin (E-R07)
+		await requireBaselineReviewerAccess(session, organizationId);
 
 		const payload = {
 			action: data.action,
 			reason: data.reason,
+			reviewer: session.user.id,
 		};
 
 		return callBaselineBackend({
@@ -464,7 +630,7 @@ export const reviewBaselineReportRevisionFn = createServerFn({ method: "POST" })
 			path: `/api/baseline/v1/reports/${data.reportId}/revisions/${data.revisionId}/review`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 			body: payload,
 		});
 	});
@@ -483,15 +649,21 @@ export const getBaselineReportRevisionFn = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		return callBaselineBackend({
 			method: "GET",
 			path: `/api/baseline/v1/reports/${data.reportId}/revisions/${data.revisionId}`,
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 		});
 	});
 
@@ -503,14 +675,20 @@ export const listBaselineRunsFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
-		await requireOrgAccess(session.user.id, organizationId);
+		await requireBaselineOperatorAccess(session, organizationId);
 
 		return callBaselineBackend({
 			method: "GET",
-			path: "/api/baseline/v1/runs?limit=20&offset=0",
+			path: "/api/baseline/v1/runs?limit=30&offset=0",
 			organizationId,
 			brandId: brand.id,
-			callerId: (session.user as any).name || session.user.id,
+			callerId: session.user.id,
 		});
 	});
