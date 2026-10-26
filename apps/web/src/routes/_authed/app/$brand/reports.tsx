@@ -70,6 +70,7 @@ function BrandReportsPage() {
 	const [brandIdentityAudit, setBrandIdentityAudit] = useState<string>("");
 	const [contentGapsInput, setContentGapsInput] = useState<string>("");
 	const [actionPlanInput, setActionPlanInput] = useState<string>("");
+	const [rawActionPlan, setRawActionPlan] = useState<any[]>([]);
 
 	const brandName = brand?.name || brandId || "";
 
@@ -181,13 +182,16 @@ function BrandReportsPage() {
 					: analysisData.payload?.content_gaps || "",
 			);
 			if (Array.isArray(analysisData.payload?.action_plan)) {
+				setRawActionPlan(analysisData.payload.action_plan);
 				setActionPlanInput(
 					analysisData.payload.action_plan
 						.map((ap: any) => {
 							const promptCode =
 								Array.isArray(ap.evidence_refs) && ap.evidence_refs.length > 0
-									? ap.evidence_refs[0]
-									: "";
+									? ap.evidence_refs.join(", ")
+									: typeof ap.evidence_refs === "string"
+										? ap.evidence_refs
+										: "";
 							const action = ap.action || "";
 							const priority = ap.priority || "P2";
 							const rationale = ap.priority_rationale || "";
@@ -228,6 +232,7 @@ function BrandReportsPage() {
 		setBrandIdentityAudit("");
 		setContentGapsInput("");
 		setActionPlanInput("");
+		setRawActionPlan([]);
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
 		setActionError(null);
@@ -281,16 +286,47 @@ function BrandReportsPage() {
 				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P1/P2/P3) | 决策依据 | 交付物 | 验证方式");
 			}
 
-			const actionPlan = lines.map((line) => {
+			const actionPlan = lines.map((line, idx) => {
 				const parts = line.split("|").map((s) => s.trim());
+				const rawItem = rawActionPlan[idx];
+				const evidenceRefs = parts[0]
+					? parts[0]
+							.split(/[,，]/)
+							.map((s) => s.trim())
+							.filter(Boolean)
+					: [];
+
+				const action = parts[1] || "待补充行动方案";
+				const priority = (["P1", "P2", "P3"].includes(parts[2]) ? parts[2] : "P2") as "P1" | "P2" | "P3";
+				const rationale = parts[3] || "待补充优先级依据";
+				const deliverable = parts[4] || "待补充交付件";
+				const verification = parts[5] || "待补充验证方法";
+
+				// 若当前项与原项未变动，且原项存在合法 finding，则原样继承原项 finding (E4-R02)
+				const isUnchangedFromRaw =
+					rawItem &&
+					Array.isArray(rawItem.evidence_refs) &&
+					rawItem.evidence_refs.length === evidenceRefs.length &&
+					rawItem.evidence_refs.every((ref: string, i: number) => ref === evidenceRefs[i]) &&
+					rawItem.action === action &&
+					rawItem.priority === priority &&
+					rawItem.deliverable === deliverable;
+
+				const finding =
+					isUnchangedFromRaw && rawItem.finding
+						? rawItem.finding
+						: parts[0]
+							? `针对 ${parts[0]} 的实测发现`
+							: "待补充实测发现";
+
 				return {
-					finding: parts[0] ? `针对 ${parts[0]} 的实测发现` : "待补充实测发现",
-					evidence_refs: parts[0] ? [parts[0]] : [],
-					action: parts[1] || "待补充行动方案",
-					priority: (["P1", "P2", "P3"].includes(parts[2]) ? parts[2] : "P2") as "P1" | "P2" | "P3",
-					priority_rationale: parts[3] || "待补充优先级依据",
-					deliverable: parts[4] || "待补充交付件",
-					verification_method: parts[5] || "待补充验证方法",
+					finding,
+					evidence_refs: evidenceRefs,
+					action,
+					priority,
+					priority_rationale: rationale,
+					deliverable,
+					verification_method: verification,
 				};
 			});
 
