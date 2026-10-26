@@ -309,20 +309,58 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
 		await requireBaselineOperatorAccess(session, organizationId);
 
-		const runId = data.runId || `run_${brand.id.toLowerCase()}_${Date.now()}`;
+		let runId = data.runId;
+		let modelName = data.modelName;
+		let webSearch = data.webSearch;
+		let requestBudget = data.requestBudget;
+		let maxRetries = data.maxRetries;
+
+		// real 模式下若未显式指定 runId，自动查询并绑定当前快照未消费的活跃服务端授权 (E5-R01)
+		if (data.mode === "real" && !runId) {
+			try {
+				const authRes = await callBaselineBackend({
+					method: "GET",
+					path: `/api/baseline/v1/auth/authorizations?snapshot_id=${encodeURIComponent(data.snapshotId)}`,
+					organizationId,
+					brandId: brand.id,
+					callerId: session.user.id,
+				});
+				if (authRes?.authorization?.run_id) {
+					runId = authRes.authorization.run_id;
+					if (!modelName && authRes.authorization.model_name) {
+						modelName = authRes.authorization.model_name;
+					}
+					if (webSearch === undefined && authRes.authorization.web_search !== undefined) {
+						webSearch = Boolean(authRes.authorization.web_search);
+					}
+					if (authRes.authorization.request_limit) {
+						requestBudget = authRes.authorization.request_limit;
+					}
+					if (authRes.authorization.retry_limit !== undefined) {
+						maxRetries = authRes.authorization.retry_limit;
+					}
+				}
+			} catch {
+				// 保持容错，若后端不可达或无授权，交由后端门禁判定
+			}
+		}
+
+		if (!runId) {
+			runId = `run_${brand.id.toLowerCase()}_${Date.now()}`;
+		}
 		const idempotencyKey =
-			data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${data.snapshotId}`;
+			data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${runId}`;
 
 		const payload: Record<string, any> = {
 			snapshot_id: data.snapshotId,
 			mode: data.mode,
 			run_id: runId,
 			idempotency_key: idempotencyKey,
-			request_budget: data.requestBudget,
-			max_retries: data.maxRetries,
+			request_budget: requestBudget,
+			max_retries: maxRetries,
 		};
-		if (data.modelName) payload.model_name = data.modelName;
-		if (data.webSearch !== undefined) payload.web_search = data.webSearch;
+		if (modelName) payload.model_name = modelName;
+		if (webSearch !== undefined) payload.web_search = webSearch;
 		if (data.maxOutputTokens !== undefined) payload.max_output_tokens = data.maxOutputTokens;
 		if (data.maxToolCalls !== undefined) payload.max_tool_calls = data.maxToolCalls;
 
@@ -387,6 +425,37 @@ export const registerBaselineServerAuthFn = createServerFn({ method: "POST" })
 			callerId: session.user.id,
 			body: payload,
 		});
+	});
+
+export const getBaselineActiveAuthFn = createServerFn({ method: "GET" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			snapshotId: z.string(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		try {
+			return await callBaselineBackend({
+				method: "GET",
+				path: `/api/baseline/v1/auth/authorizations?snapshot_id=${encodeURIComponent(data.snapshotId)}`,
+				organizationId,
+				brandId: brand.id,
+				callerId: session.user.id,
+			});
+		} catch {
+			return { authorization: null };
+		}
 	});
 
 // ============================================================================

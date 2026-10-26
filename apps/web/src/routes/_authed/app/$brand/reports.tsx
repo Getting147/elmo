@@ -16,6 +16,7 @@ import {
 	listBaselineRunsFn,
 	getBaselineAnalysisFn,
 	getBaselineReportFn,
+	getBaselineActiveAuthFn,
 } from "@/server/baseline";
 import {
 	IconFileText,
@@ -239,6 +240,18 @@ function BrandReportsPage() {
 		setReviewNotice(null);
 	};
 
+	// 5.3. 查询当前快照的有效服务端预授权 (E5-R01)
+	const { data: activeAuthData, refetch: refetchActiveAuth } = useQuery({
+		queryKey: ["baselineActiveAuth", brandId, frozenSnapshot?.snapshot_id],
+		queryFn: () =>
+			frozenSnapshot
+				? getBaselineActiveAuthFn({
+						data: { brandId: brandId!, snapshotId: frozenSnapshot.snapshot_id },
+					})
+				: Promise.resolve({ authorization: null }),
+		enabled: Boolean(brandId && frozenSnapshot?.snapshot_id && executionMode === "real"),
+	});
+
 	// Mutations
 	const freezeMutation = useMutation({
 		mutationFn: (versionLabel: string) =>
@@ -252,21 +265,36 @@ function BrandReportsPage() {
 		onSuccess: (res) => {
 			setFrozenSnapshot(res);
 			setActionError(null);
+			refetchActiveAuth();
 		},
 		onError: (err: any) => setActionError(`冻结输入失败: ${err.message}`),
 	});
 
 	const createRunMutation = useMutation({
-		mutationFn: (snapshotId: string) =>
-			createBaselineRunFn({
+		mutationFn: (snapshotId: string) => {
+			const activeAuth = activeAuthData?.authorization;
+			return createBaselineRunFn({
 				data: {
 					brandId: brandId!,
 					snapshotId,
 					mode: executionMode,
+					runId:
+						executionMode === "real" && activeAuth?.run_id
+							? activeAuth.run_id
+							: undefined,
+					modelName:
+						executionMode === "real" && activeAuth?.model_name
+							? activeAuth.model_name
+							: undefined,
+					webSearch:
+						executionMode === "real" && activeAuth?.web_search !== undefined
+							? Boolean(activeAuth.web_search)
+							: undefined,
 					requestBudget: 30,
 					maxRetries: 0,
 				},
-			}),
+			});
+		},
 		onSuccess: (res) => {
 			setActiveRunId(res.run_id);
 			setActiveAnalysisId("");
@@ -648,7 +676,7 @@ function BrandReportsPage() {
 					</div>
 
 					{/* 步骤 2: 手动发起单次有限监测 (前置摘要 + 模式选择 + 防并发) */}
-					<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
+					<div data-no-i18n="true" className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 						<div className="flex items-center justify-between border-b pb-3">
 							<div className="flex items-center gap-2 font-semibold text-base">
 								<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -695,6 +723,39 @@ function BrandReportsPage() {
 									</span>
 								</div>
 							</div>
+							{executionMode === "real" && (
+								<div className="mt-1 p-2.5 rounded-lg border bg-muted/40 text-xs">
+									<div className="flex items-center gap-1.5 font-semibold">
+										<span
+											className={`w-2 h-2 rounded-full ${
+												activeAuthData?.authorization ? "bg-green-500" : "bg-amber-500"
+											}`}
+										/>
+										预授权状态：
+										{activeAuthData?.authorization ? (
+											<span className="text-green-700 dark:text-green-300 font-mono">
+												已就绪 ({activeAuthData.authorization.run_id})
+											</span>
+										) : (
+											<span className="text-amber-700 dark:text-amber-300">
+												待服务端登记授权（未授权将触发拦截守卫）
+											</span>
+										)}
+									</div>
+									{activeAuthData?.authorization && (
+										<div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[11px]">
+											<div>
+												模型: {activeAuthData.authorization.model_name} · 联网:{" "}
+												{activeAuthData.authorization.web_search ? "开启" : "关闭"}
+											</div>
+											<div>
+												预算: {activeAuthData.authorization.request_limit} 次 · 重试:{" "}
+												{activeAuthData.authorization.retry_limit} 次
+											</div>
+										</div>
+									)}
+								</div>
+							)}
 							<p className="text-xs text-muted-foreground mt-1">
 								⚠️ 安全声明：本轮仅执行一次有限诊断，任务完成后绝不自动创建下一轮；真实模式需服务端开关显式开启且配置有效凭据，未授权将触发拦截守卫。
 							</p>
@@ -724,7 +785,7 @@ function BrandReportsPage() {
 
 					{/* 步骤 3: 诊断任务状态与客观指标看板 */}
 					{activeRunId && (
-						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+						<div data-no-i18n="true" className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
