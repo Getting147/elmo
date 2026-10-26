@@ -273,15 +273,27 @@ function BrandReportsPage() {
 	const createRunMutation = useMutation({
 		mutationFn: (snapshotId: string) => {
 			const activeAuth = activeAuthData?.authorization;
+			const effectiveBudget =
+				executionMode === "real" && activeAuth?.request_limit
+					? Math.min(30, activeAuth.request_limit)
+					: 30;
+			const effectiveRetries =
+				executionMode === "real" && activeAuth?.retry_limit !== undefined
+					? Math.min(0, activeAuth.retry_limit)
+					: 0;
+			const clientRunId =
+				executionMode === "real" && activeAuth?.run_id
+					? activeAuth.run_id
+					: `run_${brandId!.toLowerCase()}_${Date.now()}`;
+			const idempotencyKey = `idemp_${brandId!.toLowerCase()}_${clientRunId}`;
+
 			return createBaselineRunFn({
 				data: {
 					brandId: brandId!,
 					snapshotId,
 					mode: executionMode,
-					runId:
-						executionMode === "real" && activeAuth?.run_id
-							? activeAuth.run_id
-							: undefined,
+					runId: clientRunId,
+					idempotencyKey,
 					modelName:
 						executionMode === "real" && activeAuth?.model_name
 							? activeAuth.model_name
@@ -290,8 +302,8 @@ function BrandReportsPage() {
 						executionMode === "real" && activeAuth?.web_search !== undefined
 							? Boolean(activeAuth.web_search)
 							: undefined,
-					requestBudget: 30,
-					maxRetries: 0,
+					requestBudget: effectiveBudget,
+					maxRetries: effectiveRetries,
 				},
 			});
 		},
@@ -714,7 +726,11 @@ function BrandReportsPage() {
 								</div>
 								<div>
 									<span className="text-muted-foreground">最大请求上限：</span>
-									<span className="font-semibold ml-1">30 次 (重试 0 次)</span>
+									<span className="font-semibold ml-1">
+										{executionMode === "real" && activeAuthData?.authorization?.request_limit
+											? `${activeAuthData.authorization.request_limit} 次 (重试 ${activeAuthData.authorization.retry_limit ?? 0} 次)`
+											: "30 次 (重试 0 次)"}
+									</span>
 								</div>
 								<div>
 									<span className="text-muted-foreground">费用说明：</span>

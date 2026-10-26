@@ -314,9 +314,10 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		let webSearch = data.webSearch;
 		let requestBudget = data.requestBudget;
 		let maxRetries = data.maxRetries;
+		let idempotencyKey = data.idempotencyKey;
 
-		// real 模式下若未显式指定 runId，自动查询并绑定当前快照未消费的活跃服务端授权 (E5-R01)
-		if (data.mode === "real" && !runId) {
+		// real 模式下查询并绑定当前快照未消费的活跃服务端授权，并对齐执行参数约束 (E5-R01, E6-R02)
+		if (data.mode === "real") {
 			try {
 				const authRes = await callBaselineBackend({
 					method: "GET",
@@ -326,18 +327,21 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 					callerId: session.user.id,
 				});
 				if (authRes?.authorization?.run_id) {
-					runId = authRes.authorization.run_id;
+					if (!runId) {
+						runId = authRes.authorization.run_id;
+					}
 					if (!modelName && authRes.authorization.model_name) {
 						modelName = authRes.authorization.model_name;
 					}
 					if (webSearch === undefined && authRes.authorization.web_search !== undefined) {
 						webSearch = Boolean(authRes.authorization.web_search);
 					}
+					// 严格遵循更低限制：实际执行预算与重试不得超过授权上限，也不得抬高请求方指定的更严格限制 (E6-R02)
 					if (authRes.authorization.request_limit) {
-						requestBudget = authRes.authorization.request_limit;
+						requestBudget = Math.min(requestBudget, authRes.authorization.request_limit);
 					}
 					if (authRes.authorization.retry_limit !== undefined) {
-						maxRetries = authRes.authorization.retry_limit;
+						maxRetries = Math.min(maxRetries, authRes.authorization.retry_limit);
 					}
 				}
 			} catch {
@@ -348,8 +352,13 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		if (!runId) {
 			runId = `run_${brand.id.toLowerCase()}_${Date.now()}`;
 		}
-		const idempotencyKey =
-			data.idempotencyKey || `idemp_${brand.id.toLowerCase()}_${runId}`;
+		// 稳定幂等键：优先使用显式提供的 idempotencyKey；若未提供，针对已绑定 runId (如 real 授权或显式 runId) 绑定 runId，针对 synthetic 模式默认基于 snapshotId 与 mode，确保同一操作重放不产生重复 run (E6-R01)
+		if (!idempotencyKey) {
+			idempotencyKey =
+				data.runId || (data.mode === "real" && runId)
+					? `idemp_${brand.id.toLowerCase()}_${runId}`
+					: `idemp_${brand.id.toLowerCase()}_${data.snapshotId}_${data.mode}`;
+		}
 
 		const payload: Record<string, any> = {
 			snapshot_id: data.snapshotId,
