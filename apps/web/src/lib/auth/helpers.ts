@@ -32,13 +32,28 @@ export function hasReportAccess(session: SessionLike): boolean {
 	return session.user.hasReportGeneratorAccess === true;
 }
 
-export async function checkOrgAccess(userId: string, orgId: string): Promise<boolean> {
-	const [row] = await db
+export async function checkOrgAccess(userId: string, organizationId: string): Promise<boolean> {
+	// 严格核验组织成员身份：明确分开组织鉴权与品牌解析，严禁在组织校验失败时进行猜测式 fallback (E2-R01)
+	const [directRow] = await db
 		.select({ id: member.id })
 		.from(member)
-		.where(and(eq(member.userId, userId), eq(member.organizationId, orgId)))
+		.where(and(eq(member.userId, userId), eq(member.organizationId, organizationId)))
 		.limit(1);
-	return !!row;
+	return !!directRow;
+}
+
+export async function checkBrandAccess(userId: string, brandId: string): Promise<boolean> {
+	// 明确的品牌访问权限核验 helper (E2-R01 / E3-R01)
+	const [brandRow] = await db
+		.select({ organizationId: brands.organizationId })
+		.from(brands)
+		.where(eq(brands.id, brandId))
+		.limit(1);
+	if (!brandRow?.organizationId) {
+		// 严禁对不存在或无组织的 brand 进行猜测式 fallback，无所属者直接拒绝 (E3-R01)
+		return false;
+	}
+	return checkOrgAccess(userId, brandRow.organizationId);
 }
 
 export async function requireOrgAccess(userId: string, orgId: string): Promise<void> {
@@ -47,16 +62,52 @@ export async function requireOrgAccess(userId: string, orgId: string): Promise<v
 	}
 }
 
-export async function listUserOrganizations(userId: string): Promise<{ id: string; name: string }[]> {
+export async function requireBrandAccess(userId: string, brandId: string): Promise<string> {
+	const [brandRow] = await db
+		.select({ organizationId: brands.organizationId })
+		.from(brands)
+		.where(eq(brands.id, brandId))
+		.limit(1);
+	if (!brandRow?.organizationId) {
+		throw new Error("Forbidden: No access to this brand");
+	}
+	if (!(await checkOrgAccess(userId, brandRow.organizationId))) {
+		throw new Error("Forbidden: No access to this brand");
+	}
+	return brandRow.organizationId;
+}
+
+export interface UserOrgEntry {
+	id: string; // 保持组织 ID（即 organization.id），确保原有的 orgIds.map(o => o.id) 契约不被破坏
+	name: string;
+	orgId: string;
+	brandId: string; // 真实 brand.id (若未建 brand 则为 orgId)
+	brandName: string;
+}
+
+export async function listUserOrganizations(userId: string): Promise<UserOrgEntry[]> {
 	// Hide orgs whose brand was soft-deleted (V1 软删除: 隐藏 + 停扫 + 数据保留)。
 	// Left join: orgs without a brand row (rare) stay visible so users can still
 	// complete onboarding; orgs whose brand has deleted_at set disappear.
-	return db
-		.select({ id: organization.id, name: organization.name })
+	const rows = await db
+		.select({
+			orgId: organization.id,
+			orgName: organization.name,
+			brandId: brands.id,
+			brandName: brands.name,
+		})
 		.from(member)
 		.innerJoin(organization, eq(member.organizationId, organization.id))
-		.leftJoin(brands, eq(brands.organizationId, organization.id))
+		.leftJoin(brands, and(eq(brands.organizationId, organization.id), isNull(brands.deletedAt)))
 		.where(
 			and(eq(member.userId, userId), or(isNull(brands.id), isNull(brands.deletedAt))),
 		);
+
+	return rows.map((r) => ({
+		id: r.orgId,
+		name: r.orgName,
+		orgId: r.orgId,
+		brandId: r.brandId || r.orgId,
+		brandName: r.brandName || r.orgName,
+	}));
 }

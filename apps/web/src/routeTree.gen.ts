@@ -27,6 +27,7 @@ import { Route as AuthedAppIndexRouteImport } from './routes/_authed/app/index'
 import { Route as AuthedAppBrandRouteImport } from './routes/_authed/app/$brand'
 import { Route as AuthedAppNewRouteImport } from './routes/_authed/app/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiBaselineDownloadRouteImport } from './routes/api/baseline/download'
 import { Route as ApiManifestIndexRouteImport } from './routes/api/manifest/index'
 import { Route as ApiOgIndexRouteImport } from './routes/api/og/index'
 import { Route as ApiSetupStatusIndexRouteImport } from './routes/api/setup-status/index'
@@ -157,6 +158,11 @@ const AuthedAppNewRoute = AuthedAppNewRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBaselineDownloadRoute = ApiBaselineDownloadRouteImport.update({
+  id: '/api/baseline/download',
+  path: '/api/baseline/download',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiManifestIndexRoute = ApiManifestIndexRouteImport.update({
@@ -404,6 +410,7 @@ export interface FileRoutesByFullPath {
   '/app/$brand': typeof AuthedAppBrandRouteWithChildren
   '/app/new': typeof AuthedAppNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/baseline/download': typeof ApiBaselineDownloadRoute
   '/admin/': typeof AuthedAdminIndexRoute
   '/app/': typeof AuthedAppIndexRoute
   '/api/manifest/': typeof ApiManifestIndexRoute
@@ -461,6 +468,7 @@ export interface FileRoutesByTo {
   '/admin/workflows': typeof AuthedAdminWorkflowsRoute
   '/app/new': typeof AuthedAppNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/baseline/download': typeof ApiBaselineDownloadRoute
   '/admin': typeof AuthedAdminIndexRoute
   '/app': typeof AuthedAppIndexRoute
   '/api/manifest': typeof ApiManifestIndexRoute
@@ -523,6 +531,7 @@ export interface FileRoutesById {
   '/_authed/app/$brand': typeof AuthedAppBrandRouteWithChildren
   '/_authed/app/new': typeof AuthedAppNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/baseline/download': typeof ApiBaselineDownloadRoute
   '/_authed/admin/': typeof AuthedAdminIndexRoute
   '/_authed/app/': typeof AuthedAppIndexRoute
   '/api/manifest/': typeof ApiManifestIndexRoute
@@ -585,6 +594,7 @@ export interface FileRouteTypes {
     | '/app/$brand'
     | '/app/new'
     | '/api/auth/$'
+    | '/api/baseline/download'
     | '/admin/'
     | '/app/'
     | '/api/manifest/'
@@ -642,6 +652,7 @@ export interface FileRouteTypes {
     | '/admin/workflows'
     | '/app/new'
     | '/api/auth/$'
+    | '/api/baseline/download'
     | '/admin'
     | '/app'
     | '/api/manifest'
@@ -703,6 +714,7 @@ export interface FileRouteTypes {
     | '/_authed/app/$brand'
     | '/_authed/app/new'
     | '/api/auth/$'
+    | '/api/baseline/download'
     | '/_authed/admin/'
     | '/_authed/app/'
     | '/api/manifest/'
@@ -757,6 +769,7 @@ export interface RootRouteChildren {
   AuthRegisterRoute: typeof AuthRegisterRoute
   AuthResetPasswordRoute: typeof AuthResetPasswordRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiBaselineDownloadRoute: typeof ApiBaselineDownloadRoute
   ApiManifestIndexRoute: typeof ApiManifestIndexRoute
   ApiOgIndexRoute: typeof ApiOgIndexRoute
   ApiSetupStatusIndexRoute: typeof ApiSetupStatusIndexRoute
@@ -901,6 +914,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/baseline/download': {
+      id: '/api/baseline/download'
+      path: '/api/baseline/download'
+      fullPath: '/api/baseline/download'
+      preLoaderRoute: typeof ApiBaselineDownloadRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/manifest/': {
@@ -1344,6 +1364,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRegisterRoute: AuthRegisterRoute,
   AuthResetPasswordRoute: AuthResetPasswordRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiBaselineDownloadRoute: ApiBaselineDownloadRoute,
   ApiManifestIndexRoute: ApiManifestIndexRoute,
   ApiOgIndexRoute: ApiOgIndexRoute,
   ApiSetupStatusIndexRoute: ApiSetupStatusIndexRoute,

@@ -24,13 +24,13 @@ import {
 } from "@workspace/ui/components/dialog";
 import { syncAuth0UserById } from "@workspace/whitelabel/auth-hooks";
 import FullPageCard from "@/components/full-page-card";
-import { listUserOrganizations, requireAuthSession } from "@/lib/auth/helpers";
+import { listUserOrganizations, requireAuthSession, type UserOrgEntry } from "@/lib/auth/helpers";
 import { getDeployment } from "@/lib/config/server";
 import { deleteBrandFn } from "@/server/brands";
 
 const getOrganizations = createServerFn({ method: "GET" }).handler(
 	async (): Promise<{
-		organizations: { id: string; name: string }[];
+		organizations: UserOrgEntry[];
 		supportsMultiOrg: boolean;
 		canCreateBrands: boolean;
 	}> => {
@@ -72,9 +72,10 @@ export const Route = createFileRoute("/_authed/app/")({
 	loader: async () => {
 		const result = await getOrganizations();
 
-		// Single-org mode: redirect to the user's one org (created on signup).
+		// Single-org mode: redirect to the user's one org/brand (E3-R01: 传递真实 brandId，保留组织归属).
 		if (!result.supportsMultiOrg && result.organizations.length > 0) {
-			throw redirect({ to: "/app/$brand", params: { brand: result.organizations[0].id } });
+			const targetBrand = result.organizations[0].brandId || result.organizations[0].id;
+			throw redirect({ to: "/app/$brand", params: { brand: targetBrand } });
 		}
 
 		return result;
@@ -85,6 +86,9 @@ export const Route = createFileRoute("/_authed/app/")({
 interface OrgEntry {
 	id: string;
 	name: string;
+	orgId?: string;
+	brandId?: string;
+	brandName?: string;
 }
 
 function BrandSwitcherPage() {
@@ -105,7 +109,7 @@ function BrandSwitcherPage() {
 		setIsDeleting(true);
 		setDeleteError("");
 		try {
-			await deleteBrandFn({ data: { brandId: deleteTarget.id } });
+			await deleteBrandFn({ data: { brandId: deleteTarget.brandId || deleteTarget.id } });
 			// Soft delete: row disappears from the list immediately (data kept, recoverable).
 			setOrgs((prev) => prev.filter((o) => o.id !== deleteTarget.id));
 			setDeleteTarget(null);
@@ -125,8 +129,8 @@ function BrandSwitcherPage() {
 					orgs.map((org) => (
 						<div key={org.id} className="flex items-center gap-2">
 							<Button asChild variant="secondary" className="flex-1">
-								<Link to="/app/$brand" params={{ brand: org.id }}>
-									{org.name}
+								<Link to="/app/$brand" params={{ brand: org.brandId || org.id }}>
+									{org.brandName || org.name}
 								</Link>
 							</Button>
 							<Button

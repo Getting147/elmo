@@ -24,6 +24,8 @@ export interface BrandReportSummary {
 	generatedAt: string; // ISO mtime
 	pdfInOutput: boolean;
 	pdfUrl: string | null; // public URL if a public copy exists
+	isDemo: boolean;
+	notice?: string;
 	meta: {
 		brandName?: string;
 		totalSamples?: number;
@@ -37,7 +39,9 @@ export interface BrandReportSummary {
 function parseReportJson(filePath: string) {
 	try {
 		const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-			meta?: { brand_name?: string; total_samples?: number; start_date?: string; end_date?: string };
+			notice?: string;
+			is_demo?: boolean;
+			meta?: { brand_name?: string; total_samples?: number; start_date?: string; end_date?: string; notice?: string };
 			gates?: unknown;
 			q7?: Array<{ passed?: boolean }>;
 			q8_mismatches?: unknown[];
@@ -49,13 +53,22 @@ function parseReportJson(filePath: string) {
 				: Array.isArray(raw.gates)
 					? (raw.gates as Array<{ passed?: boolean }>).filter((g) => g.passed === true).length
 					: 0;
+		const isDemo = Boolean(
+			raw.is_demo ||
+			raw.notice?.toLowerCase().includes("demo") ||
+			raw.meta?.notice?.toLowerCase().includes("demo") ||
+			raw.meta?.brand_name?.includes("演示")
+		);
+		const notice = raw.notice || raw.meta?.notice;
 		return {
 			meta: raw.meta || {},
 			gatesPassed,
 			gatesTotal: q7.length > 0 ? q7.length : 8,
+			isDemo,
+			notice,
 		};
 	} catch {
-		return { meta: {}, gatesPassed: 0, gatesTotal: 0 };
+		return { meta: {}, gatesPassed: 0, gatesTotal: 0, isDemo: false, notice: undefined };
 	}
 }
 
@@ -82,18 +95,27 @@ export const getBrandReports = createServerFn({ method: "GET" })
 			const pdfInOutput = fs.existsSync(path.join(REPORTS_DIR, `${stem}.pdf`));
 			const stat = fs.statSync(path.join(REPORTS_DIR, f));
 			const parsed = parseReportJson(path.join(REPORTS_DIR, f));
-			// public copy is normalized to report-<brandId>.pdf (lowercase id)
+			// 优先精确匹配与本报告 stem 或日期版本一一对应的本地演示 PDF，彻底隔离历史 PDF
+			const exactStemPdf = path.join(WEB_PUBLIC_DIR, `${stem}.pdf`);
+			const demoVersionPdf = path.join(WEB_PUBLIC_DIR, `report-${code.toLowerCase()}-${m[2]}-demo.pdf`);
 			const publicPdf = path.join(WEB_PUBLIC_DIR, `report-${data.brandId.toLowerCase()}.pdf`);
-			const pdfUrl =
-				fs.existsSync(publicPdf) || fs.existsSync(path.join(WEB_PUBLIC_DIR, `report-${code}.pdf`))
-					? `/report-${data.brandId.toLowerCase()}.pdf`
-					: null;
+			let pdfUrl: string | null = null;
+			if (fs.existsSync(demoVersionPdf)) {
+				pdfUrl = `/report-${code.toLowerCase()}-${m[2]}-demo.pdf`;
+			} else if (fs.existsSync(exactStemPdf)) {
+				pdfUrl = `/${stem}.pdf`;
+			} else if (!parsed.isDemo && (fs.existsSync(publicPdf) || fs.existsSync(path.join(WEB_PUBLIC_DIR, `report-${code}.pdf`)))) {
+				// 仅当非合成演示报告时才回退至历史通用路径，防止历史文件与当前演示元数据错位
+				pdfUrl = `/report-${data.brandId.toLowerCase()}.pdf`;
+			}
 			reports.push({
 				file: stem,
 				clientCode: code,
 				generatedAt: stat.mtime.toISOString(),
 				pdfInOutput,
 				pdfUrl,
+				isDemo: parsed.isDemo,
+				notice: parsed.notice,
 				meta: {
 					brandName: parsed.meta.brand_name,
 					totalSamples: parsed.meta.total_samples,

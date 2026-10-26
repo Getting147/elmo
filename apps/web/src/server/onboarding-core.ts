@@ -325,7 +325,8 @@ async function insertPrompts(args: {
 	if (rows.length === 0) return 0;
 
 	const inserted = await dbc.insert(prompts).values(rows).returning({ id: prompts.id });
-	await createMultiplePromptJobSchedulers(inserted.map((r) => r.id));
+	// REPORT-001E: 默认手动模式，封住建档导入问题时自动入队，避免消耗 Token
+	// await createMultiplePromptJobSchedulers(inserted.map((r) => r.id));
 	return inserted.length;
 }
 

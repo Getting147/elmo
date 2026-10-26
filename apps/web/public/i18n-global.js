@@ -222,12 +222,18 @@
     if (!node) return;
     const dict = targetLang === "zh" ? ZH_DICT : EN_DICT;
     if (node.nodeType === Node.TEXT_NODE) {
+      if (node.parentElement && (node.parentElement.closest('[data-no-i18n]') || node.parentElement.closest('.notranslate'))) {
+        return;
+      }
       const txt = node.nodeValue.trim();
       if (txt && dict[txt] && node.nodeValue !== dict[txt]) {
         node.nodeValue = node.nodeValue.replace(txt, dict[txt]);
         node.__geoDict = true;
       }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.hasAttribute("data-no-i18n") || node.classList.contains("notranslate")) {
+        return;
+      }
       // 避免修改表单输入框内部值
       if (node.tagName === "INPUT" || node.tagName === "TEXTAREA") {
         if (node.placeholder && dict[node.placeholder]) {
@@ -250,20 +256,27 @@
     let node;
     while ((node = walker.nextNode())) {
       if (node.__geoDict) continue;
+      // 允许元素标记跳过自动翻译（保护动态看板、数字与费用等）
+      if (node.parentElement && (node.parentElement.closest('[data-no-i18n]') || node.parentElement.closest('.notranslate'))) {
+        continue;
+      }
       if (lang === "zh") {
         if (node.__geoOrig === undefined) {
           node.__geoOrig = node.nodeValue;
-        } else if (node.nodeValue !== node.__geoOrig && /[A-Za-z]/.test(node.nodeValue)) {
-          // React 复用文本节点更新过原文（characterData），重新锚定防陈旧覆盖
+          node.__geoLastVal = node.nodeValue;
+        } else if (node.nodeValue !== node.__geoLastVal) {
+          // React 或 DOM 更新了节点内容（无论是英文、中文还是数字），更新原文基准
           node.__geoOrig = node.nodeValue;
         }
         const base = node.__geoOrig;
         const out = applyPatterns(base);
         if (out !== node.nodeValue) node.nodeValue = out;
+        node.__geoLastVal = node.nodeValue;
       } else {
         if (node.__geoOrig !== undefined && node.nodeValue !== node.__geoOrig) {
           node.nodeValue = node.__geoOrig;
         }
+        node.__geoLastVal = node.nodeValue;
         delete node.__geoOrig;
       }
     }

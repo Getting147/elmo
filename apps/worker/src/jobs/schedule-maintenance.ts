@@ -117,52 +117,11 @@ async function runMaintenanceCheck(): Promise<void> {
 		now,
 	});
 
-	for (const prompt of enabledPrompts) {
-		const pendingJob = pendingJobMap.get(prompt.id);
-
-		// Skip if there's an active or retry job (already being worked on)
-		if (pendingJob && (pendingJob.state === "active" || pendingJob.state === "retry")) {
-			continue;
-		}
-
-		const cadenceHours = brandDelayMap[prompt.brandId] ?? defaultDelayHours;
-		const runFrequencyMs = cadenceHours * 60 * 60 * 1000;
-		const lastRuns = lastRunsMap[prompt.id] || {};
-
-		const isOverdue = isPromptOverdue({
-			models: modelNames,
-			lastRunByModel: lastRuns,
-			promptCreatedAt: prompt.createdAt,
-			runFrequencyMs,
-			now,
-		});
-
-		if (!isOverdue) continue;
-
-		if (pendingJob && pendingJob.state === "created") {
-			const lastRunTimes = Object.values(lastRuns).map((d) => new Date(d).getTime());
-			const mostRecentRunMs = lastRunTimes.length > 0 ? Math.max(...lastRunTimes) : null;
-			const shouldExpedite = shouldExpediteJob({
-				jobConsecutiveFailures: pendingJob.consecutiveFailures,
-				jobCreatedAt: pendingJob.createdAt,
-				lastRunAt: mostRecentRunMs === null ? null : new Date(mostRecentRunMs),
-				runFrequencyMs,
-				now,
-				minIntervalMs: EXPEDITE_MIN_INTERVAL_MS,
-			});
-			if (!shouldExpedite) continue;
-			// There's a future job scheduled - expedite it to run now
-			jobsToExpedite.push(pendingJob.jobId);
-		} else {
-			// No pending job at all - create a new one
-			promptsToSchedule.push({ promptId: prompt.id, cadenceHours });
-		}
-	}
-
-	if (promptsToSchedule.length === 0 && jobsToExpedite.length === 0) {
-		console.log("[schedule-maintenance] All prompts are on schedule or have pending jobs");
-		return;
-	}
+	// REPORT-001E: 采样维护任务不再自动补排/提前执行，避免隐式付费与Token浪费
+	console.log(
+		`[schedule-maintenance][Manual Mode] 默认手动模式：跳过 ${enabledPrompts.length} 个题目的自动补排与提前执行`,
+	);
+	return;
 
 	console.log(
 		`[schedule-maintenance] Found ${promptsToSchedule.length} prompts needing new jobs, ${jobsToExpedite.length} jobs to expedite`,
@@ -214,7 +173,7 @@ async function runMaintenanceCheck(): Promise<void> {
 					successCount++;
 				} else {
 					failCount++;
-					console.error("[schedule-maintenance] Failed to schedule job:", result.reason);
+					console.error("[schedule-maintenance] Failed to schedule job:", (result as PromiseRejectedResult).reason);
 				}
 			}
 		}

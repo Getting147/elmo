@@ -53,13 +53,19 @@ export async function getPromptCadenceHours(promptId: string): Promise<number> {
 /**
  * Creates a scheduled job for a prompt to run after a delay.
  * Uses interval-based scheduling with startAfter instead of cron patterns.
- * The job will self-reschedule after completion via the worker.
+ * REPORT-001E: 默认手动模式已封禁自动周期采样，仅允许显式单次触发。
  */
 type SchedulerOptions = {
 	sendImmediate?: boolean;
+	allowManualTrigger?: boolean;
 };
 
 export async function createPromptJobScheduler(promptId: string, options: SchedulerOptions = {}): Promise<boolean> {
+	// REPORT-001E: 默认手动模式，若非明确人工触发则拒绝排入周期采样队列
+	if (!options.allowManualTrigger) {
+		console.log(`[Manual Mode] 默认手动模式：跳过为 prompt ${promptId} 自动创建调度任务`);
+		return false;
+	}
 	try {
 		const boss = await getBoss();
 		const cadenceHours = await getPromptCadenceHours(promptId);
@@ -76,32 +82,19 @@ export async function createPromptJobScheduler(promptId: string, options: Schedu
 			// Send an immediate job
 			await boss.send(
 				"process-prompt",
-				{ promptId, cadenceHours },
+				{ promptId, cadenceHours, manualTriggered: true },
 				{
 					singletonKey: `prompt-${promptId}`,
 					singletonSeconds: 60 * 60, // 1 hour - prevent duplicate jobs
-					retryLimit: 3,
+					retryLimit: 0,
 					retryDelay: 60,
 					retryBackoff: true,
 					expireInSeconds: 60 * 15, // 15 minute timeout
 				},
 			);
 		} else {
-			// Schedule the next run based on cadence
-			const startAfterSeconds = cadenceHours * 60 * 60;
-			await boss.send(
-				"process-prompt",
-				{ promptId, cadenceHours },
-				{
-					singletonKey: `prompt-${promptId}`,
-					singletonSeconds: startAfterSeconds, // Prevent duplicates for the cadence period
-					startAfter: startAfterSeconds,
-					retryLimit: 3,
-					retryDelay: 60,
-					retryBackoff: true,
-					expireInSeconds: 60 * 15,
-				},
-			);
+			console.log(`[Manual Mode] 周期延时入队已被封禁 (prompt ${promptId})`);
+			return false;
 		}
 
 		console.log(`Created job for prompt ${promptId} with ${cadenceHours}h cadence`);
@@ -187,11 +180,11 @@ export async function sendImmediatePromptJob(promptId: string): Promise<boolean>
 
 		await boss.send(
 			"process-prompt",
-			{ promptId, cadenceHours },
+			{ promptId, cadenceHours, manualTriggered: true },
 			{
-				retryLimit: 3,
+				retryLimit: 0,
 				retryDelay: 60,
-				retryBackoff: true,
+				retryBackoff: false,
 				expireInSeconds: 60 * 15,
 			},
 		);
@@ -206,33 +199,11 @@ export async function sendImmediatePromptJob(promptId: string): Promise<boolean>
 
 /**
  * Schedules the next run for a prompt after a delay.
- * Called by the worker after successful job completion.
+ * REPORT-001E: 默认手动模式下完全封禁自动续排，直接返回 false。
  */
 export async function scheduleNextPromptRun(promptId: string, cadenceHours: number): Promise<boolean> {
-	try {
-		const boss = await getBoss();
-		const startAfterSeconds = cadenceHours * 60 * 60;
-
-		await boss.send(
-			"process-prompt",
-			{ promptId, cadenceHours },
-			{
-				singletonKey: `prompt-${promptId}`,
-				singletonSeconds: startAfterSeconds, // Prevent duplicates for the cadence period
-				startAfter: startAfterSeconds,
-				retryLimit: 3,
-				retryDelay: 60,
-				retryBackoff: true,
-				expireInSeconds: 60 * 15,
-			},
-		);
-
-		console.log(`Scheduled next run for prompt ${promptId} in ${cadenceHours}h`);
-		return true;
-	} catch (error) {
-		console.error(`Failed to schedule next run for prompt ${promptId}:`, error);
-		return false;
-	}
+	console.log(`[Manual Mode] 自动周期调度已封禁，禁止为 prompt ${promptId} 续排下一次运行`);
+	return false;
 }
 
 /**
