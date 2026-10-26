@@ -756,7 +756,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 						finding: z.string(),
 						evidence_refs: z.array(z.string()),
 						action: z.string(),
-						priority: z.enum(["P1", "P2", "P3"]),
+						priority: z.enum(["P0", "P1", "P2", "P3"]),
 						priority_rationale: z.string(),
 						deliverable: z.string(),
 						verification_method: z.string(),
@@ -838,6 +838,32 @@ export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
 			}
 			throw err;
 		}
+	});
+
+// ============================================================================
+// 7.1. 触发或重试 AI 自动分析与报告生成 (POST /runs/{run_id}/analysis/auto) (REPORT-001F)
+// ============================================================================
+
+export const retryBaselineAnalysisFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string(), runId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		return callBaselineBackend({
+			method: "POST",
+			path: `/api/baseline/v1/runs/${data.runId}/analysis/auto`,
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
+		});
 	});
 
 // ============================================================================

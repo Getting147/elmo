@@ -17,6 +17,7 @@ import {
 	getBaselineAnalysisFn,
 	getBaselineReportFn,
 	getBaselineActiveAuthFn,
+	retryBaselineAnalysisFn,
 } from "@/server/baseline";
 import {
 	IconFileText,
@@ -110,7 +111,14 @@ function BrandReportsPage() {
 		enabled: !!brandId && !!activeRunId,
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
-			return status === "queued" || status === "running" ? 2000 : false;
+			const step = query.state.data?.current_step;
+			return status === "queued" ||
+				status === "running" ||
+				step === "collecting" ||
+				step === "analyzing" ||
+				step === "rendering_report"
+				? 2000
+				: false;
 		},
 	});
 
@@ -222,6 +230,20 @@ function BrandReportsPage() {
 		}
 	}, [reportData]);
 
+	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
+	useEffect(() => {
+		if (
+			runData?.current_step === "ready_for_review" ||
+			runData?.status === "completed" ||
+			runData?.status === "partial"
+		) {
+			refetchAnalysis();
+			refetchReport();
+			refetchEvidence();
+			refetchMetrics();
+		}
+	}, [runData?.current_step, runData?.status]);
+
 	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
 	const handleSelectRun = (runId: string) => {
 		setActiveRunId(runId);
@@ -319,11 +341,99 @@ function BrandReportsPage() {
 		onError: (err: any) => setActionError(`创建监测任务失败: ${err.message}`),
 	});
 
+	const [isStartingDiagnostic, setIsStartingDiagnostic] = useState(false);
+
+	const retryAnalysisMutation = useMutation({
+		mutationFn: () =>
+			retryBaselineAnalysisFn({
+				data: {
+					brandId: brandId!,
+					runId: activeRunId,
+				},
+			}),
+		onSuccess: () => {
+			setActionError(null);
+			refetchRun();
+			refetchAnalysis();
+			refetchReport();
+		},
+		onError: (err: any) => setActionError(`重试 AI 自动分析失败: ${err.message}`),
+	});
+
+	const handleConfirmAndStartDiagnostic = async () => {
+		try {
+			setIsStartingDiagnostic(true);
+			setActionError(null);
+			setReviewNotice(null);
+
+			// 1. 若尚未冻结不可变快照，先冻结
+			let snapshotId = frozenSnapshot?.snapshot_id;
+			if (!snapshotId) {
+				const freezeRes = await freezeBaselineInputsFn({
+					data: {
+						brandId: brandId!,
+						versionLabel: "v1.0",
+						dimensionOverrides,
+					},
+				});
+				setFrozenSnapshot(freezeRes);
+				snapshotId = freezeRes.snapshot_id;
+			}
+
+			// 2. 发起单次基线运行任务（后台将连续完成采集、统计、DeepSeek 分析及报告生成）
+			const activeAuth = activeAuthData?.authorization;
+			const totalPrompts = profileData?.summary?.totalPrompts || 10;
+			const effectiveBudget =
+				executionMode === "real" && activeAuth?.request_limit
+					? Math.min(30, activeAuth.request_limit)
+					: Math.max(30, totalPrompts);
+			const effectiveRetries =
+				executionMode === "real" && activeAuth?.retry_limit !== undefined
+					? Math.min(0, activeAuth.retry_limit)
+					: 0;
+			const clientRunId =
+				executionMode === "real" && activeAuth?.run_id
+					? activeAuth.run_id
+					: `run_${brandId!.toLowerCase()}_${Date.now()}`;
+			const idempotencyKey = `idemp_${brandId!.toLowerCase()}_${clientRunId}`;
+
+			const runRes = await createBaselineRunFn({
+				data: {
+					brandId: brandId!,
+					snapshotId,
+					mode: executionMode,
+					runId: clientRunId,
+					idempotencyKey,
+					modelName:
+						executionMode === "real" && activeAuth?.model_name
+							? activeAuth.model_name
+							: undefined,
+					webSearch:
+						executionMode === "real" && activeAuth?.web_search !== undefined
+							? Boolean(activeAuth.web_search)
+							: undefined,
+					requestBudget: effectiveBudget,
+					maxRetries: effectiveRetries,
+				},
+			});
+
+			setActiveRunId(runRes.run_id);
+			setActiveAnalysisId("");
+			setActiveRevisionId("rev_01");
+			setRevisionInput("rev_01");
+			refetchRunsList();
+		} catch (err: any) {
+			setActionError(`启动诊断失败: ${err.message}`);
+		} finally {
+			setIsStartingDiagnostic(false);
+		}
+	};
+
 	const saveAnalysisMutation = useMutation({
 		mutationFn: () => {
 			const lines = actionPlanInput.split("\n").filter((l) => l.trim().length > 0);
 			if (lines.length === 0) {
-				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P1/P2/P3) | 决策依据 | 交付物 | 验证方式");
+				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式");
 			}
 
 			const actionPlan = lines.map((line, idx) => {
@@ -337,7 +447,8 @@ function BrandReportsPage() {
 					: [];
 
 				const action = parts[1] || "待补充行动方案";
-				const priority = (["P1", "P2", "P3"].includes(parts[2]) ? parts[2] : "P2") as "P1" | "P2" | "P3";
+				const rawPrio = (parts[2] || "").toUpperCase();
+				const priority = (["P0", "P1", "P2"].includes(rawPrio) ? rawPrio : "P1") as "P0" | "P1" | "P2";
 				const rationale = parts[3] || "待补充优先级依据";
 				const deliverable = parts[4] || "待补充交付件";
 				const verification = parts[5] || "待补充验证方法";
@@ -490,6 +601,19 @@ function BrandReportsPage() {
 						历史归档报告
 					</button>
 				</div>
+			</div>
+
+			{/* 离线专属测试环境提示横幅 (REPORT-001F) */}
+			<div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-4 py-2.5 rounded-lg text-xs flex items-center justify-between gap-3">
+				<div className="flex items-center gap-2">
+					<IconShieldCheck className="text-amber-600 shrink-0" size={16} />
+					<span>
+						<strong>【测试与预览环境】</strong>当前处于离线测试模式 (Offline Mock)。所有外部模型交互均通过安全 Mock 通道运行，不调用真实付费 API，不产生实际账单。
+					</span>
+				</div>
+				<span className="font-mono text-[11px] bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded shrink-0">
+					MOCK ONLY · ZERO BILLED
+				</span>
 			</div>
 
 			{/* 错误与状态提示 */}
@@ -657,33 +781,45 @@ function BrandReportsPage() {
 							</div>
 						)}
 
-						{/* 冻结操作 */}
-						<div className="flex items-center justify-between pt-2">
+						{/* 确认并一键启动诊断操作 */}
+						<div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-3 border-t">
 							<div className="text-xs text-muted-foreground">
 								{frozenSnapshot ? (
 									<span className="text-green-600 dark:text-green-400 font-medium inline-flex items-center gap-1">
-										<IconCheck size={14} /> 已冻结不可变快照: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
+										<IconCheck size={14} /> 已锁定输入快照: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
 									</span>
 								) : (
-									"确认档案与题目无误后，冻结为不可变快照以供基线执行"
+									"核对客户档案与题库无误后，点击右侧一次确认启动全自动诊断、归因与报告草稿生成"
 								)}
 							</div>
-							<button
-								onClick={() => freezeMutation.mutate("v1.0")}
-								disabled={
-									freezeMutation.isPending ||
-									!profileData ||
-									profileData.summary.totalPrompts === 0
-								}
-								className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
-							>
-								<IconLock size={15} />
-								{freezeMutation.isPending
-									? "冻结中..."
-									: frozenSnapshot
-										? "重新冻结新快照"
-										: "确认并冻结本轮输入"}
-							</button>
+							<div className="flex items-center gap-2 shrink-0">
+								<button
+									onClick={() => freezeMutation.mutate("v1.0")}
+									disabled={
+										freezeMutation.isPending ||
+										isStartingDiagnostic ||
+										!profileData ||
+										profileData.summary.totalPrompts === 0
+									}
+									className="text-xs border px-3 py-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors disabled:opacity-50"
+								>
+									<IconLock size={14} className="inline mr-1" />
+									{freezeMutation.isPending ? "冻结中..." : "单独冻结快照"}
+								</button>
+								<button
+									onClick={handleConfirmAndStartDiagnostic}
+									disabled={
+										isStartingDiagnostic ||
+										createRunMutation.isPending ||
+										!profileData ||
+										profileData.summary.totalPrompts === 0
+									}
+									className="inline-flex items-center gap-2 bg-blue-600 text-white px-5 py-2 rounded-lg font-bold text-xs hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
+								>
+									<IconPlayerPlay size={16} />
+									{isStartingDiagnostic ? "正在启动全闭环..." : "确认并启动诊断 (一次确认 · 连续自动闭环)"}
+								</button>
+							</div>
 						</div>
 					</div>
 
@@ -860,6 +996,166 @@ function BrandReportsPage() {
 									</div>
 								</div>
 							</div>
+
+							{/* 四阶段流水线接续进度卡片 (REPORT-001F) */}
+							<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+								<div
+									className={`p-3 rounded-lg border ${
+										runData?.current_step === "collecting"
+											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
+											: (runData?.completed_questions ?? 0) > 0 ||
+											  ["analyzing", "rendering_report", "ready_for_review", "completed"].includes(
+													runData?.current_step || "",
+											  )
+												? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
+												: "bg-muted/20 text-muted-foreground"
+									}`}
+								>
+									<div className="flex items-center gap-1.5 font-semibold">
+										{runData?.current_step === "collecting" ? (
+											<IconRefresh size={14} className="animate-spin text-blue-600" />
+										) : (
+											<IconCheck size={14} className="text-green-600" />
+										)}
+										<span>1. 豆包数据采集</span>
+									</div>
+									<div className="text-[11px] text-muted-foreground mt-1">
+										完成 {runData?.completed_questions ?? 0} / {runData?.total_questions ?? 0} 题 (有效 {runData?.valid_questions ?? 0})
+									</div>
+								</div>
+
+								<div
+									className={`p-3 rounded-lg border ${
+										["analyzing", "rendering_report", "ready_for_review", "completed"].includes(
+											runData?.current_step || "",
+										)
+											? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
+											: "bg-muted/20 text-muted-foreground"
+									}`}
+								>
+									<div className="flex items-center gap-1.5 font-semibold">
+										<IconCheck size={14} className="text-green-600" />
+										<span>2. A 统计指标核算</span>
+									</div>
+									<div className="text-[11px] text-muted-foreground mt-1">
+										多业务切分与受控指标已锁定
+									</div>
+								</div>
+
+								<div
+									className={`p-3 rounded-lg border ${
+										runData?.current_step === "analyzing"
+											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
+											: runData?.current_step === "analysis_failed"
+												? "bg-red-50 border-red-300 dark:bg-red-950/30 text-red-900 dark:text-red-200"
+												: ["rendering_report", "ready_for_review", "completed"].includes(
+														runData?.current_step || "",
+												  )
+													? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
+													: "bg-muted/20 text-muted-foreground"
+									}`}
+								>
+									<div className="flex items-center gap-1.5 font-semibold">
+										{runData?.current_step === "analyzing" ? (
+											<IconRefresh size={14} className="animate-spin text-blue-600" />
+										) : runData?.current_step === "analysis_failed" ? (
+											<IconAlertTriangle size={14} className="text-red-600" />
+										) : (
+											<IconCheck size={14} className="text-green-600" />
+										)}
+										<span>3. DeepSeek 归因诊断</span>
+									</div>
+									<div className="text-[11px] text-muted-foreground mt-1">
+										{runData?.current_step === "analyzing"
+											? "AI 分析中..."
+											: runData?.current_step === "analysis_failed"
+												? "分析失败待重试"
+												: "三层成因与行动草稿就绪"}
+									</div>
+								</div>
+
+								<div
+									className={`p-3 rounded-lg border ${
+										runData?.current_step === "rendering_report"
+											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
+											: runData?.current_step === "report_render_failed"
+												? "bg-red-50 border-red-300 dark:bg-red-950/30 text-red-900 dark:text-red-200"
+												: ["ready_for_review", "completed"].includes(
+														runData?.current_step || "",
+												  )
+													? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
+													: "bg-muted/20 text-muted-foreground"
+									}`}
+								>
+									<div className="flex items-center gap-1.5 font-semibold">
+										{runData?.current_step === "rendering_report" ? (
+											<IconRefresh size={14} className="animate-spin text-blue-600" />
+										) : runData?.current_step === "report_render_failed" ? (
+											<IconAlertTriangle size={14} className="text-red-600" />
+										) : (
+											<IconCheck size={14} className="text-green-600" />
+										)}
+										<span>4. 星河国际参考报告</span>
+									</div>
+									<div className="text-[11px] text-muted-foreground mt-1">
+										{runData?.current_step === "rendering_report"
+											? "正在渲染 PDF / HTML..."
+											: runData?.current_step === "report_render_failed"
+												? "渲染失败待重试"
+												: "草稿已就绪，进入待审核"}
+									</div>
+								</div>
+							</div>
+
+							{/* 分析失败恢复卡片 */}
+							{runData?.current_step === "analysis_failed" && (
+								<div className="bg-red-50/70 dark:bg-red-950/30 border border-red-300 dark:border-red-800 rounded-lg p-3 text-xs flex items-center justify-between gap-3">
+									<div>
+										<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
+											<IconAlertTriangle size={16} />
+											<span>AI 自动分析执行异常</span>
+										</div>
+										<div className="text-red-600 dark:text-red-400 mt-0.5">
+											{runData.error_message || "分析执行失败"}
+										</div>
+										<div className="text-muted-foreground mt-0.5">
+											💡 采集数据已完整归档，无需重新采样。点击右侧按钮可直接重试 DeepSeek 自动分析。
+										</div>
+									</div>
+									<button
+										onClick={() => retryAnalysisMutation.mutate()}
+										disabled={retryAnalysisMutation.isPending}
+										className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors shrink-0 disabled:opacity-50"
+									>
+										{retryAnalysisMutation.isPending ? "重试中..." : "重试 AI 自动分析"}
+									</button>
+								</div>
+							)}
+
+							{/* 报告渲染失败恢复卡片 */}
+							{runData?.current_step === "report_render_failed" && (
+								<div className="bg-red-50/70 dark:bg-red-950/30 border border-red-300 dark:border-red-800 rounded-lg p-3 text-xs flex items-center justify-between gap-3">
+									<div>
+										<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
+											<IconAlertTriangle size={16} />
+											<span>报告草稿渲染失败</span>
+										</div>
+										<div className="text-red-600 dark:text-red-400 mt-0.5">
+											{runData.error_message || "渲染失败"}
+										</div>
+										<div className="text-muted-foreground mt-0.5">
+											💡 AI 分析已持久化入库，点击右侧按钮直接重新渲染 PDF/HTML，不重复调用 LLM。
+										</div>
+									</div>
+									<button
+										onClick={() => generateRevisionMutation.mutate("rev_01")}
+										disabled={generateRevisionMutation.isPending}
+										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors shrink-0 disabled:opacity-50"
+									>
+										{generateRevisionMutation.isPending ? "渲染中..." : "重试报告草稿生成"}
+									</button>
+								</div>
+							)}
 
 							{/* 失败任务原因与安全恢复说明 (E2-R04) */}
 							{runData?.status === "failed" && (
@@ -1123,12 +1419,12 @@ function BrandReportsPage() {
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
 										4
 									</span>
-									填写成因诊断与优先行动清单（B 模块人工录入 · 严格真实追溯）
+									诊断分析草稿与优先行动建议（AI 自动生成 · 支持人工复核与修改）
 								</div>
 								<div className="text-xs text-muted-foreground">
 									{activeAnalysisId ? (
 										<span className="text-green-600 dark:text-green-400 font-medium inline-flex items-center gap-1">
-											<IconCheck size={14} /> 已保存分析版本: {activeAnalysisId}
+											<IconCheck size={14} /> 当前分析版本: {activeAnalysisId}
 										</span>
 									) : (
 										"严格绑定本轮运行，递增版本留痕"
@@ -1189,11 +1485,11 @@ function BrandReportsPage() {
 								</div>
 								<div className="flex flex-col gap-1.5 md:col-span-2">
 									<label className="font-semibold">
-										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P1/P2/P3) | 决策依据 | 交付物 | 验证方式)
+										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式)
 									</label>
 									<textarea
 										rows={3}
-										placeholder="Q01 | 在海外官网增设标杆案例专页 | P1 | 契合主流寻源问法 | 官方技术专题 | 次月复测"
+										placeholder="Q01 | 在海外官网增设标杆案例专页 | P0 | 契合主流寻源问法 | 官方技术专题 | 次月复测"
 										value={actionPlanInput}
 										onChange={(e) => setActionPlanInput(e.target.value)}
 										className="border rounded-md p-2 bg-background font-mono"
@@ -1214,7 +1510,7 @@ function BrandReportsPage() {
 									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
 								>
 									<IconDeviceFloppy size={15} />
-									{saveAnalysisMutation.isPending ? "保存中..." : "保存人工分析版本"}
+									{saveAnalysisMutation.isPending ? "保存中..." : "保存分析修订 (生成新版本，不调 LLM)"}
 								</button>
 							</div>
 						</div>
