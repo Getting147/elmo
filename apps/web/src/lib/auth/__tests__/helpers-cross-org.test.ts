@@ -103,4 +103,23 @@ describe("REPORT-001E E2-R01: 组织鉴权与品牌解析严格分离防越权",
 		const targetOrg = await requireBrandAccess("usr_a", "ALPHA");
 		expect(targetOrg).toBe("org_a");
 	});
+
+	it("E3-R01: 当品牌不存在或无组织归属时，直接拒绝且严禁猜测 fallback", async () => {
+		const { db } = await import("@workspace/lib/db/db");
+
+		(db.select as any).mockReturnValue({
+			from: vi.fn().mockReturnValue({
+				where: vi.fn().mockReturnValue({
+					limit: vi.fn().mockResolvedValue([]), // 品牌不存在
+				}),
+			}),
+		});
+
+		const hasAccess = await checkBrandAccess("usr_a", "NON_EXISTENT_BRAND");
+		expect(hasAccess).toBe(false);
+
+		await expect(requireBrandAccess("usr_a", "NON_EXISTENT_BRAND")).rejects.toThrow(
+			"Forbidden: No access to this brand",
+		);
+	});
 });

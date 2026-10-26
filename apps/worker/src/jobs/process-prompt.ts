@@ -319,92 +319,13 @@ async function runModelIteration({
 export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<void> {
 	// pg-boss v12 passes an array of jobs - process each one
 	for (const job of jobs) {
-		const { promptId, cadenceHours: providedCadence, consecutiveFailures = 0 } = job.data;
+		const { promptId } = job.data;
 		console.log(`Processing prompt ${promptId}`);
 
-		// REPORT-001E: D->C 保持唯一采集责任。旧 worker provider 路径已不受支持并永久封死 (E2-R03)。
+		// REPORT-001E: D->C 保持唯一采集责任。旧 worker provider 路径已不受支持并永久封死 (E2-R03 / E3-R05)。
 		// 严禁通过任何环境变量 (如 ENABLE_LEGACY_WORKER_PROVIDER) 或布尔标记 (如 manualTriggered) 重新开启，防止无持久人工 run 授权与幂等的重放或注入。
 		console.warn(
 			`[Safety Guard] 拦截旧 worker provider 路径采样任务 (promptId=${promptId})：本轮 D->C 保持唯一采集责任，旧 provider 路径已永久封死，拒绝任何外部采集请求`,
 		);
-		continue;
-
-		const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
-
-		// Get cadence hours - use provided value or look it up
-		const cadenceHours = providedCadence ?? (await getCadenceHours(promptId));
-
-		// Get prompt context
-		const context = await getPromptContext(promptId);
-		if (!context) {
-			console.log(`Prompt ${promptId} not found, skipping (no reschedule)`);
-			continue; // Job completes successfully - prompt was deleted, don't reschedule
-		}
-
-		const { prompt, brand, competitors: competitorsList } = context;
-
-		// P0-3: market snapshot from prompt + injectedValue computed once per cycle
-		const market = prompt.market ?? null;
-		const injectedValue = buildInjectedValue(prompt.value, market);
-
-		// Check if prompt and brand are enabled
-		if (!prompt.enabled || !brand.enabled) {
-			console.log(`Prompt ${promptId} or brand ${brand.id} is disabled, skipping`);
-			continue;
-		}
-
-		const selectedConfigs = selectTargetsForBrand(scrapeConfigs, brand.enabledModels);
-		if (selectedConfigs.length === 0) {
-			console.log(`Prompt ${promptId} for brand ${brand.id} has no targets (brand.enabledModels=[])`);
-		}
-
-		console.log(`Processing prompt "${prompt.value}" for brand "${brand.name}"`);
-
-		// Run all model iterations in parallel
-		const runPromises: Promise<void>[] = [];
-
-		for (const config of selectedConfigs) {
-			const providerImpl = getProvider(config.provider);
-			for (let i = 0; i < RUNS_PER_PROMPT; i++) {
-				runPromises.push(
-					runModelIteration({
-						promptId,
-						promptValue: prompt.value,
-						market,
-						injectedValue,
-						brand,
-						competitorsList,
-						config,
-						providerImpl,
-						runIndex: i + 1,
-					}),
-				);
-			}
-		}
-
-		const results = await Promise.allSettled(runPromises);
-		const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-
-		if (failures.length > 0) {
-			const errorMessages = failures
-				.map((f, i) => `Run ${i + 1}: ${f.reason instanceof Error ? f.reason.message : String(f.reason)}`)
-				.join("; ");
-			console.error(`Prompt ${promptId} had ${failures.length}/${runPromises.length} failed runs: ${errorMessages}`);
-		}
-
-		const successCount = runPromises.length - failures.length;
-		console.log(`Completed prompt ${promptId}: ${successCount}/${runPromises.length} successful runs`);
-
-		trackWorkerEvent("prompt_processed", {
-			brand_id: brand.id,
-			models: [...new Set(selectedConfigs.map((c) => c.model))],
-			providers: [...new Set(selectedConfigs.map((c) => c.provider))],
-			total_runs: runPromises.length,
-			successful_runs: successCount,
-			failed_runs: failures.length,
-		});
-
-		// REPORT-001E: 单次有限执行结束，严禁自动续排下一轮采样
-		console.log(`Prompt ${promptId} run finished (manual mode, no auto-reschedule)`);
 	}
 }

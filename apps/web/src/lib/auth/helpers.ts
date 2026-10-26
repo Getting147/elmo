@@ -43,17 +43,17 @@ export async function checkOrgAccess(userId: string, organizationId: string): Pr
 }
 
 export async function checkBrandAccess(userId: string, brandId: string): Promise<boolean> {
-	// 明确的品牌访问权限核验 helper (E2-R01)
+	// 明确的品牌访问权限核验 helper (E2-R01 / E3-R01)
 	const [brandRow] = await db
 		.select({ organizationId: brands.organizationId })
 		.from(brands)
 		.where(eq(brands.id, brandId))
 		.limit(1);
-	if (brandRow?.organizationId) {
-		return checkOrgAccess(userId, brandRow.organizationId);
+	if (!brandRow?.organizationId) {
+		// 严禁对不存在或无组织的 brand 进行猜测式 fallback，无所属者直接拒绝 (E3-R01)
+		return false;
 	}
-	// 若尚未创建品牌记录（例如 onboarding 阶段），回退检查用户是否属于以该 ID 为组织 ID 的成员
-	return checkOrgAccess(userId, brandId);
+	return checkOrgAccess(userId, brandRow.organizationId);
 }
 
 export async function requireOrgAccess(userId: string, orgId: string): Promise<void> {
@@ -68,23 +68,46 @@ export async function requireBrandAccess(userId: string, brandId: string): Promi
 		.from(brands)
 		.where(eq(brands.id, brandId))
 		.limit(1);
-	const targetOrgId = brandRow?.organizationId || brandId;
-	if (!(await checkOrgAccess(userId, targetOrgId))) {
+	if (!brandRow?.organizationId) {
 		throw new Error("Forbidden: No access to this brand");
 	}
-	return targetOrgId;
+	if (!(await checkOrgAccess(userId, brandRow.organizationId))) {
+		throw new Error("Forbidden: No access to this brand");
+	}
+	return brandRow.organizationId;
 }
 
-export async function listUserOrganizations(userId: string): Promise<{ id: string; name: string }[]> {
+export interface UserOrgEntry {
+	id: string; // 保持组织 ID（即 organization.id），确保原有的 orgIds.map(o => o.id) 契约不被破坏
+	name: string;
+	orgId: string;
+	brandId: string; // 真实 brand.id (若未建 brand 则为 orgId)
+	brandName: string;
+}
+
+export async function listUserOrganizations(userId: string): Promise<UserOrgEntry[]> {
 	// Hide orgs whose brand was soft-deleted (V1 软删除: 隐藏 + 停扫 + 数据保留)。
 	// Left join: orgs without a brand row (rare) stay visible so users can still
 	// complete onboarding; orgs whose brand has deleted_at set disappear.
-	return db
-		.select({ id: organization.id, name: organization.name })
+	const rows = await db
+		.select({
+			orgId: organization.id,
+			orgName: organization.name,
+			brandId: brands.id,
+			brandName: brands.name,
+		})
 		.from(member)
 		.innerJoin(organization, eq(member.organizationId, organization.id))
-		.leftJoin(brands, eq(brands.organizationId, organization.id))
+		.leftJoin(brands, and(eq(brands.organizationId, organization.id), isNull(brands.deletedAt)))
 		.where(
 			and(eq(member.userId, userId), or(isNull(brands.id), isNull(brands.deletedAt))),
 		);
+
+	return rows.map((r) => ({
+		id: r.orgId,
+		name: r.orgName,
+		orgId: r.orgId,
+		brandId: r.brandId || r.orgId,
+		brandName: r.brandName || r.orgName,
+	}));
 }

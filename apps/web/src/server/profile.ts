@@ -8,7 +8,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
+import { requireAuthSession, requireBrandAccess } from "@/lib/auth/helpers";
 import { db } from "@workspace/lib/db/db";
 import {
 	brandProductLines,
@@ -50,7 +50,7 @@ export const getBrandProfileFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [productLines, credentials] = await Promise.all([
 			db.query.brandProductLines.findMany({
 				where: eq(brandProductLines.brandId, data.brandId),
@@ -68,7 +68,7 @@ export const createProductLineFn = createServerFn({ method: "POST" })
 	.validator(z.object({ brandId: z.string() }).merge(productLineSchema))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.insert(brandProductLines)
 			.values({
@@ -96,7 +96,7 @@ export const updateProductLineFn = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.update(brandProductLines)
 			.set({
@@ -122,7 +122,7 @@ export const deleteProductLineFn = createServerFn({ method: "POST" })
 	.validator(z.object({ brandId: z.string(), productLineId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		await db
 			.delete(brandProductLines)
 			.where(
@@ -138,7 +138,7 @@ export const createCredentialFn = createServerFn({ method: "POST" })
 	.validator(z.object({ brandId: z.string() }).merge(credentialSchema))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.insert(brandCredentials)
 			.values({
@@ -166,7 +166,7 @@ export const updateCredentialFn = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [row] = await db
 			.update(brandCredentials)
 			.set({
@@ -192,7 +192,7 @@ export const deleteCredentialFn = createServerFn({ method: "POST" })
 	.validator(z.object({ brandId: z.string(), credentialId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		await db
 			.delete(brandCredentials)
 			.where(
@@ -213,7 +213,7 @@ export const getProfileCompletenessFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const [brand, productLines, credentials, competitorRows] = await Promise.all([
 			db.query.brands.findFirst({ where: eq(brands.id, data.brandId) }),
 			db.query.brandProductLines.findMany({

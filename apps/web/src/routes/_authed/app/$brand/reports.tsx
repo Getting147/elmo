@@ -183,25 +183,39 @@ function BrandReportsPage() {
 			if (Array.isArray(analysisData.payload?.action_plan)) {
 				setActionPlanInput(
 					analysisData.payload.action_plan
-						.map((ap: any) => `${ap.priority}: [${ap.finding}] ${ap.action} (交付物: ${ap.deliverable})`)
+						.map((ap: any) => {
+							const promptCode =
+								Array.isArray(ap.evidence_refs) && ap.evidence_refs.length > 0
+									? ap.evidence_refs[0]
+									: "";
+							const action = ap.action || "";
+							const priority = ap.priority || "P2";
+							const rationale = ap.priority_rationale || "";
+							const deliverable = ap.deliverable || "";
+							const verification = ap.verification_method || "";
+							return `${promptCode} | ${action} | ${priority} | ${rationale} | ${deliverable} | ${verification}`;
+						})
 						.join("\n"),
 				);
 			}
 		}
 	}, [analysisData]);
 
-	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04)
+	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04 / E3-R04: 避免旧 reportData effect 覆盖刚生成或明确选择的新修订)
 	useEffect(() => {
 		if (reportData?.revisions && reportData.revisions.length > 0) {
 			const revs = reportData.revisions;
 			const latestRev = revs[revs.length - 1];
-			if (!activeRevisionId || !revs.some((r: any) => r.revision_id === activeRevisionId)) {
-				setActiveRevisionId(latestRev.revision_id);
-			}
+			setActiveRevisionId((current) => {
+				if (!current || !revs.some((r: any) => r.revision_id === current)) {
+					return latestRev.revision_id;
+				}
+				return current;
+			});
 			const nextNum = revs.length + 1;
 			setRevisionInput(`rev_${nextNum < 10 ? `0${nextNum}` : nextNum}`);
 		}
-	}, [reportData, activeRevisionId]);
+	}, [reportData]);
 
 	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
 	const handleSelectRun = (runId: string) => {
@@ -793,12 +807,7 @@ function BrandReportsPage() {
 										<div className="bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 p-3 rounded-lg">
 											<span className="text-xs text-muted-foreground">自有域名引用占比</span>
 											<div className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-1">
-												{metricsData.domain_metrics?.own_domain_citation_rate ??
-													(metricsData.domain_metrics?.total_citations != null
-														? metricsData.domain_metrics.total_citations > 0
-															? `${((metricsData.domain_metrics.own_domain_citations / metricsData.domain_metrics.total_citations) * 100).toFixed(1)}%`
-															: "不适用"
-														: "待核")}
+												{metricsData.domain_metrics?.own_domain_citation_rate ?? "待核"}
 											</div>
 											<span className="text-xs text-muted-foreground">
 												{metricsData.domain_metrics?.own_domain_citations != null && metricsData.domain_metrics?.total_citations != null
@@ -1133,7 +1142,7 @@ function BrandReportsPage() {
 												>
 													<span>{rev.revision_id}</span>
 													<span className="text-[10px] opacity-80">
-														({rev.status === "approved" ? "已批准" : rev.status === "rejected" ? "已退回" : "草稿"})
+														({rev.review_status === "approved" ? "已批准" : rev.review_status === "rejected" ? "已退回" : "草稿"})
 													</span>
 												</button>
 											);
