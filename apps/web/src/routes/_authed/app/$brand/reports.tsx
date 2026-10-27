@@ -69,6 +69,7 @@ function BrandReportsPage() {
 	const [analystName, setAnalystName] = useState<string>("");
 	const [executiveConclusion, setExecutiveConclusion] = useState<string>("");
 	const [keyFindings, setKeyFindings] = useState<string>("");
+	const [rawBrandIdentityAudit, setRawBrandIdentityAudit] = useState<any>(null);
 	const [brandIdentityAudit, setBrandIdentityAudit] = useState<string>("");
 	const [contentGapsInput, setContentGapsInput] = useState<string>("");
 	const [actionPlanInput, setActionPlanInput] = useState<string>("");
@@ -184,7 +185,14 @@ function BrandReportsPage() {
 					? analysisData.payload.key_findings.join("\n")
 					: analysisData.payload?.key_findings || "",
 			);
-			setBrandIdentityAudit(analysisData.payload?.brand_identity_audit || "");
+			const audit = analysisData.payload?.brand_identity_audit;
+			if (typeof audit === "object" && audit !== null) {
+				setRawBrandIdentityAudit(audit);
+				setBrandIdentityAudit(audit.analysis || audit.summary || "");
+			} else {
+				setRawBrandIdentityAudit(null);
+				setBrandIdentityAudit(typeof audit === "string" ? audit : "");
+			}
 			setContentGapsInput(
 				Array.isArray(analysisData.payload?.content_gaps)
 					? analysisData.payload.content_gaps.join("\n")
@@ -252,6 +260,7 @@ function BrandReportsPage() {
 		setAnalystName("");
 		setExecutiveConclusion("");
 		setKeyFindings("");
+		setRawBrandIdentityAudit(null);
 		setBrandIdentityAudit("");
 		setContentGapsInput("");
 		setActionPlanInput("");
@@ -481,6 +490,25 @@ function BrandReportsPage() {
 				};
 			});
 
+			let finalBrandIdentityAudit: any = brandIdentityAudit.trim() || "待人工核实与完善";
+			if (rawBrandIdentityAudit && typeof rawBrandIdentityAudit === "object") {
+				finalBrandIdentityAudit = {
+					...rawBrandIdentityAudit,
+					analysis: brandIdentityAudit.trim() || rawBrandIdentityAudit.analysis || "待人工核实与完善",
+				};
+			}
+
+			// 保全成因、渠道与 AI 元数据 (F-R05 / F-R06)
+			const rootCauses = analysisData?.payload?.root_causes || [];
+			const channelGaps = analysisData?.payload?.channel_gaps || [];
+			const aiMetadata = analysisData?.payload?.ai_metadata
+				? {
+						...analysisData.payload.ai_metadata,
+						parent_version: analysisData.version,
+						human_refined: true,
+					}
+				: undefined;
+
 			return saveBaselineAnalysisFn({
 				data: {
 					brandId: brandId!,
@@ -491,33 +519,42 @@ function BrandReportsPage() {
 						.split("\n")
 						.map((s) => s.trim())
 						.filter((s) => s.length > 0),
-					brandIdentityAudit: brandIdentityAudit.trim() || "待人工核实与完善",
+					brandIdentityAudit: finalBrandIdentityAudit,
 					contentGaps: contentGapsInput.trim() || "待人工补充内容资产缺口",
-					rootCauses: [],
-					channelGaps: [],
+					rootCauses,
+					channelGaps,
 					actionPlan,
+					aiMetadata,
+					parentVersion: analysisData?.version,
 				},
 			});
 		},
-		onSuccess: (res) => {
+		onSuccess: async (res) => {
 			setActiveAnalysisId(res.analysis_id);
 			setActionError(null);
-			refetchAnalysis();
+			await refetchAnalysis();
+			// 自动装配对应的新报告修订并选中 (F-R05)
+			const nextNum = (reportData?.revisions?.length || 0) + 1;
+			const targetRev = `rev_${String(nextNum).padStart(2, "0")}`;
+			generateRevisionMutation.mutate({ revisionId: targetRev, analysisId: res.analysis_id });
 		},
 		onError: (err: any) => setActionError(`保存人工分析失败: ${err.message}`),
 	});
 
 	const generateRevisionMutation = useMutation({
-		mutationFn: (revisionId: string) =>
-			generateBaselineReportRevisionFn({
+		mutationFn: (args: string | { revisionId: string; analysisId?: string }) => {
+			const revId = typeof args === "string" ? args : args.revisionId;
+			const anlId = typeof args === "string" ? activeAnalysisId : (args.analysisId || activeAnalysisId);
+			return generateBaselineReportRevisionFn({
 				data: {
 					brandId: brandId!,
 					runId: activeRunId,
-					revisionId: revisionId.trim() || "rev_01",
-					analysisId: activeAnalysisId,
-					draftNotice: `内部评估草稿（${revisionId.trim() || "rev_01"} · 离线验证）`,
+					revisionId: revId.trim() || "rev_01",
+					analysisId: anlId,
+					draftNotice: `内部评估草稿（${revId.trim() || "rev_01"} · 离线验证）`,
 				},
-			}),
+			});
+		},
 		onSuccess: (res) => {
 			setActiveRevisionId(res.revision_id);
 			// 自动预推下一个 revision 编号供继续修改 (E-R06)
@@ -603,16 +640,39 @@ function BrandReportsPage() {
 				</div>
 			</div>
 
-			{/* 离线专属测试环境提示横幅 (REPORT-001F) */}
-			<div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-4 py-2.5 rounded-lg text-xs flex items-center justify-between gap-3">
+			{/* 运行模式与环境门禁提示横幅 (REPORT-001F / F-R01) */}
+			<div
+				className={`border px-4 py-2.5 rounded-lg text-xs flex items-center justify-between gap-3 ${
+					executionMode === "real"
+						? "bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-800 text-red-800 dark:text-red-200"
+						: "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+				}`}
+			>
 				<div className="flex items-center gap-2">
-					<IconShieldCheck className="text-amber-600 shrink-0" size={16} />
+					<IconShieldCheck
+						className={executionMode === "real" ? "text-red-600 shrink-0" : "text-amber-600 shrink-0"}
+						size={16}
+					/>
 					<span>
-						<strong>【测试与预览环境】</strong>当前处于离线测试模式 (Offline Mock)。所有外部模型交互均通过安全 Mock 通道运行，不调用真实付费 API，不产生实际账单。
+						{executionMode === "real" ? (
+							<>
+								<strong>【受控真实执行模式】</strong>将调用真实豆包方舟与 DeepSeek 外部 API。必须服务端具备有效授权与凭据，未授权将触发拦截守卫，禁止自动伪造完成。
+							</>
+						) : (
+							<>
+								<strong>【测试与预览环境】</strong>当前处于离线测试模式 (Offline Mock)。所有外部模型交互（Ark 采样与 DeepSeek 分析）均通过安全 Mock 通道运行，不调用真实付费 API，不产生实际账单。
+							</>
+						)}
 					</span>
 				</div>
-				<span className="font-mono text-[11px] bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded shrink-0">
-					MOCK ONLY · ZERO BILLED
+				<span
+					className={`font-mono text-[11px] px-2 py-0.5 rounded shrink-0 ${
+						executionMode === "real"
+							? "bg-red-100 dark:bg-red-900/60 text-red-900 dark:text-red-200 font-bold"
+							: "bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200"
+					}`}
+				>
+					{executionMode === "real" ? "REAL MODE · BUDGET GATED" : "MOCK ONLY · ZERO BILLED"}
 				</span>
 			</div>
 
@@ -853,25 +913,25 @@ function BrandReportsPage() {
 							</div>
 							<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mt-1">
 								<div>
-									<span className="text-muted-foreground">渠道与引擎：</span>
-									<span className="font-semibold ml-1">豆包方舟 (Ark)</span>
+									<span className="text-muted-foreground">采集调用：</span>
+									<span className="font-semibold ml-1">豆包方舟 (Ark 联网检索)</span>
+								</div>
+								<div>
+									<span className="text-muted-foreground">分析调用：</span>
+									<span className="font-semibold ml-1">DeepSeek (V2 七章并发)</span>
 								</div>
 								<div>
 									<span className="text-muted-foreground">运行模式：</span>
 									<span className="font-semibold ml-1 uppercase">{executionMode}</span>
 								</div>
 								<div>
-									<span className="text-muted-foreground">最大请求上限：</span>
-									<span className="font-semibold ml-1">
-										{executionMode === "real" && activeAuthData?.authorization?.request_limit
-											? `${activeAuthData.authorization.request_limit} 次 (重试 ${activeAuthData.authorization.retry_limit ?? 0} 次)`
-											: "30 次 (重试 0 次)"}
-									</span>
-								</div>
-								<div>
-									<span className="text-muted-foreground">费用说明：</span>
+									<span className="text-muted-foreground">费用与限制：</span>
 									<span className="font-semibold ml-1 text-amber-700 dark:text-amber-300">
-										{executionMode === "real" ? "受控预算硬上限 (待审核)" : "离线零费用"}
+										{executionMode === "real"
+											? activeAuthData?.authorization
+												? `硬上限: 采${activeAuthData.authorization.request_limit}次·析7次`
+												: "待服务端授权 (未授权禁止外发)"
+											: "离线测试 0 费用 (Ark≤30次·析7次)"}
 									</span>
 								</div>
 							</div>
@@ -1502,6 +1562,7 @@ function BrandReportsPage() {
 									onClick={() => saveAnalysisMutation.mutate()}
 									disabled={
 										saveAnalysisMutation.isPending ||
+										generateRevisionMutation.isPending ||
 										!analystName.trim() ||
 										!executiveConclusion.trim() ||
 										!keyFindings.trim() ||
@@ -1510,7 +1571,9 @@ function BrandReportsPage() {
 									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
 								>
 									<IconDeviceFloppy size={15} />
-									{saveAnalysisMutation.isPending ? "保存中..." : "保存分析修订 (生成新版本，不调 LLM)"}
+									{saveAnalysisMutation.isPending || generateRevisionMutation.isPending
+										? "保存并装配新报告中..."
+										: "保存分析并装配新报告 (不调 LLM)"}
 								</button>
 							</div>
 						</div>

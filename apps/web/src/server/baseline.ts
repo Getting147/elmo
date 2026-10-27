@@ -726,7 +726,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			analystName: z.string().min(1),
 			executiveConclusion: z.string().min(1),
 			keyFindings: z.array(z.string()).min(1),
-			brandIdentityAudit: z.string().default("待人工核实与完善"),
+			brandIdentityAudit: z.union([z.string(), z.record(z.string(), z.any())]).default("待人工核实与完善"),
 			rootCauses: z
 				.array(
 					z.object({
@@ -742,14 +742,14 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 				.array(
 					z.object({
 						channel_type: z.string(),
-						citation_count: z.number().int(),
-						citation_share_text: z.string(),
-						actionability: z.string(),
-						strategic_note: z.string(),
+						citation_count: z.number().int().optional(),
+						citation_share_text: z.string().optional(),
+						actionability: z.string().optional(),
+						strategic_note: z.string().optional(),
 					}),
 				)
 				.default([]),
-			contentGaps: z.string().default("待人工补充内容资产缺口"),
+			contentGaps: z.union([z.string(), z.array(z.string())]).default("待人工补充内容资产缺口"),
 			actionPlan: z
 				.array(
 					z.object({
@@ -763,6 +763,8 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 					}),
 				)
 				.min(1),
+			aiMetadata: z.record(z.string(), z.any()).optional(),
+			parentVersion: z.number().int().optional(),
 		}),
 	)
 	.handler(async ({ data }) => {
@@ -785,6 +787,8 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			channel_gaps: data.channelGaps,
 			content_gaps: data.contentGaps,
 			action_plan: data.actionPlan,
+			ai_metadata: data.aiMetadata,
+			parent_version: data.parentVersion,
 		};
 
 		return callBaselineBackend({
