@@ -3,8 +3,8 @@
  */
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
-import { member, organization, brands } from "@workspace/lib/db/schema";
-import { eq, and, or, isNull } from "drizzle-orm";
+import { brands, member, organization } from "@workspace/lib/db/schema";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { getDeployment } from "@/lib/config/server";
 import { auth } from "./server";
 
@@ -83,12 +83,14 @@ export interface UserOrgEntry {
 	orgId: string;
 	brandId: string; // 真实 brand.id (若未建 brand 则为 orgId)
 	brandName: string;
+	hasBrand?: boolean; // false 表示真正未建档的组织 (brands 表中无对应记录)
 }
 
 export async function listUserOrganizations(userId: string): Promise<UserOrgEntry[]> {
-	// Hide orgs whose brand was soft-deleted (V1 软删除: 隐藏 + 停扫 + 数据保留)。
-	// Left join: orgs without a brand row (rare) stay visible so users can still
-	// complete onboarding; orgs whose brand has deleted_at set disappear.
+	// 软删除过滤 (B01): 区分“未建档”与“已删除”状态。
+	// LEFT JOIN brands 关联全部品牌记录。
+	// WHERE 过滤：仅允许真实未建档组织 (brands.id IS NULL) 或活跃品牌 (brands.deletedAt IS NULL)。
+	// 当组织下品牌均已软删除时，该行 deletedAt 非空，被 WHERE 过滤掉，不再错误 fallback 冒充未建档组织。
 	const rows = await db
 		.select({
 			orgId: organization.id,
@@ -98,10 +100,8 @@ export async function listUserOrganizations(userId: string): Promise<UserOrgEntr
 		})
 		.from(member)
 		.innerJoin(organization, eq(member.organizationId, organization.id))
-		.leftJoin(brands, and(eq(brands.organizationId, organization.id), isNull(brands.deletedAt)))
-		.where(
-			and(eq(member.userId, userId), or(isNull(brands.id), isNull(brands.deletedAt))),
-		);
+		.leftJoin(brands, eq(brands.organizationId, organization.id))
+		.where(and(eq(member.userId, userId), or(isNull(brands.id), isNull(brands.deletedAt))));
 
 	return rows.map((r) => ({
 		id: r.orgId,
@@ -109,5 +109,6 @@ export async function listUserOrganizations(userId: string): Promise<UserOrgEntr
 		orgId: r.orgId,
 		brandId: r.brandId || r.orgId,
 		brandName: r.brandName || r.orgName,
+		hasBrand: !!r.brandId,
 	}));
 }
