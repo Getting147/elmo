@@ -11,7 +11,7 @@
 import { db } from "@workspace/lib/db/db";
 import { draftResearch } from "@workspace/lib/db/schema";
 import { analyzeBrand, markFailed } from "@workspace/lib/onboarding";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import type { Job } from "pg-boss";
 
 export interface ProcessResearchJobData {
@@ -43,36 +43,46 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 	}
 	const { draftId, website, input } = job.data;
 
-	// 1. UPDATE research_status='running'（CAS：仅 queued 态转 running，防重入）
-	const claimed = await db
-		.update(draftResearch)
-		.set({ researchStatus: "running", updatedAt: new Date() })
-		.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "queued")))
-		.returning({ id: draftResearch.id, createdAt: draftResearch.createdAt });
-
-	if (claimed.length === 0) {
-		// 已被其他 worker 抢走（不重新入队）→ 静默退出
-		return;
-	}
-
-	const draftRecord = claimed[0];
-
 	// 历史遗留任务隔离保护（任务书 3.1 & 验收门槛）：
 	// 任何早于执行方启动前生成的任务不得自动消费，不调用模型，保全历史草稿数据不被更改或删除。
 	// 处置方案与人工恢复由获准发布方按发布手册统一执行。
 	const workerStartTime = process.env.RESEARCH_WORKER_STARTED_AT
 		? new Date(process.env.RESEARCH_WORKER_STARTED_AT)
 		: new Date();
-	const isPreStartup = draftRecord.createdAt && new Date(draftRecord.createdAt) < workerStartTime;
+
+	// 先做只读检查：若创建时间早于 worker 启动时间，直接跳过，零写操作，绝对不修改 updatedAt 或任何字段
+	const existingDraft = await db.query.draftResearch.findFirst({
+		where: eq(draftResearch.id, draftId),
+		columns: { id: true, createdAt: true, researchStatus: true },
+	});
+
+	if (!existingDraft) {
+		return;
+	}
+
+	const isPreStartup = existingDraft.createdAt && new Date(existingDraft.createdAt) < workerStartTime;
 	if (isPreStartup) {
 		console.warn(
-			`[process-research] 隔离执行方启动前的历史遗留任务 ${draftId} (创建于 ${draftRecord.createdAt} < 启动时间 ${workerStartTime.toISOString()})。按授权边界跳过执行，保持原样，不调用模型。`,
+			`[process-research] 隔离执行方启动前的历史遗留任务 ${draftId} (创建于 ${existingDraft.createdAt} < 启动时间 ${workerStartTime.toISOString()})。按授权边界跳过执行，保持原样（零写入），不调用模型。`,
 		);
-		// 释放 CAS 占位，恢复 queued 态，保证历史数据 100% 物理保全且未被标记 failed
-		await db
-			.update(draftResearch)
-			.set({ researchStatus: "queued" })
-			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
+		return;
+	}
+
+	// 1. UPDATE research_status='running'（CAS：仅 queued 态转 running，防重入，且仅处理本批新任务）
+	const claimed = await db
+		.update(draftResearch)
+		.set({ researchStatus: "running", updatedAt: new Date() })
+		.where(
+			and(
+				eq(draftResearch.id, draftId),
+				eq(draftResearch.researchStatus, "queued"),
+				gte(draftResearch.createdAt, workerStartTime),
+			),
+		)
+		.returning({ id: draftResearch.id, createdAt: draftResearch.createdAt });
+
+	if (claimed.length === 0) {
+		// 已被其他 worker 抢走或不满足条件 → 静默退出
 		return;
 	}
 

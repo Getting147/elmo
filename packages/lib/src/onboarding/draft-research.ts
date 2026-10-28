@@ -14,18 +14,13 @@
  * 重试覆盖: failed 状态可被新草稿覆盖（先 deleteFailed 再 insert）
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@workspace/lib/db/db";
 import { brands, draftResearch } from "@workspace/lib/db/schema";
-import { type OnboardingSuggestion } from "@workspace/lib/onboarding";
-import {
-	DEFAULT_DRAFT_TTL_MS,
-	hashUrlForDraft,
-	computeExpiresAt,
-	pgErrorCode,
-} from "./draft-research-utils";
+import type { OnboardingSuggestion } from "@workspace/lib/onboarding";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { computeExpiresAt, DEFAULT_DRAFT_TTL_MS, hashUrlForDraft, pgErrorCode } from "./draft-research-utils";
 
-export { DEFAULT_DRAFT_TTL_MS, hashUrlForDraft, computeExpiresAt };
+export { computeExpiresAt, DEFAULT_DRAFT_TTL_MS, hashUrlForDraft };
 
 /** PG 23505 unique_violation SQLSTATE */
 const PG_UNIQUE_VIOLATION = "23505";
@@ -38,10 +33,7 @@ const PG_UNIQUE_VIOLATION = "23505";
  * 过期行（expires_at < now()）不论 state 一律清 — done 行 payload 已灌库无保留价值；
  * 过期 pending_review 必清（用户重跑应能新建）。
  */
-export async function deleteFailedOrExpiredForHash(
-	brandId: string,
-	urlHash: string,
-): Promise<number> {
+export async function deleteFailedOrExpiredForHash(brandId: string, urlHash: string): Promise<number> {
 	const result = await db
 		.delete(draftResearch)
 		.where(
@@ -77,8 +69,8 @@ export async function createDraft(args: {
 	const { brandId, website, payload } = args;
 	const urlHash = hashUrlForDraft(website);
 
-	// 先清理同 hash 的 failed/rolled_back 行（避免 partial unique 冲突 + 节省空间）
-	await deleteFailedOrExpiredForHash(brandId, urlHash);
+	// 历史保全：保留失败与历史草稿用于追溯与审计，不执行物理删除；
+	// 终态（failed/rolled_back/done）不落入 partial unique active 约束，安全共存并保留记录
 
 	const id = `dres_${randomUUID()}`;
 	const expiresAt = computeExpiresAt();
@@ -121,10 +113,7 @@ export async function createDraft(args: {
  */
 export async function markFailed(args: { id: string; error: string }): Promise<void> {
 	const { id, error } = args;
-	await db
-		.update(draftResearch)
-		.set({ state: "failed", error, updatedAt: new Date() })
-		.where(eq(draftResearch.id, id));
+	await db.update(draftResearch).set({ state: "failed", error, updatedAt: new Date() }).where(eq(draftResearch.id, id));
 }
 
 /**
@@ -141,20 +130,14 @@ export async function markConfirmed(id: string): Promise<void> {
  * 标记草稿为 applied（confirm 端点事务成功后调用）
  */
 export async function markApplied(id: string): Promise<void> {
-	await db
-		.update(draftResearch)
-		.set({ state: "applied", updatedAt: new Date() })
-		.where(eq(draftResearch.id, id));
+	await db.update(draftResearch).set({ state: "applied", updatedAt: new Date() }).where(eq(draftResearch.id, id));
 }
 
 /**
  * 标记草稿为 rolled_back（rollback 端点调用，物理不删）
  */
 export async function markRolledBack(id: string): Promise<void> {
-	await db
-		.update(draftResearch)
-		.set({ state: "rolled_back", updatedAt: new Date() })
-		.where(eq(draftResearch.id, id));
+	await db.update(draftResearch).set({ state: "rolled_back", updatedAt: new Date() }).where(eq(draftResearch.id, id));
 }
 
 /**

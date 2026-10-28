@@ -348,13 +348,18 @@ async function main() {
 		}
 	}
 
-	if (finalDraft2 && finalDraft2.research_status === "queued" && mockDeepSeekCalls === 0) {
-		log("✓ PASS: 历史遗留任务隔离保护完全生效（历史数据100%物理保全，零模型调用）！");
+	const updatedAtUnchanged =
+		finalDraft2 && Math.abs(new Date(finalDraft2.updated_at).getTime() - staleTime.getTime()) < 1000;
+	if (finalDraft2 && finalDraft2.research_status === "queued" && updatedAtUnchanged && mockDeepSeekCalls === 0) {
+		log("✓ PASS: 历史遗留任务隔离保护完全生效（历史数据100%物理保全，updated_at保持原样零修改，零模型调用）！");
 		log(`  - 状态保持原样: research_status=${finalDraft2.research_status}, 未被篡改或清除`);
+		log(`  - updatedAt 未被篡改: ${finalDraft2.updated_at.toISOString()}`);
 		log(`  - DeepSeek 调用次数: ${mockDeepSeekCalls} (0费用保护验证成功)`);
 		passedTests++;
 	} else {
-		log(`✗ FAIL: 历史积压任务未正确隔离。状态: ${JSON.stringify(finalDraft2)}, calls=${mockDeepSeekCalls}`);
+		log(
+			`✗ FAIL: 历史积压任务未正确隔离。状态: ${JSON.stringify(finalDraft2)}, updatedAtUnchanged=${updatedAtUnchanged}, calls=${mockDeepSeekCalls}`,
+		);
 	}
 
 	// -------------------------------------------------------------------------

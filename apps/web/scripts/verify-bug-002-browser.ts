@@ -11,6 +11,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import pg from "pg";
+import { PgBoss } from "pg-boss";
 import { type Browser, chromium, type Page } from "playwright";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:5433/elmo";
@@ -46,7 +47,7 @@ const BRAND_RETRY = {
 };
 
 let mockMode: "normal" | "error_401" = "normal";
-let _mockCallCount = 0;
+let mockDeepSeekCalls = 0;
 
 const MOCK_HTML = `<!DOCTYPE html>
 <html>
@@ -122,7 +123,7 @@ function createMockServer(): http.Server {
 		}
 
 		if (req.url === "/chat/completions" && req.method === "POST") {
-			_mockCallCount++;
+			mockDeepSeekCalls++;
 			if (mockMode === "error_401") {
 				res.writeHead(401, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ error: { message: "DeepSeek API key invalid or expired (Mock 401)", code: 401 } }));
@@ -271,6 +272,11 @@ async function main() {
 	workerProcess.stderr?.on("data", (d) => log(`[Worker stderr] ${d.toString().trim()}`));
 	await sleep(2500);
 
+	// 初始化 pg-boss 发送端
+	const boss = new PgBoss({ connectionString: DATABASE_URL, schema: "pgboss" });
+	await boss.start();
+	log("[pg-boss] Sender client connected");
+
 	// 4. 启动 Playwright 浏览器
 	log("[Browser] Launching Chromium browser...");
 	const browser: Browser = await chromium.launch({ headless: true });
@@ -409,37 +415,70 @@ async function main() {
 		passedTests++;
 
 		// ---------------------------------------------------------------------
-		// 步骤 6: 历史遗留任务保全验证
+		// 步骤 6: 历史遗留任务保全验证（实际投递入队核验）
 		// ---------------------------------------------------------------------
 		totalTests++;
-		log("\n--- [Browser Flow 6] 验证启动前的历史任务隔离性与数据保全 ---");
+		log("\n--- [Browser Flow 6] 验证启动前的历史任务隔离性与数据保全 (实际投递入队核验) ---");
 		const staleDraftId = "dres_stale_before_worker";
 		const pastTime = new Date(Date.now() - 3600 * 1000); // 1小时前
 		await client.query(
 			`INSERT INTO draft_research (id, brand_id, url_hash, state, payload, research_status, created_at, updated_at, expires_at)
 			 VALUES ($1, $2, 'hash_pre_stale', 'pending_review', '{"brandName":"历史草稿数据"}'::jsonb, 'queued', $3, $3, NOW() + INTERVAL '30 days')
-			 ON CONFLICT (id) DO UPDATE SET research_status = 'queued';`,
+			 ON CONFLICT (id) DO UPDATE SET research_status = 'queued', created_at = $3, updated_at = $3;`,
 			[staleDraftId, BRAND_NORMAL.id, pastTime],
 		);
 
-		// Worker 即使接收到该 job，也会触发 preStartup 守卫跳过
+		const callsBeforeStale = mockDeepSeekCalls;
+
+		// 实际将历史任务投递至 pg-boss 队列
+		await boss.send("analyze-brand-research", {
+			draftId: staleDraftId,
+			brandId: BRAND_NORMAL.id,
+			website: `${MOCK_BASE_URL}/mock-website`,
+			additionalDomains: [],
+		});
+		log(`[pg-boss] 实际投递历史积压任务 ${staleDraftId}，等待 worker 消费处理...`);
+
+		// 等待 worker 接收并处理
+		await sleep(2500);
+
+		// Worker 即使接收到该 job，也会触发 preStartup 守卫跳过，不修改 updatedAt，不改动 payload，不调用模型
 		const staleDraftCheck = await client.query("SELECT * FROM draft_research WHERE id = $1;", [staleDraftId]);
 		const staleRow = staleDraftCheck.rows[0];
-		if (staleRow && staleRow.payload?.brandName === "历史草稿数据" && staleRow.research_status === "queued") {
-			log("✓ PASS: 启动前的历史遗留草稿 100% 物理保全，未被自动修改或删除");
+		const updatedAtUnchanged =
+			staleRow && Math.abs(new Date(staleRow.updated_at).getTime() - pastTime.getTime()) < 1000;
+		const noModelCall = mockDeepSeekCalls === callsBeforeStale;
+
+		if (
+			staleRow &&
+			staleRow.payload?.brandName === "历史草稿数据" &&
+			staleRow.research_status === "queued" &&
+			updatedAtUnchanged &&
+			noModelCall
+		) {
+			log("✓ PASS: 启动前的历史遗留草稿 100% 物理保全，实际入队后触发守卫安全跳过：");
+			log(`  - 状态保持原样: research_status=${staleRow.research_status}`);
+			log(`  - updatedAt 未被改写: ${staleRow.updated_at.toISOString()} (与预期过去时间一致)`);
+			log(`  - 草稿 payload 完好无损: brandName="${staleRow.payload.brandName}"`);
+			log("  - 模型调用数未增加: 0 次新增调用");
 			passedTests++;
 		} else {
-			log(`✗ FAIL: 历史草稿状态异常: ${JSON.stringify(staleRow)}`);
+			log(
+				`✗ FAIL: 历史草稿状态异常: ${JSON.stringify(staleRow)}, callsDiff=${mockDeepSeekCalls - callsBeforeStale}, updatedAtUnchanged=${updatedAtUnchanged}`,
+			);
 		}
 	} catch (err) {
 		log(`✗ [FATAL BROWSER ERROR]: ${err instanceof Error ? err.stack : String(err)}`);
 		await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "error_crash.png") });
 	} finally {
 		await browser.close();
+		try {
+			await boss.stop();
+		} catch {}
 		workerProcess.kill("SIGTERM");
 		mockServer.close();
 		await client.end();
-		log("\n[Clean Up] Browser, Worker, Mock Server, and DB closed cleanly");
+		log("\n[Clean Up] Browser, Worker, PgBoss, Mock Server, and DB closed cleanly");
 	}
 
 	log("\n================================================================================");

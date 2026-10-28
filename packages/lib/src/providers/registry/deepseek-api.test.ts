@@ -61,8 +61,17 @@ describe("deepseek-api isConfigured & credentials", () => {
 		expect(getDeepSeekBaseUrl()).toBe("https://api.deepseek.com");
 		expect(getDeepSeekModel()).toBe("deepseek-chat");
 
-		process.env.DEEPSEEK_BASE_URL = "https://custom.deepseek.proxy/v1/";
-		expect(getDeepSeekBaseUrl()).toBe("https://custom.deepseek.proxy/v1");
+		// 本地测试/Mock transport 白名单允许
+		process.env.DEEPSEEK_BASE_URL = "http://127.0.0.1:19124/";
+		expect(getDeepSeekBaseUrl()).toBe("http://127.0.0.1:19124");
+
+		// 非 DeepSeek 外部端点（如 MiniMax / OpenAI 等）即使在 LLM_BASE_URL 或 DEEPSEEK_BASE_URL 中残留，也被集中校验拦截并回退官方端点
+		process.env.LLM_BASE_URL = "https://api.minimax.io/v1";
+		delete process.env.DEEPSEEK_BASE_URL;
+		expect(getDeepSeekBaseUrl()).toBe("https://api.deepseek.com");
+
+		process.env.DEEPSEEK_BASE_URL = "https://api.minimax.io/v1";
+		expect(getDeepSeekBaseUrl()).toBe("https://api.deepseek.com");
 
 		process.env.DEEPSEEK_MODEL = "deepseek-reasoner";
 		expect(getDeepSeekModel()).toBe("deepseek-reasoner");
@@ -151,7 +160,7 @@ describe("deepseek-api runStructuredResearch", () => {
 		expect(body.model).toBe("deepseek-chat");
 		expect(body.response_format).toEqual({ type: "json_object" });
 		expect(body.messages[0].role).toBe("system");
-		expect(result.object.brandName).toBe("精工建轻钢");
+		expect(result?.object.brandName).toBe("精工建轻钢");
 	});
 
 	it("throws explicit error when API returns HTTP 401 (no fallback)", async () => {
@@ -171,5 +180,16 @@ describe("deepseek-api runStructuredResearch", () => {
 		await expect(deepseekApi.runStructuredResearch?.({ prompt: "test", schema })).rejects.toThrow(
 			"DeepSeek API Key 未配置",
 		);
+	});
+
+	it("strictly enforces single call budget on 503 (0 retries, exactly 1 physical request)", async () => {
+		fetchMock.mockResolvedValue(jsonResponse(503, { error: "Service Unavailable" }));
+
+		const schema = z.object({ brandName: z.string() });
+		await expect(deepseekApi.runStructuredResearch?.({ prompt: "probe-503", schema })).rejects.toThrow(
+			"DeepSeek API error (503)",
+		);
+		// 独立探测 P04 覆盖：即使发生 503，也绝无后台静默重试，物理请求计数严格为 1
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

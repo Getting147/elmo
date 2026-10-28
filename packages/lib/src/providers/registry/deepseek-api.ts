@@ -24,7 +24,7 @@ import type {
 
 const DEFAULT_MODEL = "deepseek-chat";
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 0;
 const RETRY_DELAYS_MS = [1000, 3000];
 
 /** 获取安全配置的 API Key（优先 DEEPSEEK_API_KEY，兼容 LLM_API_KEY） */
@@ -37,20 +37,23 @@ export function getDeepSeekApiKey(): string | undefined {
 	);
 }
 
-/** 获取基础 URL 端点 */
+/** 获取基础 URL 端点（严格白名单：官方 api.deepseek.com 或本地测试隔离 transport 127.0.0.1 / localhost） */
 export function getDeepSeekBaseUrl(): string {
-	let raw = process.env.DEEPSEEK_BASE_URL || process.env.LLM_BASE_URL || DEFAULT_BASE_URL;
-	raw = raw.trim().replace(/\/+$/, "");
-	// 防止旧配置遗留的非 DeepSeek 端点（如 api.openai.com, api.anthropic.com 等）被错误引用
-	if (
-		raw.includes("openai.com") ||
-		raw.includes("anthropic.com") ||
-		raw.includes("openrouter.ai") ||
-		raw.includes("volces.com")
-	) {
+	const raw = process.env.DEEPSEEK_BASE_URL?.trim().replace(/\/+$/, "");
+	if (!raw) {
 		return DEFAULT_BASE_URL;
 	}
-	return raw;
+	try {
+		const parsed = new URL(raw);
+		const host = parsed.hostname;
+		// 集中校验白名单：仅允许官方 DeepSeek 端点或本地测试/Mock 回环地址，严禁使用非 DeepSeek 外部旧端点
+		if (host === "api.deepseek.com" || host === "localhost" || host === "127.0.0.1" || host === "::1") {
+			return raw;
+		}
+	} catch {
+		// URL 解析异常，安全回退官方默认端点
+	}
+	return DEFAULT_BASE_URL;
 }
 
 /** 获取默认模型 */
@@ -229,7 +232,7 @@ export async function deepseekChat(
 				},
 				body: JSON.stringify(body),
 			},
-			options?.maxRetries,
+			options?.maxRetries ?? 0,
 		);
 
 		if (!res.ok) {
@@ -292,7 +295,7 @@ export const deepseekApi: Provider = {
 				},
 				{ role: "user", content: prompt },
 			],
-			{ model, responseFormat: { type: "json_object" }, maxRetries },
+			{ model, responseFormat: { type: "json_object" }, maxRetries: maxRetries ?? 0 },
 		);
 
 		console.log(`[deepseek-api] LLM responded in ${Date.now() - startTs}ms`);

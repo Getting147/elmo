@@ -32,7 +32,7 @@ async function main() {
 	console.log(`[Config] Endpoint: ${baseUrl}`);
 	console.log(`[Config] Model: ${model}`);
 	console.log(`[Config] Target Website: ${TARGET_URL}`);
-	console.log(`[Config] API Key: ${apiKey.slice(0, 6)}...${apiKey.slice(-4)} (已脱敏)`);
+	console.log(`[Config] API Key: [CONFIGURED]`);
 
 	const startTime = Date.now();
 	console.log(`\n[Execution] 开始抓取官网与请求 DeepSeek 结构化分析...`);

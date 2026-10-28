@@ -91,7 +91,8 @@ export async function runStructuredResearchPrompt<T>(prompt: string, schema: z.Z
 	if (!provider.runStructuredResearch) {
 		throw new Error(`Provider "${provider.id}" does not implement structured research`);
 	}
-	const result = await provider.runStructuredResearch({ prompt, schema });
+	// 单次预算上限硬性生效：maxRetries 显式传 0，避免底层异常时静默重试产生额外开销
+	const result = await provider.runStructuredResearch({ prompt, schema, maxRetries: 0 });
 	return result.object;
 }
 
@@ -112,5 +113,5 @@ export async function runStructuredCompletionPrompt<T>(
 	if (!provider.runStructuredResearch) {
 		throw new Error(`Provider "${provider.id}" does not implement structured research`);
 	}
-	return provider.runStructuredResearch({ prompt, schema, webSearch: false });
+	return provider.runStructuredResearch({ prompt, schema, webSearch: false, maxRetries: 0 });
 }

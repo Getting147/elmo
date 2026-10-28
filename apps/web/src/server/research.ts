@@ -294,15 +294,12 @@ export async function triggerResearch(args: {
 		payload: emptySuggestionPayload({ brandId, website, additionalDomains }),
 	});
 
-	// existed + 还在跑 → 正常防重跳过；若为用户超时后显式「重新调研」、已失败或停滞则重置入队
+	// existed 处理：精细区分 done(已完成)、running(进行中)、queued(排队中) 与 failed(已失败)
 	if (createResult.alreadyExisted) {
 		const existing = await getDraftById(createResult.id);
 		if (existing) {
-			const isRunningOrQueued = existing.researchStatus === "queued" || existing.researchStatus === "running";
-			const isRecentlyActive = Date.now() - new Date(existing.updatedAt).getTime() < 3 * 60 * 1000;
-
-			// 若未显式要求重试，且仍在活跃运行中 → 跳过重复入队
-			if (!retry && isRunningOrQueued && isRecentlyActive) {
+			// 1. 已完成待审核：调研结果已存在，绝不重复调用模型
+			if (existing.researchStatus === "done" || existing.state === "confirmed") {
 				return {
 					draftId: createResult.id,
 					alreadyExisted: true,
@@ -310,7 +307,34 @@ export async function triggerResearch(args: {
 				};
 			}
 
-			// 显式重试、已失败或运行停滞超时：更新时间戳并重置为 queued，清空旧错误，打破死锁
+			// 2. 仍在运行中：后台 worker 正在执行 LLM 调用
+			// 严禁将正在 running 的草稿直接改 queued，防止旧结果 CAS 失败丢失且触发二次重复调用模型
+			if (existing.researchStatus === "running") {
+				const isStuck = Date.now() - new Date(existing.updatedAt).getTime() > 5 * 60 * 1000;
+				if (!isStuck) {
+					// 运行中且未超过 5 分钟超时：旧请求继续等待落盘，本次跳过入队
+					return {
+						draftId: createResult.id,
+						alreadyExisted: true,
+						jobSkipped: true,
+					};
+				}
+				// 超过 5 分钟无心跳，确认 worker 进程已异常退出或失联，允许打破僵死
+			}
+
+			// 3. 排队中：若在 3 分钟内且用户未显式要求重试，继续在队列等待，不重复发 job
+			if (existing.researchStatus === "queued" && !retry) {
+				const isRecentQueue = Date.now() - new Date(existing.updatedAt).getTime() < 3 * 60 * 1000;
+				if (isRecentQueue) {
+					return {
+						draftId: createResult.id,
+						alreadyExisted: true,
+						jobSkipped: true,
+					};
+				}
+			}
+
+			// 4. 明确失败、排队超时或运行僵死超时：更新时间戳并重置为 queued，清空旧错误，安全入队
 			await db
 				.update(draftResearch)
 				.set({
