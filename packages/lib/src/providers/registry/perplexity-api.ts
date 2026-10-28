@@ -34,7 +34,7 @@ export const perplexityApi: Provider = {
 			throw new Error(`Perplexity API error (${response.status}): ${errText}`);
 		}
 
-		const data = await response.json();
+		const data = (await response.json()) as any;
 		const textContent = data.choices?.[0]?.message?.content || "";
 		const citations: Array<{ url: string; domain: string; title?: string; citationIndex: number }> = [];
 		const sources = data.citations || [];

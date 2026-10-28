@@ -12,6 +12,7 @@ import { perplexityApi } from "./registry/perplexity-api";
 import { geminiApi } from "./registry/gemini-api";
 import { stub } from "./registry/stub";
 import { minimaxApi } from "./registry/minimax-api";
+import { deepseekApi } from "./registry/deepseek-api";
 
 export type {
 	Provider,
@@ -27,6 +28,12 @@ export type { ModelMeta } from "./models";
 export { parseScrapeTargets, validateScrapeTargets } from "./config";
 export { STATUS_TARGETS } from "@workspace/config/scrape-targets";
 export { selectTargetsForBrand } from "./runner";
+export {
+	deepseekApi,
+	getDeepSeekApiKey,
+	getDeepSeekBaseUrl,
+	getDeepSeekModel,
+} from "./registry/deepseek-api";
 
 const providerMap: Record<string, Provider> = {
 	olostep,
@@ -41,6 +48,7 @@ const providerMap: Record<string, Provider> = {
 	"perplexity-api": perplexityApi,
 	"gemini-api": geminiApi,
 	"minimax-api": minimaxApi,
+	"deepseek-api": deepseekApi,
 	stub,
 };
 

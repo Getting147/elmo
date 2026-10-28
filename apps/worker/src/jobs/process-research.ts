@@ -48,10 +48,31 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 		.update(draftResearch)
 		.set({ researchStatus: "running", updatedAt: new Date() })
 		.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "queued")))
-		.returning({ id: draftResearch.id });
+		.returning({ id: draftResearch.id, createdAt: draftResearch.createdAt });
 
 	if (claimed.length === 0) {
 		// 已被其他 worker 抢走（不重新入队）→ 静默退出
+		return;
+	}
+
+	const draftRecord = claimed[0];
+
+	// 历史积压保护（任务书 3.1）：排队超过 30 分钟的历史遗留作业不触发 LLM，避免消费历史积压产生计费
+	const JOB_MAX_AGE_MS = 30 * 60 * 1000;
+	const isHistorical = draftRecord.createdAt && Date.now() - new Date(draftRecord.createdAt).getTime() > JOB_MAX_AGE_MS;
+	if (isHistorical) {
+		console.warn(`[process-research] 忽略历史积压任务 ${draftId} (创建于 ${draftRecord.createdAt})，不触发模型调用`);
+		await db
+			.update(draftResearch)
+			.set({
+				researchStatus: "failed",
+				updatedAt: new Date(),
+			})
+			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
+		await markFailed({
+			id: draftId,
+			error: "该调研任务在无执行方期间排队超时，已安全归档。请在界面重新点击「重新调研」。",
+		});
 		return;
 	}
 

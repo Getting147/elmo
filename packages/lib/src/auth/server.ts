@@ -48,13 +48,32 @@ export function createAuth(options?: CreateAuthOptions) {
 		throw new Error("APP_URL or VITE_APP_URL must be set for Better Auth");
 	}
 
+	const parsedPort = (() => {
+		try {
+			return new URL(appUrl).port;
+		} catch {
+			return undefined;
+		}
+	})();
+	const effectivePort = process.env.PORT || parsedPort || "3000";
+
 	const localOrigin =
-		process.env.NODE_ENV !== "production" ? `http://localhost:${process.env.PORT ?? "3000"}` : undefined;
+		process.env.NODE_ENV !== "production" ? `http://localhost:${effectivePort}` : undefined;
 	const baseURL = localOrigin ?? appUrl;
 
 	const origins = options?.trustedOrigins ?? [];
 	if (!origins.includes(appUrl)) {
 		origins.push(appUrl);
+	}
+	try {
+		const parsed = new URL(appUrl);
+		const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+		const localhostOrigin = `${parsed.protocol}//localhost:${port}`;
+		const ipOrigin = `${parsed.protocol}//127.0.0.1:${port}`;
+		if (!origins.includes(localhostOrigin)) origins.push(localhostOrigin);
+		if (!origins.includes(ipOrigin)) origins.push(ipOrigin);
+	} catch {
+		// Ignore invalid URL
 	}
 	if (localOrigin && !origins.includes(localOrigin)) {
 		origins.push(localOrigin);

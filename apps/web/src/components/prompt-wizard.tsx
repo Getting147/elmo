@@ -307,7 +307,9 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				prompts: promptsPayload,
 				summary: data.summary.trim() || undefined,
 				description: data.description.trim() || undefined,
-				productLines: base?.productLines ? confirmedLines.map((entry) => ({ line: entry.line, evidence: 0 })) : undefined,
+				productLines: base?.productLines
+					? confirmedLines.map((entry) => ({ line: entry.line, evidence: 0 }))
+					: undefined,
 			});
 			// confirm 灌库（事务：brand → product lines → competitors → prompts）
 			await confirmDraft(draftId);
@@ -355,11 +357,17 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					>
 						{phase === "analyzing" ? (
 							<>
-								<Loader2 className="h-4 w-4 animate-spin" /> Analyzing brand…
+								<Loader2 className="h-4 w-4 animate-spin" />
+								{draftData?.researchStatus === "queued"
+									? "Queued for research (排队中)…"
+									: draftData?.researchStatus === "running"
+										? "Analyzing brand website (分析中)…"
+										: "Analyzing brand…"}
 							</>
 						) : (
 							<>
-								<Play className="h-4 w-4" /> Analyze brand
+								<Play className="h-4 w-4" />
+								{error ? "Retry research (重新调研)" : "Analyze brand"}
 							</>
 						)}
 					</Button>

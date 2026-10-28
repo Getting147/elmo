@@ -20,24 +20,19 @@
  * preference order if a deployment wants a specific provider/model.
  */
 import type { z } from "zod";
-import { getProvider, parseScrapeTargets, type Provider, type StructuredResearchResult } from "../providers";
+import { getProvider, type Provider, parseScrapeTargets, type StructuredResearchResult } from "../providers";
 
 /**
- * Direct-API providers in the order onboarding prefers them. GPT-5 Mini was
- * the cheapest + best-recall in compare-onboarding runs, so we go OpenAI
- * direct first, then OpenAI via OpenRouter as a fallback (same model, just
- * different key), then Anthropic, then Mistral.
- *
- * Exported so the compare-onboarding script reads from the same source as
- * production — keeps the two from drifting.
+ * Direct-API providers in the order onboarding prefers them.
+ * BUG-001 / B02: 内部业务统一使用官方已购 DeepSeek API，严禁回退旧供应商。
  */
-export const RESEARCH_PROVIDER_PREFERENCE = ["openai-api", "openrouter", "anthropic-api", "mistral-api"] as const;
+export const RESEARCH_PROVIDER_PREFERENCE = ["deepseek-api"] as const;
 
 export type ResearchProviderId = (typeof RESEARCH_PROVIDER_PREFERENCE)[number];
 
 const ONBOARDING_LLM_TARGET_HELP =
-	"Set ONBOARDING_LLM_TARGET (e.g. claude:anthropic-api) " +
-	"or configure ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY / MISTRAL_API_KEY.";
+	"Please configure DEEPSEEK_API_KEY or LLM_API_KEY (internal research unified to DeepSeek official API). " +
+	"Fallback to expired legacy providers is strictly disabled by policy.";
 
 /**
  * Pick which direct-API provider the onboarding flow should use.
