@@ -68,7 +68,7 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 		return;
 	}
 
-	// 1. UPDATE research_status='running'（CAS：仅 queued 态转 running，防重入，且仅处理本批新任务）
+	// 1. UPDATE research_status='running'（CAS：仅 queued + pending_review 态转 running，防重入，且仅处理本批新任务）
 	const claimed = await db
 		.update(draftResearch)
 		.set({ researchStatus: "running", updatedAt: new Date() })
@@ -76,13 +76,14 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 			and(
 				eq(draftResearch.id, draftId),
 				eq(draftResearch.researchStatus, "queued"),
+				eq(draftResearch.state, "pending_review"),
 				gte(draftResearch.createdAt, workerStartTime),
 			),
 		)
 		.returning({ id: draftResearch.id, createdAt: draftResearch.createdAt });
 
 	if (claimed.length === 0) {
-		// 已被其他 worker 抢走或不满足条件 → 静默退出
+		// 已被其他 worker 抢走或已被重试取消 → 静默退出
 		return;
 	}
 
@@ -101,26 +102,46 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 
 		// validateEvidence 已经在 analyzeBrand 内调用（M1 集成）— 无需重复
 
-		// 3. UPDATE payload + research_status='done'（CAS：仅 running 态转 done，防重入）
-		await db
+		// 3. UPDATE payload + research_status='done'（CAS：仅 running + pending_review 态转 done，防重试后作废结果落盘）
+		const updated = await db
 			.update(draftResearch)
 			.set({
 				payload: suggestion as never, // OnboardingSuggestion shape
 				researchStatus: "done",
 				updatedAt: new Date(),
 			})
-			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
+			.where(
+				and(
+					eq(draftResearch.id, draftId),
+					eq(draftResearch.researchStatus, "running"),
+					eq(draftResearch.state, "pending_review"),
+				),
+			)
+			.returning({ id: draftResearch.id });
+
+		if (updated.length === 0) {
+			console.warn(
+				`[process-research] 任务 ${draftId} 状态已非 running/pending_review（已被用户重试取代或状态变更），丢弃旧执行结果，防止覆盖。`,
+			);
+			return;
+		}
 	} catch (err) {
-		// 4. 异常 → markFailed（state='failed' + research_status='failed' + error 字段）
+		// 4. 异常 → markFailed（CAS：仅当仍处于 running + pending_review 态时才写 failed）
 		const errorMsg = err instanceof Error ? err.message : String(err);
 		await db
 			.update(draftResearch)
 			.set({
 				researchStatus: "failed",
+				state: "failed",
+				error: errorMsg,
 				updatedAt: new Date(),
 			})
-			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
-		// 同步 state='failed' + error（用现成 helper）
-		await markFailed({ id: draftId, error: errorMsg });
+			.where(
+				and(
+					eq(draftResearch.id, draftId),
+					eq(draftResearch.researchStatus, "running"),
+					eq(draftResearch.state, "pending_review"),
+				),
+			);
 	}
 }

@@ -1,21 +1,28 @@
 /**
- * Epic A-2 (V1.0) M2 c3-job-fix4: triggerResearch 契约测试
- *
- * 策略：纯函数 + 内存 mock。triggerResearch 依赖面：
- * - db.query.brands.findFirst（404 守卫）
- * - createDraft / getDraftById（@workspace/lib/onboarding — partial unique 幂等）
- * - getBoss().send（pg-boss enqueue）
- * 全部 mock，不连 drizzle/pg-boss。
+ * Epic A-2 (V1.0) M2 c3-job-fix4 & BUG-001 B02 (S02/S04): triggerResearch 契约与恢复逻辑测试
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { sendMock, findFirstBrandMock, createDraftMock, getDraftByIdMock } = vi.hoisted(() => {
-	const sendMock = vi.fn();
-	const findFirstBrandMock = vi.fn();
-	const createDraftMock = vi.fn();
-	const getDraftByIdMock = vi.fn();
-	return { sendMock, findFirstBrandMock, createDraftMock, getDraftByIdMock };
-});
+const { sendMock, findFirstBrandMock, findFirstDraftMock, insertValuesMock, updateSetMock, dbExecuteMock } = vi.hoisted(
+	() => {
+		const sendMock = vi.fn();
+		const findFirstBrandMock = vi.fn();
+		const findFirstDraftMock = vi.fn();
+		const insertValuesMock = vi.fn();
+		const updateWhereMock = vi.fn();
+		const updateSetMock = vi.fn(() => ({ where: updateWhereMock }));
+		const dbExecuteMock = vi.fn();
+		return {
+			sendMock,
+			findFirstBrandMock,
+			findFirstDraftMock,
+			insertValuesMock,
+			updateSetMock,
+			updateWhereMock,
+			dbExecuteMock,
+		};
+	},
+);
 
 vi.mock("@/lib/boss-client", () => ({
 	getBoss: () => ({ send: sendMock }),
@@ -23,101 +30,184 @@ vi.mock("@/lib/boss-client", () => ({
 
 vi.mock("@workspace/lib/db/db", () => ({
 	db: {
-		query: { brands: { findFirst: findFirstBrandMock } },
+		query: {
+			brands: { findFirst: findFirstBrandMock },
+			draftResearch: { findFirst: findFirstDraftMock },
+		},
+		insert: () => ({ values: insertValuesMock }),
+		update: () => ({ set: updateSetMock }),
+		execute: dbExecuteMock,
 	},
 }));
 
 vi.mock("@workspace/lib/onboarding", () => ({
-	analyzeBrand: vi.fn(),
-	validateEvidence: vi.fn(),
-	createDraft: createDraftMock,
-	getDraftById: getDraftByIdMock,
+	hashUrlForDraft: (url: string) => `hash_${url}`,
+	computeExpiresAt: () => new Date("2026-11-28T00:00:00Z"),
+	emptySuggestionPayload: (args: { website: string; additionalDomains?: string[] }) => ({
+		brandName: "",
+		summary: "",
+		description: "",
+		website: args.website,
+		aliases: [],
+		additionalDomains: args.additionalDomains ?? [],
+		productLines: [],
+		competitors: [],
+		suggestedPrompts: [],
+	}),
+	getDraftById: vi.fn(),
 	listDraftsByBrand: vi.fn(),
-	markFailed: vi.fn(),
-	markRolledBack: vi.fn(),
+	confirmDraftResearch: vi.fn(),
+	rollbackDraftResearch: vi.fn(),
 }));
 
 import { triggerResearch } from "@/server/research";
 
-describe("c3-job-fix4 triggerResearch 契约", () => {
+describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 	beforeEach(() => {
 		sendMock.mockReset();
 		findFirstBrandMock.mockReset();
-		createDraftMock.mockReset();
-		getDraftByIdMock.mockReset();
+		findFirstDraftMock.mockReset();
+		insertValuesMock.mockReset();
+		updateSetMock.mockClear();
+		dbExecuteMock.mockReset();
 	});
 
 	it("① brand 不存在 → 抛 BrandNotFoundError", async () => {
-		findFirstBrandMock.mockReturnValue(undefined);
+		findFirstBrandMock.mockResolvedValue(undefined);
 		await expect(triggerResearch({ brandId: "ghost", website: "https://x.com" })).rejects.toThrow(/not found/i);
-		expect(createDraftMock).not.toHaveBeenCalled();
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("② 新建 draft + enqueue → <100ms 返回 {draftId, alreadyExisted:false, jobSkipped:false}", async () => {
+	it("② 新建 draft + enqueue → 返回 {draftId, alreadyExisted:false, jobSkipped:false}", async () => {
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
-		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: false });
+		findFirstDraftMock.mockResolvedValue(undefined);
+		insertValuesMock.mockResolvedValue(undefined);
 		sendMock.mockResolvedValue(undefined);
 
-		const start = Date.now();
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
-		const elapsed = Date.now() - start;
 
-		expect(result.draftId).toBe("d_new");
+		expect(result.draftId).toMatch(/^dres_/);
 		expect(result.alreadyExisted).toBe(false);
 		expect(result.jobSkipped).toBe(false);
-		expect(elapsed).toBeLessThan(100); // 端点同步 <100ms
+		expect(insertValuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				brandId: "b1",
+				urlHash: "hash_https://x.com",
+				researchStatus: "queued",
+			}),
+		);
 		expect(sendMock).toHaveBeenCalledWith(
 			"analyze-brand-research",
-			expect.objectContaining({ draftId: "d_new", brandId: "b1" }),
+			expect.objectContaining({ draftId: result.draftId, brandId: "b1" }),
 		);
 	});
 
-	it("③ existed + researchStatus=queued → 跳过 enqueue（防重 job）", async () => {
+	it("③ existed + researchStatus=queued 且 retry=false → 跳过 enqueue（防重复 job）", async () => {
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
-		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
-		getDraftByIdMock.mockResolvedValue({ researchStatus: "queued" });
+		findFirstDraftMock.mockResolvedValue({
+			id: "d_existing",
+			researchStatus: "queued",
+			state: "pending_review",
+		});
 
-		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: false });
 
+		expect(result.draftId).toBe("d_existing");
 		expect(result.alreadyExisted).toBe(true);
 		expect(result.jobSkipped).toBe(true);
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("④ existed + researchStatus=running → 跳过 enqueue（运行中保护）", async () => {
+	it("④ [S02 定向核验] existed + researchStatus=running 且后台任务未终止 → 严禁重复入队（即使 retry=true）", async () => {
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
-		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
-		getDraftByIdMock.mockResolvedValue({ researchStatus: "running" });
+		findFirstDraftMock.mockResolvedValue({
+			id: "d_running",
+			researchStatus: "running",
+			state: "pending_review",
+			updatedAt: new Date(Date.now() - 360000), // 已运行 6 分钟
+		});
+		// pg-boss 任务状态为 active（后台正在处理中）
+		dbExecuteMock.mockResolvedValue({ rows: [{ state: "active" }] });
+
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
+
+		expect(result.draftId).toBe("d_running");
+		expect(result.alreadyExisted).toBe(true);
+		expect(result.jobSkipped).toBe(true);
+		expect(sendMock).not.toHaveBeenCalled(); // 零重复入队
+		expect(updateSetMock).not.toHaveBeenCalled(); // 零写回
+	});
+
+	it("⑤ existed + researchStatus=done → 返回已存在结果并跳过入队（done 是最终结果不重跑）", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValue({
+			id: "d_done",
+			researchStatus: "done",
+			state: "pending_review",
+		});
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
 
+		expect(result.draftId).toBe("d_done");
 		expect(result.alreadyExisted).toBe(true);
 		expect(result.jobSkipped).toBe(true);
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("⑤ existed + researchStatus=done → 返 alreadyExisted（done 是历史归档不重跑）", async () => {
+	it("⑥ [S04 定向核验] existed + researchStatus=failed 且 retry=true → 物理保全旧草稿及原错误，新建独立草稿，仅投递 1 个新 job", async () => {
+		const originalCreatedAt = new Date("2026-10-28T10:00:00Z");
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
-		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
-		getDraftByIdMock.mockResolvedValue({ researchStatus: "done" });
+		findFirstDraftMock.mockResolvedValue({
+			id: "d_failed_old",
+			researchStatus: "failed",
+			state: "pending_review",
+			error: "Network timeout",
+			createdAt: originalCreatedAt,
+		});
+		insertValuesMock.mockResolvedValue(undefined);
+		sendMock.mockResolvedValue(undefined);
 
-		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
 
-		expect(result.alreadyExisted).toBe(true);
+		expect(result.draftId).toMatch(/^dres_/);
+		expect(result.draftId).not.toBe("d_failed_old");
+		expect(result.alreadyExisted).toBe(false);
 		expect(result.jobSkipped).toBe(false);
-		expect(sendMock).not.toHaveBeenCalled();
-	});
 
-	it("⑥ existed + researchStatus=failed → 返 alreadyExisted（failed 覆盖策略由调用方定）", async () => {
-		findFirstBrandMock.mockResolvedValue({ id: "b1" });
-		createDraftMock.mockResolvedValue({ id: "d_new", alreadyExisted: true });
-		getDraftByIdMock.mockResolvedValue({ researchStatus: "failed" });
+		// 检查旧草稿是否被安全归档且保留原错误
+		expect(updateSetMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				state: "rolled_back",
+				researchStatus: "failed",
+				error: expect.stringContaining("Network timeout"),
+			}),
+		);
+		// update 绝对没有改写 createdAt
+		expect(updateSetMock).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				createdAt: expect.anything(),
+			}),
+		);
 
-		const result = await triggerResearch({ brandId: "b1", website: "https://x.com" });
+		// 检查新草稿是否包含对旧草稿的关联
+		expect(insertValuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: result.draftId,
+				brandId: "b1",
+				researchStatus: "queued",
+				payload: expect.objectContaining({
+					metadata: expect.objectContaining({
+						supersedesDraftId: "d_failed_old",
+					}),
+				}),
+			}),
+		);
 
-		expect(result.alreadyExisted).toBe(true);
-		expect(result.jobSkipped).toBe(false);
-		expect(sendMock).not.toHaveBeenCalled();
+		// 队列只投递 1 次且携带新 draftId
+		expect(sendMock).toHaveBeenCalledTimes(1);
+		expect(sendMock).toHaveBeenCalledWith(
+			"analyze-brand-research",
+			expect.objectContaining({ draftId: result.draftId }),
+		);
 	});
 });

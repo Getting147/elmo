@@ -10,18 +10,21 @@
  * 状态语义（V1 拍板）：只持久 4 态（pending_review/done/failed/rolled_back）
  */
 
+import { randomUUID } from "node:crypto";
 import { db } from "@workspace/lib/db/db";
 import { brands, draftResearch } from "@workspace/lib/db/schema";
 import {
 	analyzeBrand,
+	computeExpiresAt,
 	createDraft,
 	getDraftById,
+	hashUrlForDraft,
 	listDraftsByBrand,
 	markFailed,
 	markRolledBack,
 	type OnboardingSuggestion,
 } from "@workspace/lib/onboarding";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getBoss } from "@/lib/boss-client";
 import { BrandNotFoundError, saveWizardOnboarding, type WizardOnboardingInput } from "@/server/onboarding-core";
 
@@ -266,6 +269,19 @@ function emptySuggestionPayload(args: {
  *
  * 返回 < 100ms（仅 DB 写入 + pg-boss send = 不阻塞）
  */
+async function getPgBossJobState(draftId: string): Promise<string | null> {
+	try {
+		const res = await db.execute(sql`
+			SELECT state FROM pgboss.job
+			WHERE name = 'analyze-brand-research' AND data->>'draftId' = ${draftId}
+			ORDER BY created_on DESC LIMIT 1
+		`);
+		return (res.rows[0]?.state as string) ?? null;
+	} catch {
+		return null;
+	}
+}
+
 export async function triggerResearch(args: {
 	brandId: string;
 	website: string;
@@ -287,71 +303,142 @@ export async function triggerResearch(args: {
 		throw new BrandNotFoundError(brandId);
 	}
 
-	// createDraft 内部已含 idempotency（partial unique 23505 catch）
-	const createResult = await createDraft({
-		brandId,
-		website,
-		payload: emptySuggestionPayload({ brandId, website, additionalDomains }),
+	const urlHash = hashUrlForDraft(website);
+
+	// 查当前活跃草稿（pending_review / confirmed 态）
+	const existingActive = await db.query.draftResearch.findFirst({
+		where: and(
+			eq(draftResearch.brandId, brandId),
+			eq(draftResearch.urlHash, urlHash),
+			inArray(draftResearch.state, ["pending_review", "confirmed"]),
+		),
 	});
 
-	// existed 处理：精细区分 done(已完成)、running(进行中)、queued(排队中) 与 failed(已失败)
-	if (createResult.alreadyExisted) {
-		const existing = await getDraftById(createResult.id);
-		if (existing) {
-			// 1. 已完成待审核：调研结果已存在，绝不重复调用模型
-			if (existing.researchStatus === "done" || existing.state === "confirmed") {
+	if (existingActive) {
+		// 1. 已完成待审核：调研结果已存在，绝不重复调用模型
+		if (existingActive.researchStatus === "done" || existingActive.state === "confirmed") {
+			return {
+				draftId: existingActive.id,
+				alreadyExisted: true,
+				jobSkipped: true,
+			};
+		}
+
+		// 2. 正在执行 (running) 或执行情况未知：
+		// 去掉“超过 5 分钟就确认旧执行已结束”的推断。先核对 pg-boss 实际状态。
+		// 只要旧任务仍在 running 或未知（无明确失败/取消确认），严禁重置重发，恢复前端查询，等待后台安全落盘！
+		if (existingActive.researchStatus === "running") {
+			const pgBossState = await getPgBossJobState(existingActive.id);
+			const isConfirmedTerminated = pgBossState === "failed" || pgBossState === "cancelled";
+
+			if (!isConfirmedTerminated) {
+				// 后台任务尚未结束：绝对不重复入队，不调用模型
 				return {
-					draftId: createResult.id,
+					draftId: existingActive.id,
 					alreadyExisted: true,
 					jobSkipped: true,
 				};
 			}
 
-			// 2. 仍在运行中：后台 worker 正在执行 LLM 调用
-			// 严禁将正在 running 的草稿直接改 queued，防止旧结果 CAS 失败丢失且触发二次重复调用模型
-			if (existing.researchStatus === "running") {
-				const isStuck = Date.now() - new Date(existing.updatedAt).getTime() > 5 * 60 * 1000;
-				if (!isStuck) {
-					// 运行中且未超过 5 分钟超时：旧请求继续等待落盘，本次跳过入队
-					return {
-						draftId: createResult.id,
-						alreadyExisted: true,
-						jobSkipped: true,
-					};
-				}
-				// 超过 5 分钟无心跳，确认 worker 进程已异常退出或失联，允许打破僵死
-			}
-
-			// 3. 排队中：若在 3 分钟内且用户未显式要求重试，继续在队列等待，不重复发 job
-			if (existing.researchStatus === "queued" && !retry) {
-				const isRecentQueue = Date.now() - new Date(existing.updatedAt).getTime() < 3 * 60 * 1000;
-				if (isRecentQueue) {
-					return {
-						draftId: createResult.id,
-						alreadyExisted: true,
-						jobSkipped: true,
-					};
-				}
-			}
-
-			// 4. 明确失败、排队超时或运行僵死超时：更新时间戳并重置为 queued，清空旧错误，安全入队
+			// 若 pg-boss 已明确确认任务异常退出或取消，同步记录为 failed，允许后续走明确失败恢复
 			await db
 				.update(draftResearch)
 				.set({
-					researchStatus: "queued",
-					state: "pending_review",
-					error: null,
+					researchStatus: "failed",
+					error: `执行方任务已终止 (${pgBossState})`,
 					updatedAt: new Date(),
-					createdAt: new Date(),
 				})
-				.where(eq(draftResearch.id, createResult.id));
+				.where(eq(draftResearch.id, existingActive.id));
+			existingActive.researchStatus = "failed";
 		}
+
+		// 3. 未显式要求 retry 的情况（刷新、重进、查询、排队中或明确失败展示）：
+		// 保护当前草稿不被重复投递
+		if (!retry) {
+			return {
+				draftId: existingActive.id,
+				alreadyExisted: true,
+				jobSkipped: true,
+			};
+		}
+
+		// 4. retry === true：用户显式授权重试（应对明确失败或旧排队无执行方恢复）
+		// 遵循 S02 & S04 架构约束与工作指引：
+		// - 实际退出/取消确认与旧结果隔离：将旧草稿设为 rolled_back + failed，CAS 守卫确保旧 worker 延迟响应被彻底丢弃；
+		// - 历史草稿保全：严禁改写原草稿的 createdAt，原创建时间 100% 物理保全；
+		// - 独立记录表达重试授权：新建具备独立生命周期的 draftRecord，并通过 metadata 永久保留对旧草稿的关联；
+		// - 只执行一轮：向队列投递新任务，新旧执行归属明确。
+		await db
+			.update(draftResearch)
+			.set({
+				state: "rolled_back",
+				researchStatus: "failed",
+				error: existingActive.error
+					? `${existingActive.error} (superseded_by_retry)`
+					: "已由用户人工重试取代 (superseded_by_retry)",
+				updatedAt: new Date(),
+			})
+			.where(eq(draftResearch.id, existingActive.id));
+
+		const retryDraftId = `dres_${randomUUID()}`;
+		const expiresAt = computeExpiresAt();
+		const retryPayload: OnboardingSuggestion & { metadata?: Record<string, unknown> } = {
+			...emptySuggestionPayload({ brandId, website, additionalDomains }),
+			metadata: {
+				supersedesDraftId: existingActive.id,
+				retryAuthorizedAt: new Date().toISOString(),
+			},
+		};
+
+		await db.insert(draftResearch).values({
+			id: retryDraftId,
+			brandId,
+			urlHash,
+			state: "pending_review",
+			researchStatus: "queued",
+			payload: retryPayload as never,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			expiresAt,
+		});
+
+		const boss = await getBoss();
+		await boss.send(ANALYZE_BRAND_RESEARCH_QUEUE, {
+			draftId: retryDraftId,
+			brandId,
+			website,
+			additionalDomains,
+			input: {
+				maxCompetitors: args.maxCompetitors,
+				maxPrompts: args.maxPrompts,
+				maxProducts: args.maxProducts,
+				crawledPageTexts: args.crawledPageTexts ? Array.from(args.crawledPageTexts.entries()) : undefined,
+			},
+		});
+
+		return { draftId: retryDraftId, alreadyExisted: false, jobSkipped: false };
 	}
+
+	// 4. 不存在活跃草稿（初次触发或历史草稿已全部为终态）：创建全新草稿并投递
+	const newDraftId = `dres_${randomUUID()}`;
+	const expiresAt = computeExpiresAt();
+
+	await db.insert(draftResearch).values({
+		id: newDraftId,
+		brandId,
+		urlHash,
+		state: "pending_review",
+		researchStatus: "queued",
+		payload: emptySuggestionPayload({ brandId, website, additionalDomains }) as never,
+		createdAt: new Date(),
+		updatedAt: new Date(),
+		expiresAt,
+	});
 
 	// enqueue pg-boss job
 	const boss = await getBoss();
 	await boss.send(ANALYZE_BRAND_RESEARCH_QUEUE, {
-		draftId: createResult.id,
+		draftId: newDraftId,
 		brandId,
 		website,
 		additionalDomains,
@@ -363,7 +450,7 @@ export async function triggerResearch(args: {
 		},
 	});
 
-	return { draftId: createResult.id, alreadyExisted: false, jobSkipped: false };
+	return { draftId: newDraftId, alreadyExisted: false, jobSkipped: false };
 }
 
 // =============================================================================
