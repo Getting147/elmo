@@ -29,12 +29,20 @@ export interface StructuredResearchOptions<T> {
 	 * supplied entirely in the prompt — no tools, no agent loop.
 	 */
 	webSearch?: boolean;
+	maxRetries?: number;
 }
 
 export interface StructuredResearchResult<T> {
 	object: T;
 	/** Resolved model id (after any `:online` suffixing etc.). */
 	modelVersion?: string;
+	raw?: unknown;
+	usage?: {
+		prompt_tokens?: number;
+		completion_tokens?: number;
+		total_tokens?: number;
+	};
+	prompt?: string;
 }
 
 export interface Provider {

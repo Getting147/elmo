@@ -57,22 +57,22 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 
 	const draftRecord = claimed[0];
 
-	// 历史积压保护（任务书 3.1）：排队超过 30 分钟的历史遗留作业不触发 LLM，避免消费历史积压产生计费
-	const JOB_MAX_AGE_MS = 30 * 60 * 1000;
-	const isHistorical = draftRecord.createdAt && Date.now() - new Date(draftRecord.createdAt).getTime() > JOB_MAX_AGE_MS;
-	if (isHistorical) {
-		console.warn(`[process-research] 忽略历史积压任务 ${draftId} (创建于 ${draftRecord.createdAt})，不触发模型调用`);
+	// 历史遗留任务隔离保护（任务书 3.1 & 验收门槛）：
+	// 任何早于执行方启动前生成的任务不得自动消费，不调用模型，保全历史草稿数据不被更改或删除。
+	// 处置方案与人工恢复由获准发布方按发布手册统一执行。
+	const workerStartTime = process.env.RESEARCH_WORKER_STARTED_AT
+		? new Date(process.env.RESEARCH_WORKER_STARTED_AT)
+		: new Date();
+	const isPreStartup = draftRecord.createdAt && new Date(draftRecord.createdAt) < workerStartTime;
+	if (isPreStartup) {
+		console.warn(
+			`[process-research] 隔离执行方启动前的历史遗留任务 ${draftId} (创建于 ${draftRecord.createdAt} < 启动时间 ${workerStartTime.toISOString()})。按授权边界跳过执行，保持原样，不调用模型。`,
+		);
+		// 释放 CAS 占位，恢复 queued 态，保证历史数据 100% 物理保全且未被标记 failed
 		await db
 			.update(draftResearch)
-			.set({
-				researchStatus: "failed",
-				updatedAt: new Date(),
-			})
+			.set({ researchStatus: "queued" })
 			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
-		await markFailed({
-			id: draftId,
-			error: "该调研任务在无执行方期间排队超时，已安全归档。请在界面重新点击「重新调研」。",
-		});
 		return;
 	}
 
@@ -86,6 +86,7 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 			maxPrompts: input?.maxPrompts ?? 30,
 			maxProducts: input?.maxProducts ?? 10,
 			crawledPageTexts,
+			requireLiveWebsite: true,
 		});
 
 		// validateEvidence 已经在 analyzeBrand 内调用（M1 集成）— 无需重复

@@ -41,7 +41,15 @@ export function getDeepSeekApiKey(): string | undefined {
 export function getDeepSeekBaseUrl(): string {
 	let raw = process.env.DEEPSEEK_BASE_URL || process.env.LLM_BASE_URL || DEFAULT_BASE_URL;
 	raw = raw.trim().replace(/\/+$/, "");
-	// 若已包含 /v1 则保留，若无则使用原生端点（api.deepseek.com 支持 /chat/completions 和 /v1/chat/completions）
+	// 防止旧配置遗留的非 DeepSeek 端点（如 api.openai.com, api.anthropic.com 等）被错误引用
+	if (
+		raw.includes("openai.com") ||
+		raw.includes("anthropic.com") ||
+		raw.includes("openrouter.ai") ||
+		raw.includes("volces.com")
+	) {
+		return DEFAULT_BASE_URL;
+	}
 	return raw;
 }
 
@@ -144,10 +152,18 @@ interface ChatChoice {
 	finish_reason?: string;
 }
 
+interface ChatUsage {
+	prompt_tokens?: number;
+	completion_tokens?: number;
+	total_tokens?: number;
+}
+
 interface ChatResponse {
 	id?: string;
+	created?: number;
 	model?: string;
 	choices?: ChatChoice[];
+	usage?: ChatUsage;
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, retries = MAX_RETRIES): Promise<Response> {
@@ -177,6 +193,7 @@ export async function deepseekChat(
 		maxTokens?: number;
 		responseFormat?: object;
 		timeoutMs?: number;
+		maxRetries?: number;
 	},
 ): Promise<ChatResponse> {
 	const apiKey = getDeepSeekApiKey();
@@ -201,15 +218,19 @@ export async function deepseekChat(
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
-		const res = await fetchWithRetry(endpoint, {
-			method: "POST",
-			signal: controller.signal,
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				"Content-Type": "application/json",
+		const res = await fetchWithRetry(
+			endpoint,
+			{
+				method: "POST",
+				signal: controller.signal,
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(body),
 			},
-			body: JSON.stringify(body),
-		});
+			options?.maxRetries,
+		);
 
 		if (!res.ok) {
 			const errText = await res.text();
@@ -256,6 +277,7 @@ export const deepseekApi: Provider = {
 	async runStructuredResearch<T>({
 		prompt,
 		schema,
+		maxRetries,
 	}: StructuredResearchOptions<T>): Promise<StructuredResearchResult<T>> {
 		const model = getDeepSeekModel();
 		const startTs = Date.now();
@@ -270,7 +292,7 @@ export const deepseekApi: Provider = {
 				},
 				{ role: "user", content: prompt },
 			],
-			{ model, responseFormat: { type: "json_object" } },
+			{ model, responseFormat: { type: "json_object" }, maxRetries },
 		);
 
 		console.log(`[deepseek-api] LLM responded in ${Date.now() - startTs}ms`);
@@ -291,6 +313,9 @@ export const deepseekApi: Provider = {
 		return {
 			object: validated,
 			modelVersion: data?.model ?? model,
+			raw: data,
+			usage: data?.usage,
+			prompt,
 		};
 	},
 };

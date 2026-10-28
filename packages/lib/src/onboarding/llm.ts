@@ -52,6 +52,11 @@ export function resolveResearchProvider(env: Record<string, string | undefined> 
 	if (explicit) {
 		const [parsed] = parseScrapeTargets(explicit);
 		if (!parsed) throw new Error(`Invalid ONBOARDING_LLM_TARGET: "${explicit}"`);
+		if (parsed.provider !== "deepseek-api") {
+			throw new Error(
+				`Provider "${parsed.provider}" is disabled by policy. Internal research is unified exclusively to DeepSeek official API.`,
+			);
+		}
 		const provider = getProvider(parsed.provider);
 		if (!provider.isConfigured()) {
 			throw new Error(

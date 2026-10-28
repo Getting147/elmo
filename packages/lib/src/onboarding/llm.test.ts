@@ -33,19 +33,37 @@ afterEach(() => {
 });
 
 describe("resolveResearchProvider", () => {
-	it("uses the explicit env override when set", () => {
-		process.env.ANTHROPIC_API_KEY = "x";
+	it("uses explicit DeepSeek override when set", () => {
+		process.env.DEEPSEEK_API_KEY = "sk-ds-key";
 		const provider = resolveResearchProvider({
-			ANTHROPIC_API_KEY: "x",
-			ONBOARDING_LLM_TARGET: "claude:anthropic-api",
+			DEEPSEEK_API_KEY: "sk-ds-key",
+			ONBOARDING_LLM_TARGET: "deepseek:deepseek-api",
 		});
-		expect(provider.id).toBe("anthropic-api");
+		expect(provider.id).toBe("deepseek-api");
 	});
 
-	it("throws when ONBOARDING_LLM_TARGET points at an unconfigured provider", () => {
+	it("strictly rejects legacy non-DeepSeek providers even if explicitly targeted", () => {
+		process.env.ANTHROPIC_API_KEY = "x";
 		expect(() =>
 			resolveResearchProvider({
+				ANTHROPIC_API_KEY: "x",
+				ONBOARDING_LLM_TARGET: "claude:anthropic-api",
+			}),
+		).toThrow(/disabled by policy/);
+
+		process.env.OPENAI_API_KEY = "x";
+		expect(() =>
+			resolveResearchProvider({
+				OPENAI_API_KEY: "x",
 				ONBOARDING_LLM_TARGET: "chatgpt:openai-api:gpt-5-mini",
+			}),
+		).toThrow(/disabled by policy/);
+	});
+
+	it("throws when explicit override points at an unconfigured deepseek provider", () => {
+		expect(() =>
+			resolveResearchProvider({
+				ONBOARDING_LLM_TARGET: "deepseek:deepseek-api",
 			}),
 		).toThrow(/isn't configured/);
 	});
@@ -57,7 +75,7 @@ describe("resolveResearchProvider", () => {
 				OLOSTEP_API_KEY: "x",
 				ONBOARDING_LLM_TARGET: "gemini:olostep:online",
 			}),
-		).toThrow(/does not support structured research/);
+		).toThrow(/disabled by policy/);
 	});
 
 	it("prefers DeepSeek when DEEPSEEK_API_KEY is configured", () => {

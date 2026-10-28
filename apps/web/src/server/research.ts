@@ -274,8 +274,9 @@ export async function triggerResearch(args: {
 	maxPrompts?: number;
 	maxProducts?: number;
 	crawledPageTexts?: Map<string, string>;
+	retry?: boolean;
 }): Promise<{ draftId: string; alreadyExisted: boolean; jobSkipped: boolean }> {
-	const { brandId, website } = args;
+	const { brandId, website, retry } = args;
 	const additionalDomains = args.additionalDomains ?? [];
 	// 查 brand 存在性（404 守卫 — FK CASCADE 不影响端点层）
 	const brandRow = await db.query.brands.findFirst({
@@ -293,23 +294,34 @@ export async function triggerResearch(args: {
 		payload: emptySuggestionPayload({ brandId, website, additionalDomains }),
 	});
 
-	// existed + 还在跑 → 跳过 enqueue
+	// existed + 还在跑 → 正常防重跳过；若为用户超时后显式「重新调研」、已失败或停滞则重置入队
 	if (createResult.alreadyExisted) {
 		const existing = await getDraftById(createResult.id);
-		if (existing && (existing.researchStatus === "queued" || existing.researchStatus === "running")) {
-			return {
-				draftId: createResult.id,
-				alreadyExisted: true,
-				jobSkipped: true,
-			};
+		if (existing) {
+			const isRunningOrQueued = existing.researchStatus === "queued" || existing.researchStatus === "running";
+			const isRecentlyActive = Date.now() - new Date(existing.updatedAt).getTime() < 3 * 60 * 1000;
+
+			// 若未显式要求重试，且仍在活跃运行中 → 跳过重复入队
+			if (!retry && isRunningOrQueued && isRecentlyActive) {
+				return {
+					draftId: createResult.id,
+					alreadyExisted: true,
+					jobSkipped: true,
+				};
+			}
+
+			// 显式重试、已失败或运行停滞超时：更新时间戳并重置为 queued，清空旧错误，打破死锁
+			await db
+				.update(draftResearch)
+				.set({
+					researchStatus: "queued",
+					state: "pending_review",
+					error: null,
+					updatedAt: new Date(),
+					createdAt: new Date(),
+				})
+				.where(eq(draftResearch.id, createResult.id));
 		}
-		// existed 但 done/failed → 走重跑流程：清失败行 + 新建（deleteFailedOrExpiredForHash 包含 done？V1 不清 done — done 是历史归档）
-		// V1 简化：existed 且 done/failed → 仅返 alreadyExisted（前端用现有 payload 重新跑 triggerResearch 会建新空 payload draft）
-		return {
-			draftId: createResult.id,
-			alreadyExisted: true,
-			jobSkipped: false, // 不阻塞，trigger 端会走 setTimeout 重发（V1.1 优化）
-		};
 	}
 
 	// enqueue pg-boss job

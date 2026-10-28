@@ -197,17 +197,22 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	const handleAnalyze = useCallback(async () => {
 		if (!brand?.website || !brand?.id) return;
+		const isRetry = Boolean(error);
 		setError(null);
 		setPhase("analyzing");
 		payloadRef.current = null;
+		if (draftId) {
+			queryClient.removeQueries({ queryKey: ["research-draft", draftId] });
+		}
 		try {
-			const res = await triggerResearch(brand.id, brand.website);
+			const res = await triggerResearch(brand.id, brand.website, isRetry);
 			setDraftId(res.draftId);
+			await queryClient.refetchQueries({ queryKey: ["research-draft", res.draftId] });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Research request failed");
 			setPhase("idle");
 		}
-	}, [brand?.website, brand?.id]);
+	}, [brand?.website, brand?.id, error, draftId, queryClient]);
 
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({

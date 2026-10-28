@@ -207,6 +207,11 @@ export interface AnalyzeBrandOptions {
 	 * 若不传：productLines 分组时不校验（confirmed=全部 SKUs, unverified=[]）.
 	 */
 	crawledPageTexts?: Map<string, string>;
+	/**
+	 * BUG-001/B02: 严格官网证据真实性模式。当为 true 时，若官网双源均无法访问或抓取内容为空，
+	 * 严禁使用模型通用常识代替调研证据伪装成成功，必须明确抛出官网不可达错误。
+	 */
+	requireLiveWebsite?: boolean;
 }
 
 const DEFAULT_MAX_COMPETITORS = 10;
@@ -257,6 +262,27 @@ export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promis
 	const providedBrandName = brandName?.trim() || undefined;
 	const brandNameHint = providedBrandName ?? inferBrandNameFromDomain(normalizedWebsite);
 	const websiteExcerpt = await safeGetExcerpt(analysisUrl);
+
+	const isUnreachable =
+		!websiteExcerpt ||
+		websiteExcerpt.trim().length === 0 ||
+		websiteExcerpt.startsWith("Unable to retrieve live content");
+
+	if (options.requireLiveWebsite && isUnreachable) {
+		throw new Error(
+			`官网无法访问或抓取内容为空 (${analysisUrl})。请确认网址正确且可公开访问后重新调研。`,
+		);
+	}
+
+	if (websiteExcerpt && !isUnreachable) {
+		const lowerExcerpt = websiteExcerpt.toLowerCase();
+		if (!crawledPageTexts.has(analysisUrl)) {
+			crawledPageTexts.set(analysisUrl, lowerExcerpt);
+		}
+		if (!crawledPageTexts.has(cleanUrl(website))) {
+			crawledPageTexts.set(cleanUrl(website), lowerExcerpt);
+		}
+	}
 
 	const prompt = buildPrompt({
 		analysisUrl,

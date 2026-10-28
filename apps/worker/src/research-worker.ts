@@ -11,8 +11,11 @@ import { type ProcessResearchJobData, processResearchJob } from "./jobs/process-
 
 const QUEUE_NAME = "analyze-brand-research";
 
+export const WORKER_START_TIME = new Date();
+process.env.RESEARCH_WORKER_STARTED_AT = WORKER_START_TIME.toISOString();
+
 async function main() {
-	console.log("[research-worker] Starting dedicated research worker...");
+	console.log(`[research-worker] Starting dedicated research worker (startedAt: ${WORKER_START_TIME.toISOString()})...`);
 
 	boss.on("error", (error) => {
 		console.error("[research-worker] pg-boss error:", error);

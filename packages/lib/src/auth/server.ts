@@ -57,8 +57,7 @@ export function createAuth(options?: CreateAuthOptions) {
 	})();
 	const effectivePort = process.env.PORT || parsedPort || "3000";
 
-	const localOrigin =
-		process.env.NODE_ENV !== "production" ? `http://localhost:${effectivePort}` : undefined;
+	const localOrigin = process.env.NODE_ENV !== "production" ? `http://localhost:${effectivePort}` : undefined;
 	const baseURL = localOrigin ?? appUrl;
 
 	const origins = options?.trustedOrigins ?? [];
@@ -77,6 +76,13 @@ export function createAuth(options?: CreateAuthOptions) {
 	}
 	if (localOrigin && !origins.includes(localOrigin)) {
 		origins.push(localOrigin);
+	}
+	if (process.env.NODE_ENV !== "production") {
+		for (const devOrigin of ["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"]) {
+			if (!origins.includes(devOrigin)) {
+				origins.push(devOrigin);
+			}
+		}
 	}
 
 	return betterAuth({

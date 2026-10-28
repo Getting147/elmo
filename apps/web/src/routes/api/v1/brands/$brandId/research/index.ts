@@ -13,6 +13,7 @@ const postBody = z.object({
 	maxCompetitors: z.number().int().min(0).max(10).optional(),
 	maxPrompts: z.number().int().min(0).max(50).optional(),
 	maxProducts: z.number().int().min(0).max(20).optional(),
+	retry: z.boolean().optional(),
 });
 
 /** BrandNotFoundError → 404（POST 统一映射，避免裸 Error 落 500） */
@@ -39,6 +40,7 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 							maxCompetitors: body.maxCompetitors,
 							maxPrompts: body.maxPrompts,
 							maxProducts: body.maxProducts,
+							retry: body.retry,
 						});
 						return result;
 					} catch (err) {

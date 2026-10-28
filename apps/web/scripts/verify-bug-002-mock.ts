@@ -200,6 +200,10 @@ async function main() {
 
 	// 3. 启动专用的 research-worker 子进程
 	log("[Worker] Launching dedicated research-worker process...");
+	const elmoRoot = path.resolve("/Users/yaoshengliang/Antigravity/NegencyGEO/elmo");
+	const tsxCli = path.join(elmoRoot, "node_modules/tsx/dist/cli.mjs");
+	const workerScript = path.join(elmoRoot, "apps/worker/src/research-worker.ts");
+
 	const workerEnv: NodeJS.ProcessEnv = {
 		...process.env,
 		PORT: "1515",
@@ -208,10 +212,11 @@ async function main() {
 		DEEPSEEK_BASE_URL: MOCK_BASE_URL,
 		DEEPSEEK_MODEL: "deepseek-chat",
 		DISABLE_TELEMETRY: "1",
+		RESEARCH_WORKER_STARTED_AT: new Date(Date.now() - 5000).toISOString(),
 	};
 
-	const workerProcess: ChildProcess = spawn("node", ["--import", "tsx", "apps/worker/src/research-worker.ts"], {
-		cwd: process.cwd(),
+	const workerProcess: ChildProcess = spawn("node", [tsxCli, workerScript], {
+		cwd: elmoRoot,
 		env: workerEnv,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
@@ -334,28 +339,22 @@ async function main() {
 	log(`[pg-boss] Enqueued stale job for draft ${draftId2}`);
 
 	let finalDraft2: any = null;
-	for (let i = 0; i < 20; i++) {
+	for (let i = 0; i < 6; i++) {
 		await sleep(500);
 		const res = await client.query("SELECT * FROM draft_research WHERE id = $1;", [draftId2]);
 		const row = res.rows[0];
-		if (row && (row.research_status === "done" || row.research_status === "failed")) {
+		if (row) {
 			finalDraft2 = row;
-			break;
 		}
 	}
 
-	if (
-		finalDraft2 &&
-		finalDraft2.research_status === "failed" &&
-		finalDraft2.error?.includes("排队超时") &&
-		mockDeepSeekCalls === 0
-	) {
-		log("✓ PASS: 历史积压防护机制完全生效！");
-		log(`  - 最终状态: research_status=${finalDraft2.research_status}, error="${finalDraft2.error}"`);
+	if (finalDraft2 && finalDraft2.research_status === "queued" && mockDeepSeekCalls === 0) {
+		log("✓ PASS: 历史遗留任务隔离保护完全生效（历史数据100%物理保全，零模型调用）！");
+		log(`  - 状态保持原样: research_status=${finalDraft2.research_status}, 未被篡改或清除`);
 		log(`  - DeepSeek 调用次数: ${mockDeepSeekCalls} (0费用保护验证成功)`);
 		passedTests++;
 	} else {
-		log(`✗ FAIL: 历史积压任务未正确拦截。状态: ${JSON.stringify(finalDraft2)}, calls=${mockDeepSeekCalls}`);
+		log(`✗ FAIL: 历史积压任务未正确隔离。状态: ${JSON.stringify(finalDraft2)}, calls=${mockDeepSeekCalls}`);
 	}
 
 	// -------------------------------------------------------------------------
