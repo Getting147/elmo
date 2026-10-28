@@ -3,20 +3,20 @@
  * Replaces apps/web/src/app/api/brands/* API routes.
  */
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { requireAuthSession, requireOrgAccess, requireBrandAccess, listUserOrganizations } from "@/lib/auth/helpers";
-import { evaluateRequireCanCreateBrands } from "@/lib/auth/policies";
-import { getDeployment } from "@/lib/config/server";
-import { db } from "@workspace/lib/db/db";
-import { brands, prompts, competitors, type BrandWithPrompts, type Brand } from "@workspace/lib/db/schema";
-import { provisionAdditionalLocalOrg } from "@workspace/lib/db/provisioning";
-import { eq, and, count, sql, inArray, isNull } from "drizzle-orm";
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
-import { cleanAndValidateDomain } from "@/lib/domain-categories";
-import { validateWebsiteUrl } from "@/lib/brand-website";
-import { normalizeBrandUpdate } from "@/lib/brand-settings";
-import { parseScrapeTargets, selectTargetsForBrand } from "@workspace/lib/providers";
+import { db } from "@workspace/lib/db/db";
+import { provisionAdditionalLocalOrg } from "@workspace/lib/db/provisioning";
+import { type Brand, type BrandWithPrompts, brands, competitors, prompts } from "@workspace/lib/db/schema";
 import type { ModelConfig } from "@workspace/lib/providers";
+import { parseScrapeTargets, selectTargetsForBrand } from "@workspace/lib/providers";
+import { and, count, eq, inArray, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
+import { listUserOrganizations, requireAuthSession, requireBrandAccess, requireOrgAccess } from "@/lib/auth/helpers";
+import { evaluateRequireCanCreateBrands } from "@/lib/auth/policies";
+import { normalizeBrandUpdate } from "@/lib/brand-settings";
+import { validateWebsiteUrl } from "@/lib/brand-website";
+import { getDeployment } from "@/lib/config/server";
+import { cleanAndValidateDomain } from "@/lib/domain-categories";
 
 /**
  * Deployment-configured models this brand actually runs, after applying
@@ -299,10 +299,21 @@ export const deleteBrandFn = createServerFn({ method: "POST" })
 			.returning({ id: brands.id });
 
 		if (!result[0]) {
-			throw new Error("Brand not found or already deleted");
+			// B01: 幂等与陈旧会话支持。若该品牌已处于软删除状态，返回明确已删除状态而非报错
+			const [existingBrand] = await db
+				.select({ id: brands.id, deletedAt: brands.deletedAt })
+				.from(brands)
+				.where(eq(brands.id, data.brandId))
+				.limit(1);
+
+			if (existingBrand?.deletedAt) {
+				return { deleted: true, brandId: existingBrand.id, alreadyDeleted: true };
+			}
+
+			throw new Error("Brand not found or cannot be deleted");
 		}
 
-		return { deleted: true, brandId: result[0].id };
+		return { deleted: true, brandId: result[0].id, alreadyDeleted: false };
 	});
 
 /**
