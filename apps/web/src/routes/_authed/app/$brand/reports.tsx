@@ -551,7 +551,7 @@ function BrandReportsPage() {
 					runId: activeRunId,
 					revisionId: revId.trim() || "rev_01",
 					analysisId: anlId,
-					draftNotice: `内部评估草稿（${revId.trim() || "rev_01"} · 离线验证）`,
+					draftNotice: `内部预览草稿，未经终审（${revId.trim() || "rev_01"} · 离线验证）`,
 				},
 			});
 		},

@@ -920,7 +920,7 @@ export const generateBaselineReportRevisionFn = createServerFn({ method: "POST" 
 			revisionId: z.string().default("rev_01"),
 			analysisId: z.string(),
 			clientSlug: z.string().optional(),
-			draftNotice: z.string().default("内部评估草稿"),
+			draftNotice: z.string().default("内部预览草稿，未经终审"),
 		}),
 	)
 	.handler(async ({ data }) => {
