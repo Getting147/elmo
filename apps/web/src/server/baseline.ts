@@ -726,7 +726,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			analystName: z.string().min(1),
 			executiveConclusion: z.string().min(1),
 			keyFindings: z.array(z.string()).min(1),
-			brandIdentityAudit: z.string().default("待人工核实与完善"),
+			brandIdentityAudit: z.union([z.string(), z.record(z.string(), z.any())]).default("待人工核实与完善"),
 			rootCauses: z
 				.array(
 					z.object({
@@ -742,27 +742,29 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 				.array(
 					z.object({
 						channel_type: z.string(),
-						citation_count: z.number().int(),
-						citation_share_text: z.string(),
-						actionability: z.string(),
-						strategic_note: z.string(),
+						citation_count: z.number().int().optional(),
+						citation_share_text: z.string().optional(),
+						actionability: z.string().optional(),
+						strategic_note: z.string().optional(),
 					}),
 				)
 				.default([]),
-			contentGaps: z.string().default("待人工补充内容资产缺口"),
+			contentGaps: z.union([z.string(), z.array(z.string())]).default("待人工补充内容资产缺口"),
 			actionPlan: z
 				.array(
 					z.object({
 						finding: z.string(),
 						evidence_refs: z.array(z.string()),
 						action: z.string(),
-						priority: z.enum(["P1", "P2", "P3"]),
+						priority: z.enum(["P0", "P1", "P2", "P3"]),
 						priority_rationale: z.string(),
 						deliverable: z.string(),
 						verification_method: z.string(),
 					}),
 				)
 				.min(1),
+			aiMetadata: z.record(z.string(), z.any()).optional(),
+			parentVersion: z.number().int().optional(),
 		}),
 	)
 	.handler(async ({ data }) => {
@@ -785,6 +787,8 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 			channel_gaps: data.channelGaps,
 			content_gaps: data.contentGaps,
 			action_plan: data.actionPlan,
+			ai_metadata: data.aiMetadata,
+			parent_version: data.parentVersion,
 		};
 
 		return callBaselineBackend({
@@ -841,6 +845,32 @@ export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
 	});
 
 // ============================================================================
+// 7.1. 触发或重试 AI 自动分析与报告生成 (POST /runs/{run_id}/analysis/auto) (REPORT-001F)
+// ============================================================================
+
+export const retryBaselineAnalysisFn = createServerFn({ method: "POST" })
+	.validator(z.object({ brandId: z.string(), runId: z.string() }))
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		return callBaselineBackend({
+			method: "POST",
+			path: `/api/baseline/v1/runs/${data.runId}/analysis/auto`,
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
+		});
+	});
+
+// ============================================================================
 // 7.2. 查询报告修订列表与状态 (GET /reports/{report_id}) (E2-R04)
 // ============================================================================
 
@@ -890,7 +920,7 @@ export const generateBaselineReportRevisionFn = createServerFn({ method: "POST" 
 			revisionId: z.string().default("rev_01"),
 			analysisId: z.string(),
 			clientSlug: z.string().optional(),
-			draftNotice: z.string().default("内部评估草稿"),
+			draftNotice: z.string().default("内部预览草稿，未经终审"),
 		}),
 	)
 	.handler(async ({ data }) => {
