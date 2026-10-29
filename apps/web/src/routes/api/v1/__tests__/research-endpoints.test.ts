@@ -53,7 +53,9 @@ vi.mock("@/server/research", () => {
 			this.name = "DraftConflictError";
 		}
 	}
+	class ResearchStartError extends Error {}
 	return {
+		ResearchStartError,
 		triggerResearch: triggerResearchMock,
 		listDraftsByBrand: listDraftsByBrandMock,
 		getDraftById: getDraftByIdMock,
@@ -189,6 +191,23 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 			params: { brandId: "b1" },
 		});
 		expect(boundary.status).toBe(200);
+	});
+
+	it("创建或入队失败 → 可重试提示且不返回 draftId 或底层数据库详情", async () => {
+		const { ResearchStartError } = await import("@/server/research");
+		triggerResearchMock.mockRejectedValue(new ResearchStartError("synthetic SQL details"));
+		const response = await getHandler(
+			ResearchRoute,
+			"POST",
+		)({
+			request: makeRequest("POST", "/brands/b1/research", { website: "https://x.com", retry: true }),
+			params: { brandId: "b1" },
+		});
+		expect(response.status).toBe(500);
+		const body = await response.json();
+		expect(body.message).toContain("调研未能启动，请重试");
+		expect(body.draftId).toBeUndefined();
+		expect(JSON.stringify(body)).not.toContain("synthetic SQL details");
 	});
 
 	it("brand 不存在（BrandNotFoundError）→ 404 Not Found", async () => {

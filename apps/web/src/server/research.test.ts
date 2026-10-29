@@ -39,6 +39,13 @@ vi.mock("@/lib/boss-client", () => ({
 	getBoss: () => ({ send: sendMock }),
 }));
 
+vi.mock("@/server/research-lock", () => ({
+	withResearchLock: async (_brand: string, _hash: string, operation: (db: unknown) => unknown) => {
+		const { db } = await import("@workspace/lib/db/db");
+		return operation(db);
+	},
+}));
+
 vi.mock("@workspace/lib/db/db", () => ({
 	db: {
 		query: {
@@ -419,26 +426,26 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 
-	it("⑭ [V01 交错暂停窗口] CAS 匹配 0 行且胜者处于 insert 前交错窗口时，落败者返回胜者分配的后继 ID 而非作废旧任务", async () => {
+	it("⑭ worker 抢占 CAS 后返回实际运行中的草稿，零新增入队", async () => {
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
 		findFirstDraftMock.mockResolvedValueOnce({
 			id: "d_old_v01",
 			researchStatus: "queued",
 			state: "pending_review",
 		});
-		// CAS 匹配 0 行（胜者已更新）
+		// Worker 已取得执行权，CAS 不能作废它。
 		updateReturningMock.mockResolvedValueOnce([]);
-		// 读到旧草稿已被置为 rolled_back，但 winner 尚未完成 insert（winnerSuccessor 为空）
+		// 返回真实运行中的旧草稿，继续查询执行结果。
 		findFirstDraftMock.mockResolvedValueOnce({
 			id: "d_old_v01",
-			researchStatus: "failed",
-			state: "rolled_back",
+			researchStatus: "running",
+			state: "pending_review",
 		});
 		findFirstDraftMock.mockResolvedValueOnce(undefined);
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
 
-		// 验证返回值不是已被作废的旧草稿 ID
+		expect(result.draftId).toBe("d_old_v01");
 		expect(result.jobSkipped).toBe(true);
 		expect(result.alreadyExisted).toBe(true);
 		expect(sendMock).not.toHaveBeenCalled();
@@ -507,6 +514,7 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 			researchStatus: "failed",
 			state: "failed",
 		});
+		findFirstDraftMock.mockResolvedValueOnce(undefined); // no direct successor
 		findFirstDraftMock.mockResolvedValueOnce(undefined); // active 为空
 		findFirstDraftMock.mockResolvedValueOnce(undefined); // no existing successor
 		insertValuesMock.mockResolvedValueOnce(undefined);
