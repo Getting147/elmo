@@ -7,6 +7,8 @@ const run = {
 	current_step: "collecting",
 	total_questions: 9,
 	completed_questions: 2,
+	valid_questions: 1,
+	failed_questions: 1,
 	mode: "synthetic" as const,
 };
 
@@ -27,7 +29,7 @@ describe("diagnosis status reflects actual tasks", () => {
 	it.each(["failed", "interrupted"] as const)("%s does not become perpetual waiting", (status) => {
 		const failed = { ...run, status, error_message: "本轮 Mock 采集失败" };
 		expect(isDiagnosisInProgress(failed)).toBe(false);
-		expect(diagnosisStatusText(failed).description).toBe("本轮 Mock 采集失败");
+		expect(diagnosisStatusText(failed).description).toContain("本轮 Mock 采集失败");
 	});
 	it("analysis failure after collection shows its error", () => {
 		const failed = {
@@ -37,12 +39,12 @@ describe("diagnosis status reflects actual tasks", () => {
 			error_message: "Mock 分析失败",
 		};
 		expect(isDiagnosisInProgress(failed)).toBe(false);
-		expect(diagnosisStatusText(failed).description).toBe("Mock 分析失败");
+		expect(diagnosisStatusText(failed).description).toContain("Mock 分析失败");
 	});
 	it.each(["completed", "partial"] as const)("%s has a terminal next step without legacy prompt_runs", (status) => {
 		const terminal = { ...run, status, current_step: "completed" };
 		expect(isDiagnosisInProgress(terminal)).toBe(false);
-		expect(diagnosisStatusText(terminal).title).toContain(status === "partial" ? "部分完成" : "已完成");
+		expect(diagnosisStatusText(terminal).title).toContain(status === "partial" ? "部分完成" : "采集已结束");
 	});
 	it("unrecognized task states are rejected instead of inventing success", () => {
 		expect(() => baselineRunStatusSchema.parse({ ...run, status: "unknown" })).toThrow();

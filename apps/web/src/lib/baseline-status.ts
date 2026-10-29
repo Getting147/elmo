@@ -6,12 +6,18 @@ export const baselineRunStatusSchema = z.object({
 	current_step: z.string(),
 	total_questions: z.number().int().nonnegative(),
 	completed_questions: z.number().int().nonnegative(),
+	valid_questions: z.number().int().nonnegative(),
+	failed_questions: z.number().int().nonnegative(),
 	mode: z.enum(["synthetic", "real"]),
 	error_message: z.string().nullable().optional(),
 	error_category: z.string().nullable().optional(),
 });
 
 export type BaselineRunStatus = z.infer<typeof baselineRunStatusSchema>;
+
+export function diagnosisCountText(run: BaselineRunStatus): string {
+	return `已尝试 ${run.completed_questions} / ${run.total_questions} 题 · 有效 ${run.valid_questions} 题 · 失败 ${run.failed_questions} 题 · 未尝试 ${Math.max(0, run.total_questions - run.completed_questions)} 题`;
+}
 
 export function isDiagnosisInProgress(run: BaselineRunStatus): boolean {
 	if (
@@ -38,8 +44,7 @@ export function diagnosisStatusText(run: BaselineRunStatus | null): { title: str
 	) {
 		return {
 			title: run.status === "interrupted" ? "豆包诊断已中断" : "豆包诊断未完成",
-			description:
-				run.error_message || run.error_category || "请进入诊断流程查看本次任务详情，确认原因后再决定下一步。",
+			description: `${run.error_message || run.error_category || "请进入诊断流程查看本次任务详情，确认原因后再决定下一步。"} ${diagnosisCountText(run)}`,
 		};
 	}
 	if (isDiagnosisInProgress(run)) {
@@ -53,16 +58,16 @@ export function diagnosisStatusText(run: BaselineRunStatus | null): { title: str
 						: "豆包诊断进行中";
 		return {
 			title,
-			description: `本次已完成 ${run.completed_questions} / ${run.total_questions} 题。查看任务进度与后续处理，刷新不会重复执行。`,
+			description: `${diagnosisCountText(run)}。查看任务进度与后续处理，刷新不会重复执行。`,
 		};
 	}
 	if (run.status === "partial")
 		return {
 			title: "豆包诊断部分完成",
-			description: "已有部分结果，请进入诊断流程查看有效题目及未完成原因。不会自动重新采集。",
+			description: `${diagnosisCountText(run)}。请查看有效结果及未完成原因，不会自动重新采集。`,
 		};
 	return {
-		title: "豆包诊断已完成",
-		description: "请进入诊断流程查看本次结果、分析及报告。历史看板暂无数据不影响查看这次诊断。",
+		title: run.current_step === "ready_for_review" ? "诊断草稿待审核" : "豆包采集已结束",
+		description: `${diagnosisCountText(run)}。请进入诊断流程查看已有结果，分析及报告以本轮保存的产物为准。`,
 	};
 }

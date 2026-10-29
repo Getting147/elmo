@@ -53,7 +53,7 @@ export function DiagnosisStatus({ brandId, enabledPrompts }: { brandId: string; 
 			</p>
 			<div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
 				<Button asChild>
-					<Link to="/app/$brand/reports" params={{ brand: brandId }}>
+					<Link to="/app/$brand/reports" params={{ brand: brandId }} search={run ? { runId: run.run_id } : {}}>
 						{run ? "查看本次诊断" : "进入豆包诊断"}
 						<IconArrowRight className="h-4 w-4" />
 					</Link>

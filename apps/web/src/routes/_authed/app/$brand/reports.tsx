@@ -1,4 +1,10 @@
 import { useState, useEffect } from "react";
+import { z } from "zod";
+import { useAuth } from "@/hooks/use-auth";
+import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
+import { DiagnosisStages } from "@/components/diagnosis-stages";
+import { diagnosisStages } from "@/lib/baseline-stages";
+import { diagnosisCountText, diagnosisStatusText, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
@@ -40,6 +46,7 @@ import {
 
 export const Route = createFileRoute("/_authed/app/$brand/reports")({
 	component: BrandReportsPage,
+	validateSearch: z.object({ runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional() }),
 });
 
 function BrandReportsPage() {
@@ -49,6 +56,8 @@ function BrandReportsPage() {
 
 function BrandReportsWorkspace() {
 	const { brand: brandId } = Route.useParams();
+	const { runId: requestedRunId } = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const { brand } = useBrand(brandId);
 	const isZh = typeof navigator !== "undefined" ? navigator.language?.startsWith("zh") : true;
 
@@ -56,17 +65,14 @@ function BrandReportsWorkspace() {
 	const [activeTab, setActiveTab] = useState<"portal" | "legacy">("portal");
 
 	// 工作台状态机
-	const [frozenSnapshot, setFrozenSnapshot] = useState<any>(null);
 	const [activeRunId, setActiveRunId] = useState<string>("");
 	const [activeAnalysisId, setActiveAnalysisId] = useState<string>("");
 	const [activeRevisionId, setActiveRevisionId] = useState<string>("rev_01");
 	const [revisionInput, setRevisionInput] = useState<string>("rev_01");
-	const [executionMode, setExecutionMode] = useState<"synthetic" | "real">("synthetic");
 	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 
 	// 题库分类人工补齐状态 (E-R04)
-	const [dimensionOverrides, setDimensionOverrides] = useState<Record<string, string>>({});
 
 	// 逐题回答展开状态 (E-R06)
 	const [expandedQuestions, setExpandedQuestions] = useState<Record<string, boolean>>({});
@@ -95,6 +101,14 @@ function BrandReportsWorkspace() {
 		enabled: !!brandId && activeTab === "portal",
 	});
 
+	const { user } = useAuth();
+	const { draft, transact } = useDiagnosisDraft(user?.id ?? "", brandId, profileData);
+	const frozenSnapshot = draft.snapshot;
+	const executionMode = draft.mode;
+	const dimensionOverrides = draft.dimensions;
+	useEffect(() => { if (draft.runId && !requestedRunId) handleSelectRun(draft.runId); }, [draft.runId]);
+	useEffect(() => { if (requestedRunId) handleSelectRun(requestedRunId); }, [requestedRunId]);
+
 	// 2. 查询最近任务列表 (E-R06)
 	const {
 		data: runsListData,
@@ -116,17 +130,7 @@ function BrandReportsWorkspace() {
 		queryKey: ["baseline-run", brandId, activeRunId],
 		queryFn: () => getBaselineRunFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled: !!brandId && !!activeRunId,
-		refetchInterval: (query) => {
-			const status = query.state.data?.status;
-			const step = query.state.data?.current_step;
-			return status === "queued" ||
-				status === "running" ||
-				step === "collecting" ||
-				step === "analyzing" ||
-				step === "rendering_report"
-				? 2000
-				: false;
-		},
+		refetchInterval: (query) => query.state.data && isDiagnosisInProgress(query.state.data) ? 2000 : false,
 	});
 
 	// 4. 查询当前 run 的逐题证据
@@ -136,8 +140,12 @@ function BrandReportsWorkspace() {
 		enabled:
 			!!brandId &&
 			!!activeRunId &&
-			(runData?.status === "completed" || runData?.status === "partial"),
+			["completed", "partial", "failed", "interrupted"].includes(runData?.status),
 	});
+
+	const collectionError = evidenceData?.run_id === runData?.run_id
+		? [...(evidenceData?.formal_questions ?? []), ...(evidenceData?.probe_questions ?? [])].find((item) => item.error_message)?.error_message
+		: null;
 
 	// 5. 查询当前 run 的客观统计指标
 	const { data: metricsData, refetch: refetchMetrics } = useQuery({
@@ -279,7 +287,7 @@ function BrandReportsWorkspace() {
 
 	// Restore the persisted task when returning from overview or reloading; never create work on mount.
 	useEffect(() => {
-		if (!activeRunId && runsListData?.items?.[0]?.run_id) handleSelectRun(runsListData.items[0].run_id);
+		if (!activeRunId && !requestedRunId && runsListData?.items?.[0]?.run_id) handleSelectRun(draft.runId ?? runsListData.items[0].run_id);
 	}, [runsListData, activeRunId]);
 
 	// 5.3. 查询当前快照的有效服务端预授权 (E5-R01)
@@ -296,82 +304,61 @@ function BrandReportsWorkspace() {
 
 	// Mutations
 	const freezeMutation = useMutation({
-		mutationFn: (versionLabel: string) =>
-			freezeBaselineInputsFn({
-				data: {
-					brandId: brandId!,
-					versionLabel,
-					dimensionOverrides,
-				},
-			}),
-		onSuccess: (res) => {
-			setFrozenSnapshot(res);
-			setActionError(null);
-			refetchActiveAuth();
-		},
-		onError: (err: any) => setActionError(`冻结输入失败: ${err.message}`),
+		mutationFn: () => transact(async (current) => {
+			if (current.runId) {
+				const existing = await getBaselineRunFn({ data: { brandId, runId: current.runId } });
+				if (isDiagnosisInProgress(existing)) throw new Error("本次任务仍在执行，请先查看结果，不能准备下一轮。");
+			} else if (current.snapshot) return current;
+			const snapshot = await freezeBaselineInputsFn({ data: { brandId, versionLabel: "v1.0", dimensionOverrides: current.dimensions } });
+			return { ...current, snapshot, runId: undefined, authorizedRunId: undefined, parameters: undefined, submitted: false };
+		}),
+		onSuccess: () => { setActionError(null); refetchActiveAuth(); },
+		onError: (err: Error) => setActionError(`冻结输入失败: ${err.message}`),
 	});
 
 	const authorizeMutation = useMutation({
-		mutationFn: () => registerBaselineServerAuthFn({ data: {
-			brandId: brandId!, snapshotId: frozenSnapshot.snapshot_id,
-			runId: `run_${crypto.randomUUID()}`, snapshotHash: frozenSnapshot.content_sha256,
-			requestLimit: frozenSnapshot.question_count, retryLimit: 0,
-		} }),
+		mutationFn: () => transact(async (current, save) => {
+			if (!current.snapshot) throw new Error("请先核对分类并冻结本轮输入。");
+			if (current.snapshot.snapshot_id !== frozenSnapshot?.snapshot_id || current.mode !== executionMode) throw new Error("准备信息已在其他标签页变更，请重新核对后确认。");
+			const auth = await getBaselineActiveAuthFn({ data: { brandId, snapshotId: current.snapshot.snapshot_id } });
+			if (auth.authorization?.run_id) return { ...current, authorizedRunId: auth.authorization.run_id };
+			if (current.submitted) throw new Error("本轮已经发起，请查看本次任务；下一轮需重新准备并授权。");
+			const runId = current.authorizedRunId ?? `run_${crypto.randomUUID()}`;
+			save({ ...current, authorizedRunId: runId });
+			await registerBaselineServerAuthFn({ data: { brandId, snapshotId: current.snapshot.snapshot_id, runId, snapshotHash: current.snapshot.content_sha256, requestLimit: current.snapshot.question_count, retryLimit: 0 } });
+			return { ...current, authorizedRunId: runId };
+		}),
 		onSuccess: () => { setActionError(null); refetchActiveAuth(); },
 		onError: (err: Error) => setActionError(`本次授权未完成：${err.message}`),
 	});
 
 	const createRunMutation = useMutation({
-		mutationFn: (snapshotId: string) => {
-			const activeAuth = activeAuthData?.authorization;
-			const effectiveBudget =
-				executionMode === "real" && activeAuth?.request_limit
-					? Math.min(30, activeAuth.request_limit)
-					: 30;
-			const effectiveRetries =
-				executionMode === "real" && activeAuth?.retry_limit !== undefined
-					? Math.min(0, activeAuth.retry_limit)
-					: 0;
-			const clientRunId =
-				executionMode === "real" && activeAuth?.run_id
-					? activeAuth.run_id
-					: `run_${crypto.randomUUID()}`;
-			const idempotencyKey = `idemp_${clientRunId}`;
-
-			return createBaselineRunFn({
-				data: {
-					brandId: brandId!,
-					snapshotId,
-					mode: executionMode,
-					runId: clientRunId,
-					idempotencyKey,
-					modelName:
-						executionMode === "real" && activeAuth?.model_name
-							? activeAuth.model_name
-							: undefined,
-					webSearch:
-						executionMode === "real" && activeAuth?.web_search !== undefined
-							? Boolean(activeAuth.web_search)
-							: undefined,
-					requestBudget: effectiveBudget,
-					maxRetries: effectiveRetries,
-				},
-			});
-		},
-		onSuccess: (res) => {
-			setActiveRunId(res.run_id);
-			setActiveAnalysisId("");
-			setActiveRevisionId("rev_01");
-			setRevisionInput("rev_01");
-			setActionError(null);
-			setReviewNotice(null);
-			refetchRunsList();
-		},
-		onError: (err: any) => setActionError(`创建监测任务失败: ${err.message}`),
+		mutationFn: () => transact(async (current, save) => {
+			if (current.submitted && current.runId) {
+				await getBaselineRunFn({ data: { brandId, runId: current.runId } });
+				return current;
+			}
+			if (!current.snapshot) throw new Error("请先核对分类并冻结本轮输入。");
+			if (current.snapshot.snapshot_id !== frozenSnapshot?.snapshot_id || current.mode !== executionMode) throw new Error("准备信息已在其他标签页变更，请重新核对后确认。");
+			const auth = current.mode === "real" ? await getBaselineActiveAuthFn({ data: { brandId, snapshotId: current.snapshot.snapshot_id } }) : null;
+			if (current.mode === "real" && !auth?.authorization && !current.runId) throw new Error("尚未授权本次真实诊断，请先核对费用并明确授权。");
+			const activeAuth = auth?.authorization;
+			const runId = current.runId ?? activeAuth?.run_id ?? `run_${crypto.randomUUID()}`;
+			const parameters = current.parameters ?? { modelName: activeAuth?.model_name, webSearch: activeAuth?.web_search === undefined ? undefined : Boolean(activeAuth.web_search) };
+			const prepared = { ...current, runId, parameters };
+			// Keep the same request identity if its response is lost or another tab repeats the action.
+			save(prepared);
+			const result = await createBaselineRunFn({ data: {
+				brandId, snapshotId: current.snapshot.snapshot_id, mode: current.mode, runId,
+				idempotencyKey: `idemp_${runId}`, requestBudget: current.snapshot.question_count, maxRetries: 0,
+				...parameters,
+			} });
+			return { ...prepared, runId: result.run_id, submitted: true };
+		}),
+		onSuccess: (current) => { if (current.runId) { handleSelectRun(current.runId); void navigate({ search: { runId: current.runId }, replace: true }); } refetchRunsList(); },
+		onError: (err: Error) => setActionError(`本次任务未确认启动：${err.message}。请查看本次任务；重复提交仍使用同一任务身份。`),
 	});
-
-	const [isStartingDiagnostic, setIsStartingDiagnostic] = useState(false);
+	const preparationBusy = freezeMutation.isPending || authorizeMutation.isPending || createRunMutation.isPending;
 
 	const retryAnalysisMutation = useMutation({
 		mutationFn: () =>
@@ -389,78 +376,6 @@ function BrandReportsWorkspace() {
 		},
 		onError: (err: any) => setActionError(`重试 AI 自动分析失败: ${err.message}`),
 	});
-
-	const handleConfirmAndStartDiagnostic = async () => {
-		try {
-			setIsStartingDiagnostic(true);
-			setActionError(null);
-			setReviewNotice(null);
-
-			// 1. 若尚未冻结不可变快照，先冻结
-			let snapshotId = frozenSnapshot?.snapshot_id;
-			if (!snapshotId) {
-				const freezeRes = await freezeBaselineInputsFn({
-					data: {
-						brandId: brandId!,
-						versionLabel: "v1.0",
-						dimensionOverrides,
-					},
-				});
-				setFrozenSnapshot(freezeRes);
-				snapshotId = freezeRes.snapshot_id;
-			}
-
-			// 2. 发起单次基线运行任务（后台将连续完成采集、统计、DeepSeek 分析及报告生成）
-			const activeAuth = executionMode === "real"
-				? (await getBaselineActiveAuthFn({ data: { brandId: brandId!, snapshotId } })).authorization
-				: null;
-			if (executionMode === "real" && !activeAuth) throw new Error("尚未授权本次真实诊断。请在下方费用确认区核对并明确授权后再启动。");
-			const totalPrompts = profileData?.summary?.totalPrompts || 10;
-			const effectiveBudget =
-				executionMode === "real" && activeAuth?.request_limit
-					? Math.min(30, activeAuth.request_limit)
-					: Math.max(30, totalPrompts);
-			const effectiveRetries =
-				executionMode === "real" && activeAuth?.retry_limit !== undefined
-					? Math.min(0, activeAuth.retry_limit)
-					: 0;
-			const clientRunId =
-				executionMode === "real" && activeAuth?.run_id
-					? activeAuth.run_id
-					: `run_${crypto.randomUUID()}`;
-			const idempotencyKey = `idemp_${clientRunId}`;
-
-			const runRes = await createBaselineRunFn({
-				data: {
-					brandId: brandId!,
-					snapshotId,
-					mode: executionMode,
-					runId: clientRunId,
-					idempotencyKey,
-					modelName:
-						executionMode === "real" && activeAuth?.model_name
-							? activeAuth.model_name
-							: undefined,
-					webSearch:
-						executionMode === "real" && activeAuth?.web_search !== undefined
-							? Boolean(activeAuth.web_search)
-							: undefined,
-					requestBudget: effectiveBudget,
-					maxRetries: effectiveRetries,
-				},
-			});
-
-			setActiveRunId(runRes.run_id);
-			setActiveAnalysisId("");
-			setActiveRevisionId("rev_01");
-			setRevisionInput("rev_01");
-			refetchRunsList();
-		} catch (err: any) {
-			setActionError(`启动诊断失败: ${err.message}`);
-		} finally {
-			setIsStartingDiagnostic(false);
-		}
-	};
 
 	const saveAnalysisMutation = useMutation({
 		mutationFn: () => {
@@ -744,7 +659,7 @@ function BrandReportsWorkspace() {
 								<span className="font-semibold text-foreground">切换已有监测任务:</span>
 								<select
 									value={activeRunId}
-									onChange={(e) => handleSelectRun(e.target.value)}
+									onChange={(e) => { handleSelectRun(e.target.value); void navigate({ search: { runId: e.target.value }, replace: true }); }}
 									className="border rounded-md px-2 py-1.5 bg-background font-mono text-xs max-w-xs"
 								>
 									<option value="">-- 选择已有任务查看/处理 --</option>
@@ -847,12 +762,10 @@ function BrandReportsWorkspace() {
 														aria-label={`业务分类 ${p.code}`}
 														value={dimensionOverrides[p.id] ?? (p.unclassified ? "" : p.dimensionName)}
 														onChange={(e) => {
-															setFrozenSnapshot(null);
-															setDimensionOverrides({
-																...dimensionOverrides,
-																[p.id]: e.target.value,
-															});
+															const value = e.target.value;
+															void transact((current) => ({ ...current, dimensions: { ...current.dimensions, [p.id]: value }, snapshot: null, authorizedRunId: undefined, runId: undefined, parameters: undefined, submitted: false })).catch((err: Error) => setActionError(err.message));
 														}}
+														disabled={preparationBusy || Boolean(draft.runId)}
 														className={`border rounded px-2 py-1 text-xs w-32 bg-background ${
 															p.unclassified && !dimensionOverrides[p.id]
 																? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20"
@@ -867,7 +780,7 @@ function BrandReportsWorkspace() {
 							</div>
 						)}
 
-						{/* 确认并一键启动诊断操作 */}
+						{/* 核对并冻结本轮输入 */}
 						<div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-3 border-t">
 							<div className="text-xs text-muted-foreground">
 								{frozenSnapshot ? (
@@ -875,35 +788,21 @@ function BrandReportsWorkspace() {
 										<IconCheck size={14} /> 已锁定输入快照: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
 									</span>
 								) : (
-									"核对客户档案与题库无误后，点击右侧一次确认启动全自动诊断、归因与报告草稿生成"
+									"先核对分类并冻结输入，再在下方确认费用、启动一次诊断。冻结本身不会采集或调用模型。"
 								)}
 							</div>
 							<div className="flex items-center gap-2 shrink-0">
 								<button
-									onClick={() => freezeMutation.mutate("v1.0")}
+									onClick={() => { if (!draft.runId || window.confirm("准备下一轮诊断？仅重新冻结输入，真实执行仍需重新授权并手动启动。")) freezeMutation.mutate(); }}
 									disabled={
-										freezeMutation.isPending ||
-										isStartingDiagnostic ||
+										preparationBusy ||
 										!profileData ||
 										profileData.summary.totalPrompts === 0
 									}
 									className="text-xs border px-3 py-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors disabled:opacity-50"
 								>
 									<IconLock size={14} className="inline mr-1" />
-									{freezeMutation.isPending ? "冻结中..." : "单独冻结快照"}
-								</button>
-								<button
-									onClick={handleConfirmAndStartDiagnostic}
-									disabled={
-										isStartingDiagnostic ||
-										createRunMutation.isPending ||
-										!profileData ||
-										profileData.summary.totalPrompts === 0
-									}
-									className="inline-flex items-center gap-2 bg-blue-600 text-white px-5 py-2 rounded-lg font-bold text-xs hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
-								>
-									<IconPlayerPlay size={16} />
-									{isStartingDiagnostic ? "正在启动全闭环..." : "确认并启动诊断 (一次确认 · 连续自动闭环)"}
+									{freezeMutation.isPending ? "冻结中..." : draft.runId ? "准备下一轮诊断" : "核对并冻结输入"}
 								</button>
 							</div>
 						</div>
@@ -923,7 +822,8 @@ function BrandReportsWorkspace() {
 								<select
 									aria-label="执行模式"
 									value={executionMode}
-									onChange={(e) => setExecutionMode(e.target.value as any)}
+									disabled={preparationBusy || Boolean(draft.runId)}
+									onChange={(e) => { const mode = e.target.value as "real" | "synthetic"; void transact((current) => ({ ...current, mode })).catch((err: Error) => setActionError(err.message)); }}
 									className="border rounded px-2 py-1 bg-background text-xs font-semibold"
 								>
 									<option value="synthetic">离线合成模式 (Synthetic · Mock)</option>
@@ -998,7 +898,7 @@ function BrandReportsWorkspace() {
 							{executionMode === "real" && frozenSnapshot && !activeAuthData?.authorization && (
 								<div className="space-y-2">
 									<p className="text-xs">本次仅授权这 {frozenSnapshot.question_count} 道题，采集上限 {frozenSnapshot.question_count} 次、重试 0 次，分析沿用本页所示范围。需要组织管理员或 owner 确认。</p>
-									<button type="button" disabled={authorizeMutation.isPending} className="border rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => {
+									<button type="button" disabled={preparationBusy || draft.submitted} className="border rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => {
 										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，另含本页所示 DeepSeek 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
 									}}>确认本次费用范围并授权</button>
 								</div>
@@ -1021,12 +921,12 @@ function BrandReportsWorkspace() {
 								)}
 							</div>
 							<button
-								onClick={() => createRunMutation.mutate(frozenSnapshot.snapshot_id)}
-								disabled={!frozenSnapshot || createRunMutation.isPending || (executionMode === "real" && !activeAuthData?.authorization)}
+								onClick={() => createRunMutation.mutate()}
+								disabled={!frozenSnapshot || preparationBusy || (!draft.submitted && !draft.runId && executionMode === "real" && !activeAuthData?.authorization)}
 								className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-green-700 transition-colors disabled:opacity-50"
 							>
 								<IconPlayerPlay size={15} />
-								{createRunMutation.isPending ? "正在发起..." : "启动本次诊断任务"}
+								{createRunMutation.isPending ? "正在确认本次任务..." : draft.submitted ? "查看本次任务（已发起）" : draft.runId ? "查询或重放本次启动" : "启动本次诊断任务"}
 							</button>
 						</div>
 					</div>
@@ -1061,26 +961,24 @@ function BrandReportsWorkspace() {
 									<div className="text-sm font-bold capitalize mt-0.5 flex items-center gap-1.5">
 										<span
 											className={`w-2.5 h-2.5 rounded-full ${
-												runData?.status === "completed"
-													? "bg-green-500"
-													: runData?.status === "partial"
-														? "bg-amber-500"
-														: runData?.status === "failed"
-															? "bg-red-500"
-															: "bg-blue-500 animate-pulse"
+												runData && isDiagnosisInProgress(runData)
+													? "bg-blue-500 animate-pulse"
+													: runData?.status === "failed" || runData?.status === "interrupted" || ["analysis_failed", "report_render_failed"].includes(runData?.current_step)
+														? "bg-red-500"
+														: runData?.status === "partial" ? "bg-amber-500" : "bg-green-500"
 											}`}
 										/>
-										{runData?.status || "加载中..."}
+										{runData ? diagnosisStatusText(runData).title : "加载中..."}
 									</div>
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
-									<span className="text-xs text-muted-foreground">完成进度</span>
+									<span className="text-xs text-muted-foreground">已尝试题数</span>
 									<div className="text-sm font-bold mt-0.5">
 										{runData?.completed_questions ?? 0} / {runData?.total_questions ?? 0} 题
 									</div>
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
-									<span className="text-xs text-muted-foreground">有效题数 (有效尝试)</span>
+									<span className="text-xs text-muted-foreground">有效题数（非请求次数）</span>
 									<div className="text-sm font-bold mt-0.5 text-blue-600">
 										{runData?.valid_questions ?? 0} 题
 									</div>
@@ -1093,115 +991,10 @@ function BrandReportsWorkspace() {
 								</div>
 							</div>
 
-							{/* 四阶段流水线接续进度卡片 (REPORT-001F) */}
-							<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-								<div
-									className={`p-3 rounded-lg border ${
-										runData?.current_step === "collecting"
-											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
-											: (runData?.completed_questions ?? 0) > 0 ||
-											  ["analyzing", "rendering_report", "ready_for_review", "completed"].includes(
-													runData?.current_step || "",
-											  )
-												? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
-												: "bg-muted/20 text-muted-foreground"
-									}`}
-								>
-									<div className="flex items-center gap-1.5 font-semibold">
-										{runData?.current_step === "collecting" ? (
-											<IconRefresh size={14} className="animate-spin text-blue-600" />
-										) : (
-											<IconCheck size={14} className="text-green-600" />
-										)}
-										<span>1. 豆包数据采集</span>
-									</div>
-									<div className="text-[11px] text-muted-foreground mt-1">
-										完成 {runData?.completed_questions ?? 0} / {runData?.total_questions ?? 0} 题 (有效 {runData?.valid_questions ?? 0})
-									</div>
-								</div>
-
-								<div
-									className={`p-3 rounded-lg border ${
-										["analyzing", "rendering_report", "ready_for_review", "completed"].includes(
-											runData?.current_step || "",
-										)
-											? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
-											: "bg-muted/20 text-muted-foreground"
-									}`}
-								>
-									<div className="flex items-center gap-1.5 font-semibold">
-										<IconCheck size={14} className="text-green-600" />
-										<span>2. A 统计指标核算</span>
-									</div>
-									<div className="text-[11px] text-muted-foreground mt-1">
-										{metricsData ? "多业务切分与受控指标已锁定" : "尚无本轮统计结果"}
-									</div>
-								</div>
-
-								<div
-									className={`p-3 rounded-lg border ${
-										runData?.current_step === "analyzing"
-											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
-											: runData?.current_step === "analysis_failed"
-												? "bg-red-50 border-red-300 dark:bg-red-950/30 text-red-900 dark:text-red-200"
-												: ["rendering_report", "ready_for_review", "completed"].includes(
-														runData?.current_step || "",
-												  )
-													? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
-													: "bg-muted/20 text-muted-foreground"
-									}`}
-								>
-									<div className="flex items-center gap-1.5 font-semibold">
-										{runData?.current_step === "analyzing" ? (
-											<IconRefresh size={14} className="animate-spin text-blue-600" />
-										) : runData?.current_step === "analysis_failed" ? (
-											<IconAlertTriangle size={14} className="text-red-600" />
-										) : (
-											<IconCheck size={14} className="text-green-600" />
-										)}
-										<span>3. DeepSeek 归因诊断</span>
-									</div>
-									<div className="text-[11px] text-muted-foreground mt-1">
-										{runData?.current_step === "analyzing"
-											? "AI 分析中..."
-											: runData?.current_step === "analysis_failed"
-												? "分析失败待重试"
-												: analysisData ? "三层成因与行动草稿就绪" : "尚无本轮分析草稿"}
-									</div>
-								</div>
-
-								<div
-									className={`p-3 rounded-lg border ${
-										runData?.current_step === "rendering_report"
-											? "bg-blue-50 border-blue-400 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200"
-											: runData?.current_step === "report_render_failed"
-												? "bg-red-50 border-red-300 dark:bg-red-950/30 text-red-900 dark:text-red-200"
-												: ["ready_for_review", "completed"].includes(
-														runData?.current_step || "",
-												  )
-													? "bg-green-50/60 border-green-300 dark:bg-green-950/20 text-green-900 dark:text-green-200"
-													: "bg-muted/20 text-muted-foreground"
-									}`}
-								>
-									<div className="flex items-center gap-1.5 font-semibold">
-										{runData?.current_step === "rendering_report" ? (
-											<IconRefresh size={14} className="animate-spin text-blue-600" />
-										) : runData?.current_step === "report_render_failed" ? (
-											<IconAlertTriangle size={14} className="text-red-600" />
-										) : (
-											<IconCheck size={14} className="text-green-600" />
-										)}
-										<span>4. 星河国际参考报告</span>
-									</div>
-									<div className="text-[11px] text-muted-foreground mt-1">
-										{runData?.current_step === "rendering_report"
-											? "正在渲染 PDF / HTML..."
-											: runData?.current_step === "report_render_failed"
-												? "渲染失败待重试"
-												: reportData?.revisions?.length ? "草稿已就绪，进入待审核" : "尚无本轮报告草稿"}
-									</div>
-								</div>
-							</div>
+							{runData && <>
+								<p className="text-xs text-muted-foreground" aria-label="本次诊断计数">{diagnosisCountText(runData)} · 物理请求数：{evidenceData?.run_id === runData.run_id ? evidenceData.total_requests_used : "归档计数尚未取得"}</p>
+								<DiagnosisStages stages={diagnosisStages(runData, metricsData, analysisData, reportData)} />
+							</>}
 
 							{/* 分析失败恢复卡片 */}
 							{runData?.current_step === "analysis_failed" && (
@@ -1264,9 +1057,9 @@ function BrandReportsWorkspace() {
 										<span className="font-semibold">错误分类: </span>
 										<span className="font-mono">{runData.error_category || "execution_failed"}</span>
 									</div>
-									{runData.error_message && (
+									{(collectionError || runData.error_message) && (
 										<div className="text-muted-foreground bg-background/60 p-2 rounded border font-mono">
-											{runData.error_message}
+											{collectionError || runData.error_message}
 										</div>
 									)}
 									<div className="text-muted-foreground mt-1">
