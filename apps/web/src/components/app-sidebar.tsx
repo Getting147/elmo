@@ -202,16 +202,19 @@ export function AppSidebar({
 				{
 					title: "Workflows",
 					url: "/admin/workflows",
+					absolute: true,
 					icon: IconTimeline,
 				},
 				{
 					title: "Tools",
 					url: "/admin/tools",
+					absolute: true,
 					icon: IconTool,
 				},
 				{
 					title: "Prompts DB",
 					url: "/admin",
+					absolute: true,
 					icon: IconTable,
 				},
 			);

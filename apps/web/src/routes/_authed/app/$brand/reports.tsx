@@ -1,11 +1,13 @@
-import { useState, useEffect } from "react";
-import { z } from "zod";
+import { useState, useEffect, useRef } from "react";
+import { INVALID_REPORT_TASK_LINK, validateReportSearch } from "@/lib/baseline-report-search";
 import { useAuth } from "@/hooks/use-auth";
+import { DiagnosisDimensionInput } from "@/components/diagnosis-dimension-input";
+import { DefaultErrorComponent } from "@/router-default-components";
 import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
 import { DiagnosisStages } from "@/components/diagnosis-stages";
 import { diagnosisStages } from "@/lib/baseline-stages";
 import { diagnosisCountText, diagnosisStatusText, isDiagnosisInProgress } from "@/lib/baseline-status";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
 import { getBrandReports } from "@/server/report-files";
@@ -46,8 +48,19 @@ import {
 
 export const Route = createFileRoute("/_authed/app/$brand/reports")({
 	component: BrandReportsPage,
-	validateSearch: z.object({ runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional() }),
+	errorComponent: ReportsError,
+	validateSearch: validateReportSearch,
 });
+
+function ReportsError(props: ErrorComponentProps) {
+	const { brand } = Route.useParams();
+	if (props.error.message !== INVALID_REPORT_TASK_LINK) return <DefaultErrorComponent {...props} />;
+	return <section data-no-i18n="true" role="alert" className="p-6 space-y-3">
+		<h2 className="text-lg font-semibold">任务链接参数无效</h2>
+		<p>任务编号必须使用合法的字母、数字、下划线或连字符。请返回报告页重新选择已有任务；此操作不会启动采集。</p>
+		<Link to="/app/$brand/reports" params={{ brand }} search={{}} reloadDocument className="text-primary underline">返回诊断报告页</Link>
+	</section>;
+}
 
 function BrandReportsPage() {
 	const { brand } = Route.useParams();
@@ -106,6 +119,22 @@ function BrandReportsWorkspace() {
 	const frozenSnapshot = draft.snapshot;
 	const executionMode = draft.mode;
 	const dimensionOverrides = draft.dimensions;
+	const pendingDimensionWrites = useRef(new Set<Promise<void>>());
+	const dimensionSaveError = useRef<Error | null>(null);
+	const [dimensionComposing, setDimensionComposing] = useState(false);
+	const saveDimension = (id: string, value: string) => {
+		const write = transact((current) => {
+			if (current.snapshot || current.runId) throw new Error("输入已在本页或其他标签页冻结，请显式重新准备后编辑。");
+			return { ...current, dimensions: { ...current.dimensions, [id]: value } };
+		}).then(() => { dimensionSaveError.current = null; }, (err: Error) => {
+			dimensionSaveError.current = err;
+			setActionError(err.message);
+			throw err;
+		});
+		pendingDimensionWrites.current.add(write);
+		void write.then(() => pendingDimensionWrites.current.delete(write), () => pendingDimensionWrites.current.delete(write));
+		return write;
+	};
 	useEffect(() => { if (draft.runId && !requestedRunId) handleSelectRun(draft.runId); }, [draft.runId]);
 	useEffect(() => { if (requestedRunId) handleSelectRun(requestedRunId); }, [requestedRunId]);
 
@@ -134,13 +163,15 @@ function BrandReportsWorkspace() {
 	});
 
 	// 4. 查询当前 run 的逐题证据
-	const { data: evidenceData, refetch: refetchEvidence } = useQuery({
+	const { data: evidenceData, error: evidenceError, refetch: refetchEvidence } = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled:
 			!!brandId &&
 			!!activeRunId &&
-			["completed", "partial", "failed", "interrupted"].includes(runData?.status),
+			Boolean(runData),
+		refetchInterval: runData && isDiagnosisInProgress(runData) ? 2000 : false,
+		retry: false,
 	});
 
 	const collectionError = evidenceData?.run_id === runData?.run_id
@@ -148,13 +179,15 @@ function BrandReportsWorkspace() {
 		: null;
 
 	// 5. 查询当前 run 的客观统计指标
-	const { data: metricsData, refetch: refetchMetrics } = useQuery({
+	const { data: metricsData, error: metricsError, refetch: refetchMetrics } = useQuery({
 		queryKey: ["baseline-metrics", brandId, activeRunId],
 		queryFn: () => getBaselineMetricsFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled:
 			!!brandId &&
 			!!activeRunId &&
-			(runData?.status === "completed" || runData?.status === "partial"),
+			(runData?.valid_questions > 0),
+		refetchInterval: runData && isDiagnosisInProgress(runData) ? 2000 : false,
+		retry: false,
 	});
 
 	// 5.1. 查询当前 run 的最新人工分析版本 (E2-R04: 刷新恢复与版本切换)
@@ -167,6 +200,7 @@ function BrandReportsWorkspace() {
 		queryFn: () => getBaselineAnalysisFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled: !!brandId && !!activeRunId,
 		retry: 1,
+		refetchInterval: runData && isDiagnosisInProgress(runData) ? 2000 : false,
 	});
 
 	// 5.2. 查询当前 run 的报告及其修订版本列表 (E2-R04)
@@ -179,6 +213,7 @@ function BrandReportsWorkspace() {
 		queryFn: () => getBaselineReportFn({ data: { brandId: brandId!, reportId: `rpt_${activeRunId}` } }),
 		enabled: !!brandId && !!activeRunId,
 		retry: 1,
+		refetchInterval: runData && isDiagnosisInProgress(runData) ? 2000 : false,
 	});
 
 	// 6. 旧报告查询（保留历史能力）
@@ -190,7 +225,7 @@ function BrandReportsWorkspace() {
 
 	// 恢复服务端持久化的人工分析 (E2-R04)
 	useEffect(() => {
-		if (analysisData) {
+		if (analysisData?.run_id === activeRunId) {
 			setActiveAnalysisId(analysisData.analysis_id || "");
 			setAnalystName(analysisData.analyst_name || "");
 			setExecutiveConclusion(analysisData.payload?.executive_conclusion || "");
@@ -234,11 +269,11 @@ function BrandReportsWorkspace() {
 				);
 			}
 		}
-	}, [analysisData]);
+	}, [analysisData, activeRunId]);
 
 	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04 / E3-R04: 避免旧 reportData effect 覆盖刚生成或明确选择的新修订)
 	useEffect(() => {
-		if (reportData?.revisions && reportData.revisions.length > 0) {
+		if (reportData?.run_id === activeRunId && reportData.revisions?.length > 0) {
 			const revs = reportData.revisions;
 			const latestRev = revs[revs.length - 1];
 			setActiveRevisionId((current) => {
@@ -250,7 +285,7 @@ function BrandReportsWorkspace() {
 			const nextNum = revs.length + 1;
 			setRevisionInput(`rev_${nextNum < 10 ? `0${nextNum}` : nextNum}`);
 		}
-	}, [reportData]);
+	}, [reportData, activeRunId]);
 
 	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
 	useEffect(() => {
@@ -304,14 +339,18 @@ function BrandReportsWorkspace() {
 
 	// Mutations
 	const freezeMutation = useMutation({
-		mutationFn: () => transact(async (current) => {
+		mutationFn: async () => {
+			await Promise.all([...pendingDimensionWrites.current]);
+			if (dimensionSaveError.current) throw dimensionSaveError.current;
+			return transact(async (current) => {
 			if (current.runId) {
 				const existing = await getBaselineRunFn({ data: { brandId, runId: current.runId } });
 				if (isDiagnosisInProgress(existing)) throw new Error("本次任务仍在执行，请先查看结果，不能准备下一轮。");
-			} else if (current.snapshot) return current;
+			} else if (current.snapshot) return { ...current, snapshot: null, authorizedRunId: undefined };
 			const snapshot = await freezeBaselineInputsFn({ data: { brandId, versionLabel: "v1.0", dimensionOverrides: current.dimensions } });
 			return { ...current, snapshot, runId: undefined, authorizedRunId: undefined, parameters: undefined, submitted: false };
-		}),
+			});
+		},
 		onSuccess: () => { setActionError(null); refetchActiveAuth(); },
 		onError: (err: Error) => setActionError(`冻结输入失败: ${err.message}`),
 	});
@@ -659,10 +698,11 @@ function BrandReportsWorkspace() {
 								<span className="font-semibold text-foreground">切换已有监测任务:</span>
 								<select
 									value={activeRunId}
-									onChange={(e) => { handleSelectRun(e.target.value); void navigate({ search: { runId: e.target.value }, replace: true }); }}
+									aria-label="切换已有监测任务"
+									onChange={(e) => { if (!e.target.value || e.target.value === activeRunId) return; handleSelectRun(e.target.value); void navigate({ search: { runId: e.target.value }, replace: true }); }}
 									className="border rounded-md px-2 py-1.5 bg-background font-mono text-xs max-w-xs"
 								>
-									<option value="">-- 选择已有任务查看/处理 --</option>
+									<option value="" disabled>-- 选择已有任务查看/处理 --</option>
 									{runsListData.items.map((r: any) => (
 										<option key={r.run_id} value={r.run_id}>
 											{r.run_id} ({r.mode} · {r.status} · {r.created_at?.slice(0, 16)})
@@ -756,16 +796,14 @@ function BrandReportsWorkspace() {
 												</div>
 												<div className="flex items-center gap-2 shrink-0">
 													<span className="text-muted-foreground text-[11px]">业务维度:</span>
-													<input
+													<DiagnosisDimensionInput
 														type="text"
 														placeholder="输入业务板块"
 														aria-label={`业务分类 ${p.code}`}
 														value={dimensionOverrides[p.id] ?? (p.unclassified ? "" : p.dimensionName)}
-														onChange={(e) => {
-															const value = e.target.value;
-															void transact((current) => ({ ...current, dimensions: { ...current.dimensions, [p.id]: value }, snapshot: null, authorizedRunId: undefined, runId: undefined, parameters: undefined, submitted: false })).catch((err: Error) => setActionError(err.message));
-														}}
-														disabled={preparationBusy || Boolean(draft.runId)}
+														onCommit={(value) => saveDimension(p.id, value)}
+														onComposing={setDimensionComposing}
+														disabled={preparationBusy || Boolean(frozenSnapshot || draft.runId)}
 														className={`border rounded px-2 py-1 text-xs w-32 bg-background ${
 															p.unclassified && !dimensionOverrides[p.id]
 																? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20"
@@ -795,14 +833,14 @@ function BrandReportsWorkspace() {
 								<button
 									onClick={() => { if (!draft.runId || window.confirm("准备下一轮诊断？仅重新冻结输入，真实执行仍需重新授权并手动启动。")) freezeMutation.mutate(); }}
 									disabled={
-										preparationBusy ||
+										dimensionComposing || preparationBusy ||
 										!profileData ||
 										profileData.summary.totalPrompts === 0
 									}
 									className="text-xs border px-3 py-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors disabled:opacity-50"
 								>
 									<IconLock size={14} className="inline mr-1" />
-									{freezeMutation.isPending ? "冻结中..." : draft.runId ? "准备下一轮诊断" : "核对并冻结输入"}
+									{freezeMutation.isPending ? "冻结中..." : draft.runId ? "准备下一轮诊断" : frozenSnapshot ? "重新核对分类" : "核对并冻结输入"}
 								</button>
 							</div>
 						</div>
@@ -946,6 +984,8 @@ function BrandReportsWorkspace() {
 										refetchRun();
 										refetchEvidence();
 										refetchMetrics();
+										refetchAnalysis();
+										refetchReport();
 									}}
 									disabled={runFetching}
 									className="text-xs border px-2.5 py-1 rounded-md hover:bg-accent inline-flex items-center gap-1"
@@ -974,13 +1014,13 @@ function BrandReportsWorkspace() {
 								<div className="border p-3 rounded-lg bg-muted/20">
 									<span className="text-xs text-muted-foreground">已尝试题数</span>
 									<div className="text-sm font-bold mt-0.5">
-										{runData?.completed_questions ?? 0} / {runData?.total_questions ?? 0} 题
+										{runData ? `${runData.completed_questions} / ${runData.total_questions} 题` : "正在读取"}
 									</div>
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
 									<span className="text-xs text-muted-foreground">有效题数（非请求次数）</span>
 									<div className="text-sm font-bold mt-0.5 text-blue-600">
-										{runData?.valid_questions ?? 0} 题
+										{runData ? `${runData.valid_questions} 题` : "正在读取"}
 									</div>
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
@@ -991,9 +1031,10 @@ function BrandReportsWorkspace() {
 								</div>
 							</div>
 
+							{activeRunId && (evidenceError || metricsError) && <p role="status" className="text-xs text-amber-700">本轮归档或统计暂未同步，相关区域暂不展示；已尝试题数来自当前任务。可刷新查询，不会重新采集。</p>}
 							{runData && <>
-								<p className="text-xs text-muted-foreground" aria-label="本次诊断计数">{diagnosisCountText(runData)} · 物理请求数：{evidenceData?.run_id === runData.run_id ? evidenceData.total_requests_used : "归档计数尚未取得"}</p>
-								<DiagnosisStages stages={diagnosisStages(runData, metricsData, analysisData, reportData)} />
+								<p className="text-xs text-muted-foreground" aria-label="本次诊断计数">{diagnosisCountText(runData)} · 物理请求数：{!evidenceError && evidenceData?.run_id === runData.run_id ? evidenceData.total_requests_used : "归档计数待同步"}</p>
+								<DiagnosisStages stages={diagnosisStages(runData, metricsError ? undefined : metricsData, analysisData, reportData)} />
 							</>}
 
 							{/* 分析失败恢复卡片 */}
@@ -1069,7 +1110,7 @@ function BrandReportsWorkspace() {
 							)}
 
 							{/* 客观指标卡片 (A 模块) */}
-							{metricsData && (
+							{!metricsError && metricsData?.run_id === activeRunId && (
 								<div className="flex flex-col gap-3 border-t pt-4">
 									<div className="flex items-center gap-1.5 text-sm font-semibold text-blue-600">
 										<IconChartBar size={18} /> 客观统计指标（严谨 A 模块分母口径）
@@ -1151,7 +1192,7 @@ function BrandReportsWorkspace() {
 							)}
 
 							{/* 逐题证据明细 (E-R06: 支持完整回答查看与实际引用展示) */}
-							{evidenceData && (
+							{!evidenceError && evidenceData?.run_id === activeRunId && (
 								<div className="flex flex-col gap-3 border-t pt-4">
 									<div className="text-sm font-semibold flex items-center gap-1.5">
 										<IconListCheck size={18} /> 逐题实测证据与引用明细
