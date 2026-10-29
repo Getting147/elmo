@@ -8,6 +8,7 @@
  * 4. 审核主体使用可信 session.user.id。
  */
 
+import { baselineIdentityHeaders } from "./baseline-identity";
 import { db } from "@workspace/lib/db/db";
 import { brands, competitors, prompts, brandProductLines, brandCredentials, member } from "@workspace/lib/db/schema";
 import { eq, and, isNull, asc } from "drizzle-orm";
@@ -125,9 +126,7 @@ export async function callBaselineBackend<T = any>(args: {
 
 	const headers: Record<string, string> = {
 		"X-Service-Token": serviceToken,
-		"X-Organization-Id": args.organizationId,
-		"X-Brand-Id": args.brandId,
-		"X-Caller-Id": args.callerId || "elmo-server",
+		...baselineIdentityHeaders(args.organizationId, args.brandId, args.callerId || "elmo-server"),
 		"Content-Type": "application/json",
 	};
 

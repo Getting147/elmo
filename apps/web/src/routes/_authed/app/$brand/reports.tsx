@@ -17,6 +17,7 @@ import {
 	getBaselineAnalysisFn,
 	getBaselineReportFn,
 	getBaselineActiveAuthFn,
+	registerBaselineServerAuthFn,
 	retryBaselineAnalysisFn,
 } from "@/server/baseline";
 import {
@@ -42,6 +43,11 @@ export const Route = createFileRoute("/_authed/app/$brand/reports")({
 });
 
 function BrandReportsPage() {
+	const { brand } = Route.useParams();
+	return <BrandReportsWorkspace key={brand} />;
+}
+
+function BrandReportsWorkspace() {
 	const { brand: brandId } = Route.useParams();
 	const { brand } = useBrand(brandId);
 	const isZh = typeof navigator !== "undefined" ? navigator.language?.startsWith("zh") : true;
@@ -271,6 +277,11 @@ function BrandReportsPage() {
 		setReviewNotice(null);
 	};
 
+	// Restore the persisted task when returning from overview or reloading; never create work on mount.
+	useEffect(() => {
+		if (!activeRunId && runsListData?.items?.[0]?.run_id) handleSelectRun(runsListData.items[0].run_id);
+	}, [runsListData, activeRunId]);
+
 	// 5.3. 查询当前快照的有效服务端预授权 (E5-R01)
 	const { data: activeAuthData, refetch: refetchActiveAuth } = useQuery({
 		queryKey: ["baselineActiveAuth", brandId, frozenSnapshot?.snapshot_id],
@@ -301,6 +312,16 @@ function BrandReportsPage() {
 		onError: (err: any) => setActionError(`冻结输入失败: ${err.message}`),
 	});
 
+	const authorizeMutation = useMutation({
+		mutationFn: () => registerBaselineServerAuthFn({ data: {
+			brandId: brandId!, snapshotId: frozenSnapshot.snapshot_id,
+			runId: `run_${crypto.randomUUID()}`, snapshotHash: frozenSnapshot.content_sha256,
+			requestLimit: frozenSnapshot.question_count, retryLimit: 0,
+		} }),
+		onSuccess: () => { setActionError(null); refetchActiveAuth(); },
+		onError: (err: Error) => setActionError(`本次授权未完成：${err.message}`),
+	});
+
 	const createRunMutation = useMutation({
 		mutationFn: (snapshotId: string) => {
 			const activeAuth = activeAuthData?.authorization;
@@ -315,8 +336,8 @@ function BrandReportsPage() {
 			const clientRunId =
 				executionMode === "real" && activeAuth?.run_id
 					? activeAuth.run_id
-					: `run_${brandId!.toLowerCase()}_${Date.now()}`;
-			const idempotencyKey = `idemp_${brandId!.toLowerCase()}_${clientRunId}`;
+					: `run_${crypto.randomUUID()}`;
+			const idempotencyKey = `idemp_${clientRunId}`;
 
 			return createBaselineRunFn({
 				data: {
@@ -390,7 +411,10 @@ function BrandReportsPage() {
 			}
 
 			// 2. 发起单次基线运行任务（后台将连续完成采集、统计、DeepSeek 分析及报告生成）
-			const activeAuth = activeAuthData?.authorization;
+			const activeAuth = executionMode === "real"
+				? (await getBaselineActiveAuthFn({ data: { brandId: brandId!, snapshotId } })).authorization
+				: null;
+			if (executionMode === "real" && !activeAuth) throw new Error("尚未授权本次真实诊断。请在下方费用确认区核对并明确授权后再启动。");
 			const totalPrompts = profileData?.summary?.totalPrompts || 10;
 			const effectiveBudget =
 				executionMode === "real" && activeAuth?.request_limit
@@ -403,8 +427,8 @@ function BrandReportsPage() {
 			const clientRunId =
 				executionMode === "real" && activeAuth?.run_id
 					? activeAuth.run_id
-					: `run_${brandId!.toLowerCase()}_${Date.now()}`;
-			const idempotencyKey = `idemp_${brandId!.toLowerCase()}_${clientRunId}`;
+					: `run_${crypto.randomUUID()}`;
+			const idempotencyKey = `idemp_${clientRunId}`;
 
 			const runRes = await createBaselineRunFn({
 				data: {
@@ -820,13 +844,15 @@ function BrandReportsPage() {
 													<input
 														type="text"
 														placeholder="输入业务板块"
+														aria-label={`业务分类 ${p.code}`}
 														value={dimensionOverrides[p.id] ?? (p.unclassified ? "" : p.dimensionName)}
-														onChange={(e) =>
+														onChange={(e) => {
+															setFrozenSnapshot(null);
 															setDimensionOverrides({
 																...dimensionOverrides,
 																[p.id]: e.target.value,
-															})
-														}
+															});
+														}}
 														className={`border rounded px-2 py-1 text-xs w-32 bg-background ${
 															p.unclassified && !dimensionOverrides[p.id]
 																? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20"
@@ -895,6 +921,7 @@ function BrandReportsPage() {
 							<div className="flex items-center gap-2 text-xs">
 								<span className="text-muted-foreground">执行模式:</span>
 								<select
+									aria-label="执行模式"
 									value={executionMode}
 									onChange={(e) => setExecutionMode(e.target.value as any)}
 									className="border rounded px-2 py-1 bg-background text-xs font-semibold"
@@ -968,6 +995,15 @@ function BrandReportsPage() {
 									)}
 								</div>
 							)}
+							{executionMode === "real" && frozenSnapshot && !activeAuthData?.authorization && (
+								<div className="space-y-2">
+									<p className="text-xs">本次仅授权这 {frozenSnapshot.question_count} 道题，采集上限 {frozenSnapshot.question_count} 次、重试 0 次，分析沿用本页所示范围。需要组织管理员或 owner 确认。</p>
+									<button type="button" disabled={authorizeMutation.isPending} className="border rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => {
+										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，另含本页所示 DeepSeek 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
+									}}>确认本次费用范围并授权</button>
+								</div>
+							)}
+
 							<p className="text-xs text-muted-foreground mt-1">
 								⚠️ 安全声明：本轮仅执行一次有限诊断，任务完成后绝不自动创建下一轮；真实模式需服务端开关显式开启且配置有效凭据，未授权将触发拦截守卫。
 							</p>
@@ -986,7 +1022,7 @@ function BrandReportsPage() {
 							</div>
 							<button
 								onClick={() => createRunMutation.mutate(frozenSnapshot.snapshot_id)}
-								disabled={!frozenSnapshot || createRunMutation.isPending}
+								disabled={!frozenSnapshot || createRunMutation.isPending || (executionMode === "real" && !activeAuthData?.authorization)}
 								className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-green-700 transition-colors disabled:opacity-50"
 							>
 								<IconPlayerPlay size={15} />
@@ -1098,7 +1134,7 @@ function BrandReportsPage() {
 										<span>2. A 统计指标核算</span>
 									</div>
 									<div className="text-[11px] text-muted-foreground mt-1">
-										多业务切分与受控指标已锁定
+										{metricsData ? "多业务切分与受控指标已锁定" : "尚无本轮统计结果"}
 									</div>
 								</div>
 
@@ -1130,7 +1166,7 @@ function BrandReportsPage() {
 											? "AI 分析中..."
 											: runData?.current_step === "analysis_failed"
 												? "分析失败待重试"
-												: "三层成因与行动草稿就绪"}
+												: analysisData ? "三层成因与行动草稿就绪" : "尚无本轮分析草稿"}
 									</div>
 								</div>
 
@@ -1162,7 +1198,7 @@ function BrandReportsPage() {
 											? "正在渲染 PDF / HTML..."
 											: runData?.current_step === "report_render_failed"
 												? "渲染失败待重试"
-												: "草稿已就绪，进入待审核"}
+												: reportData?.revisions?.length ? "草稿已就绪，进入待审核" : "尚无本轮报告草稿"}
 									</div>
 								</div>
 							</div>

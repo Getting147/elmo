@@ -8,6 +8,7 @@
  * 4. 响应头附加 nosniff 与私有防缓存控制。
  */
 
+import { baselineIdentityHeaders } from "@/server/baseline-identity";
 import { createFileRoute } from "@tanstack/react-router";
 import { getAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
 import { getBaselineConfig, getBrandAndOrg } from "@/server/baseline.server";
@@ -74,9 +75,7 @@ export const Route = createFileRoute("/api/baseline/download")({
 						method: "GET",
 						headers: {
 							"X-Service-Token": config.serviceToken,
-							"X-Organization-Id": orgId,
-							"X-Brand-Id": brandId,
-							"X-Caller-Id": session.user.id,
+							...baselineIdentityHeaders(orgId, brandId, session.user.id),
 						},
 					});
 
@@ -104,7 +103,7 @@ export const Route = createFileRoute("/api/baseline/download")({
 					if (disposition) {
 						headers.set("Content-Disposition", disposition);
 					} else {
-						headers.set("Content-Disposition", `attachment; filename="${brandId}_${revisionId}.${format}"`);
+						headers.set("Content-Disposition", `attachment; filename="report_${revisionId}.${format}"; filename*=UTF-8''${encodeURIComponent(`${brandId}_${revisionId}.${format}`)}`);
 					}
 
 					return new Response(blob, {

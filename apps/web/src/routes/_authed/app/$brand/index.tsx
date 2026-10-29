@@ -18,6 +18,7 @@ import {
 	IconSpeakerphone,
 } from "@tabler/icons-react";
 import PromptWizard from "@/components/prompt-wizard";
+import { DiagnosisStatus } from "@/components/diagnosis-status";
 import { useBrand } from "@/hooks/use-brands";
 import { useDashboardSummary } from "@/hooks/use-dashboard-summary";
 import { useShareOfVoice } from "@/hooks/use-share-of-voice";
@@ -290,8 +291,6 @@ function DashboardPage() {
 		);
 	}
 
-	const hasPrompts = brand?.prompts && brand.prompts.length > 0;
-
 	if (!brand?.onboarded) {
 		return (
 			<div className="space-y-6 max-w-2xl p-4">
@@ -322,52 +321,8 @@ function DashboardPage() {
 
 	// Show placeholder if no evaluations yet
 	const hasNoEvaluations = totalRuns === 0 && !isLoadingSummary;
-	const hasEnabledPrompts = totalPrompts > 0;
-
 	if (hasNoEvaluations) {
-		const getMessage = () => {
-			if (hasEnabledPrompts) {
-				return "You are ready to track your AI visibility. We're currently running the first evaluation against AI models. This usually takes a few minutes.";
-			}
-			if (hasPrompts) {
-				return "You have prompts configured but none are currently enabled. Add or enable some prompts to start tracking your AI visibility.";
-			}
-			return "Set up prompts to start tracking your AI visibility. Once configured, we'll evaluate them against AI models automatically.";
-		};
-
-		return (
-			<div className="flex flex-1 flex-col items-center justify-center p-8 max-w-xl mx-auto text-center">
-				<div className="rounded-full bg-muted p-4 mb-6">
-					<IconClock className="h-10 w-10 text-muted-foreground" />
-				</div>
-				<h2 className="text-2xl font-bold mb-3">
-					{hasEnabledPrompts ? "Waiting for First Evaluation" : "No Data Yet"}
-				</h2>
-				<p className="text-muted-foreground mb-6 text-balance">{getMessage()}</p>
-				<div className="flex flex-col gap-3 w-full">
-					{hasEnabledPrompts && (
-						<div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
-							<div className="flex items-center gap-2">
-								<IconList className="h-5 w-5 text-muted-foreground" />
-								<span className="text-sm">Prompts configured and enabled</span>
-							</div>
-							<span className="font-semibold">{totalPrompts.toLocaleString()}</span>
-						</div>
-					)}
-					<Button asChild variant="outline" className="w-full">
-						<Link to="/app/$brand/settings/prompts" params={{ brand: brandId }}>
-							{hasEnabledPrompts ? "View Your Prompts" : hasPrompts ? "Edit Prompts" : "Set Up Prompts"}{" "}
-							<IconArrowRight className="h-4 w-4 ml-1" />
-						</Link>
-					</Button>
-				</div>
-				{hasEnabledPrompts && (
-					<p className="text-xs text-muted-foreground mt-6">
-						Refresh this page in a few minutes to see your AI visibility data.
-					</p>
-				)}
-			</div>
-		);
+		return <DiagnosisStatus brandId={brandId} enabledPrompts={brand?.prompts?.filter((p) => p.enabled).length ?? 0} />;
 	}
 
 	return (

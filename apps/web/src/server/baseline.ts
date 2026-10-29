@@ -192,7 +192,7 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 				p.tags?.includes("is_probe") ||
 				false;
 
-			const overrideDim = data.dimensionOverrides?.[p.id];
+			const overrideDim = data.dimensionOverrides?.[p.id]?.trim();
 			const dimTag =
 				overrideDim ||
 				p.tags?.find((t) => t.startsWith("dim:"))?.replace(/^dim:/, "") ||
@@ -261,7 +261,7 @@ export const freezeBaselineInputsFn = createServerFn({ method: "POST" })
 			},
 			questions: parsedPrompts,
 			snapshot_meta: {
-				snapshot_id: `snap_${brand.id.toLowerCase()}_${Date.now()}`,
+				snapshot_id: `snap_${crypto.randomUUID()}`,
 				version_label: data.versionLabel,
 				confirmed_by: session.user.id,
 				confirmed_at: new Date().toISOString().split("T")[0],
@@ -388,7 +388,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 						maxRetries = Math.min(maxRetries, authRes.authorization.retry_limit);
 					}
 					if (!idempotencyKey) {
-						idempotencyKey = `idemp_${brand.id.toLowerCase()}_${runId}`;
+						idempotencyKey = `idemp_${/^[a-zA-Z0-9_-]+$/.test(brand.id) ? `${brand.id.toLowerCase()}_` : ""}${runId}`;
 					}
 					// 固定并保存首次受理的操作身份和最终有效参数 (E7-R01, E8-R01)
 					autoBoundRealRunRegistry.set(regKey, {
@@ -458,7 +458,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 								remembered = {
 									runId: detail.run_id,
 									idempotencyKey:
-										detail.idempotency_key || `idemp_${brand.id.toLowerCase()}_${detail.run_id}`,
+										detail.idempotency_key || `idemp_${/^[a-zA-Z0-9_-]+$/.test(brand.id) ? `${brand.id.toLowerCase()}_` : ""}${detail.run_id}`,
 									modelName: boundModel,
 									webSearch: boundWebSearch,
 									requestBudget: detail.request_budget,
@@ -519,14 +519,14 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		}
 
 		if (!runId) {
-			runId = `run_${brand.id.toLowerCase()}_${Date.now()}`;
+			runId = `run_${crypto.randomUUID()}`;
 		}
 		// 稳定幂等键：优先使用显式提供的 idempotencyKey；若未提供，针对已绑定 runId (如 real 授权或显式 runId) 绑定 runId，针对 synthetic 模式默认基于 snapshotId 与 mode，确保同一操作重放不产生重复 run (E6-R01)
 		if (!idempotencyKey) {
 			idempotencyKey =
 				data.runId || (data.mode === "real" && runId)
-					? `idemp_${brand.id.toLowerCase()}_${runId}`
-					: `idemp_${brand.id.toLowerCase()}_${data.snapshotId}_${data.mode}`;
+					? `idemp_${/^[a-zA-Z0-9_-]+$/.test(brand.id) ? `${brand.id.toLowerCase()}_` : ""}${runId}`
+					: `idemp_${/^[a-zA-Z0-9_-]+$/.test(brand.id) ? `${brand.id.toLowerCase()}_` : ""}${data.snapshotId}_${data.mode}`;
 		}
 
 		const payload: Record<string, any> = {
