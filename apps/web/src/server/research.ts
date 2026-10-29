@@ -24,7 +24,7 @@ import {
 	markRolledBack,
 	type OnboardingSuggestion,
 } from "@workspace/lib/onboarding";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getBoss } from "@/lib/boss-client";
 import { BrandNotFoundError, saveWizardOnboarding, type WizardOnboardingInput } from "@/server/onboarding-core";
 
@@ -323,25 +323,32 @@ async function createAndEnqueueDraft(options: {
 		});
 	} catch (err: unknown) {
 		// 并发请求防重：捕获 partial unique 冲突（多个标签页/并发连击同时插入）
+		const pgCause = (err as { cause?: any })?.cause;
 		const isUniqueViolation =
 			(err as { code?: string })?.code === "23505" ||
+			pgCause?.code === "23505" ||
+			String(pgCause).includes("unique") ||
+			String(pgCause).includes("duplicate") ||
 			String(err).includes("unique") ||
 			String(err).includes("duplicate");
 
 		if (isUniqueViolation) {
-			const activeDraft = await db.query.draftResearch.findFirst({
-				where: and(
-					eq(draftResearch.brandId, brandId),
-					eq(draftResearch.urlHash, urlHash),
-					inArray(draftResearch.state, ["pending_review", "confirmed"]),
-				),
-			});
-			if (activeDraft) {
-				return {
-					draftId: activeDraft.id,
-					alreadyExisted: true,
-					jobSkipped: true,
-				};
+			for (let attempt = 0; attempt < 5; attempt++) {
+				const activeDraft = await db.query.draftResearch.findFirst({
+					where: and(
+						eq(draftResearch.brandId, brandId),
+						eq(draftResearch.urlHash, urlHash),
+						inArray(draftResearch.state, ["pending_review", "confirmed"]),
+					),
+				});
+				if (activeDraft) {
+					return {
+						draftId: activeDraft.id,
+						alreadyExisted: true,
+						jobSkipped: true,
+					};
+				}
+				await new Promise((r) => setTimeout(r, 20));
 			}
 		}
 		throw err;
@@ -374,8 +381,9 @@ export async function triggerResearch(args: {
 	maxProducts?: number;
 	crawledPageTexts?: Map<string, string>;
 	retry?: boolean;
+	targetDraftId?: string;
 }): Promise<{ draftId: string; alreadyExisted: boolean; jobSkipped: boolean }> {
-	const { brandId, website, retry } = args;
+	const { brandId, website, retry, targetDraftId } = args;
 	const additionalDomains = args.additionalDomains ?? [];
 	// 查 brand 存在性（404 守卫 — FK CASCADE 不影响端点层）
 	const brandRow = await db.query.brands.findFirst({
@@ -435,12 +443,12 @@ export async function triggerResearch(args: {
 			existingActive.researchStatus = "failed";
 		}
 
-		// 3. 防连续点击 / 在途排队防重复：
-		// 若已有草稿处于 queued 且创建未满 60 秒（任务正等待 worker 拾取），
-		// 无论是否 retry，一律跳过重复入队，受理同一次请求
-		const isRecentlyQueued =
-			existingActive.researchStatus === "queued" && Date.now() - new Date(existingActive.createdAt).getTime() < 60_000;
-		if (isRecentlyQueued) {
+		// 3. 在途排队任务防重（U01 修复）：
+		// 若当前草稿本身已是一次重试的后继草稿且处于 queued 状态，严格视为在途任务等待执行，绝对不重复入队
+		const isAlreadySuccessor = Boolean(
+			(existingActive.payload as { metadata?: { supersedesDraftId?: string } })?.metadata?.supersedesDraftId,
+		);
+		if (existingActive.researchStatus === "queued" && isAlreadySuccessor) {
 			return {
 				draftId: existingActive.id,
 				alreadyExisted: true,
@@ -458,7 +466,21 @@ export async function triggerResearch(args: {
 			};
 		}
 
-		// 5. retry === true：用户显式授权重试（应对明确失败或旧排队超时无执行方恢复）
+		// 5. 若请求指定了 targetDraftId，且现有活跃草稿已是该目标的后继任务，直接复用返回同一后继
+		if (
+			targetDraftId &&
+			targetDraftId !== existingActive.id &&
+			(existingActive.payload as { metadata?: { supersedesDraftId?: string } })?.metadata?.supersedesDraftId ===
+				targetDraftId
+		) {
+			return {
+				draftId: existingActive.id,
+				alreadyExisted: true,
+				jobSkipped: true,
+			};
+		}
+
+		// 6. retry === true：用户显式授权重试（应对明确失败或旧排队超时无执行方恢复）
 		// 原子 CAS 更新：仅在旧草稿状态仍为读取快照时才执行作废
 		// 防止并发竞态（如后台 worker 刚抢占由 queued 变为 running，见 T06）
 		const updatedOld = await db
@@ -481,23 +503,68 @@ export async function triggerResearch(args: {
 			.returning({ id: draftResearch.id });
 
 		if (updatedOld.length === 0) {
-			// CAS 匹配 0 行：说明 worker 抢占或另一请求已更改状态，不发起第二次重试
-			const fresh = await db.query.draftResearch.findFirst({
+			// CAS 匹配 0 行：说明 worker 抢占或另一并发重试已更改状态
+			const freshOld = await db.query.draftResearch.findFirst({
 				where: eq(draftResearch.id, existingActive.id),
 			});
+			// U02 修复：若原草稿已被并发请求置为 rolled_back，表明另一重试已胜出并建立了新后继任务
+			// 必须查询并返回胜者创建的后继活跃草稿，而不是返回作废的旧草稿！
+			if (freshOld?.state === "rolled_back") {
+				const winnerSuccessor = await db.query.draftResearch.findFirst({
+					where: and(
+						eq(draftResearch.brandId, brandId),
+						eq(draftResearch.urlHash, urlHash),
+						inArray(draftResearch.state, ["pending_review", "confirmed"]),
+					),
+				});
+				if (winnerSuccessor) {
+					return {
+						draftId: winnerSuccessor.id,
+						alreadyExisted: true,
+						jobSkipped: true,
+					};
+				}
+			}
 			return {
-				draftId: fresh?.id ?? existingActive.id,
+				draftId: freshOld?.id ?? existingActive.id,
 				alreadyExisted: true,
 				jobSkipped: true,
 			};
 		}
 
 		// CAS 成功，创建继承旧草稿 ID 的后继草稿并入队
+		// U04 修复：原子一致性保护 — 若后继草稿创建或入队失败，补偿恢复旧草稿的原始状态与时间！
+		try {
+			return await createAndEnqueueDraft({
+				brandId,
+				website,
+				additionalDomains,
+				supersedesDraftId: existingActive.id,
+				maxCompetitors: args.maxCompetitors,
+				maxPrompts: args.maxPrompts,
+				maxProducts: args.maxProducts,
+				crawledPageTexts: args.crawledPageTexts,
+			});
+		} catch (err) {
+			await db
+				.update(draftResearch)
+				.set({
+					state: existingActive.state,
+					researchStatus: existingActive.researchStatus,
+					error: existingActive.error,
+					updatedAt: existingActive.updatedAt,
+				})
+				.where(eq(draftResearch.id, existingActive.id));
+			throw err;
+		}
+	}
+
+	// 7. 不存在活跃草稿（可能初次触发，或已有草稿已处于终态 failed / rolled_back）：
+	if (!retry) {
 		return await createAndEnqueueDraft({
 			brandId,
 			website,
 			additionalDomains,
-			supersedesDraftId: existingActive.id,
 			maxCompetitors: args.maxCompetitors,
 			maxPrompts: args.maxPrompts,
 			maxProducts: args.maxProducts,
@@ -505,25 +572,77 @@ export async function triggerResearch(args: {
 		});
 	}
 
-	// 6. 不存在活跃草稿（可能初次触发，或已有草稿已处于终态 failed / rolled_back）：
-	let supersedesDraftId: string | undefined;
+	// 显式重试 (retry === true)：查找最近的历史失败草稿以建立重试链路
+	const latestHistory = await db.query.draftResearch.findFirst({
+		where: and(eq(draftResearch.brandId, brandId), eq(draftResearch.urlHash, urlHash)),
+		orderBy: [desc(draftResearch.createdAt)],
+	});
 
-	if (retry) {
-		// T05: 显式重试时，查找最近的历史失败草稿（state = 'failed' 或 researchStatus = 'failed'）以建立重试链路
-		const latestHistory = await db.query.draftResearch.findFirst({
-			where: and(eq(draftResearch.brandId, brandId), eq(draftResearch.urlHash, urlHash)),
+	if (latestHistory && (latestHistory.state === "failed" || latestHistory.researchStatus === "failed")) {
+		// U03 修复：检查该失败草稿是否已经存在更晚创建的后继草稿
+		const existingSuccessor = await db.query.draftResearch.findFirst({
+			where: and(
+				eq(draftResearch.brandId, brandId),
+				eq(draftResearch.urlHash, urlHash),
+				gte(draftResearch.createdAt, new Date(new Date(latestHistory.createdAt).getTime() + 1)),
+			),
 			orderBy: [desc(draftResearch.createdAt)],
 		});
-		if (latestHistory && (latestHistory.state === "failed" || latestHistory.researchStatus === "failed")) {
-			supersedesDraftId = latestHistory.id;
+
+		if (existingSuccessor) {
+			// 若当前请求未明确指定针对新后继草稿发起重试（targetDraftId !== existingSuccessor.id），
+			// 则此请求属于针对前序草稿的重复/迟到重试，严禁自动级联发起下一轮，直接返回已有后继草稿！
+			if (!targetDraftId || targetDraftId !== existingSuccessor.id) {
+				return {
+					draftId: existingSuccessor.id,
+					alreadyExisted: true,
+					jobSkipped: true,
+				};
+			}
 		}
+
+		// 若最新草稿本身是一次重试生成的后继草稿，且请求未显式指定针对它发起重试
+		const isLatestSuccessor = Boolean(
+			(latestHistory.payload as { metadata?: { supersedesDraftId?: string } })?.metadata?.supersedesDraftId,
+		);
+		if (isLatestSuccessor && (!targetDraftId || targetDraftId !== latestHistory.id)) {
+			return {
+				draftId: latestHistory.id,
+				alreadyExisted: true,
+				jobSkipped: true,
+			};
+		}
+
+		// 若指定了 targetDraftId 但与最新草稿不符，且最新草稿正是其后继，直接复用返回同一后继
+		if (
+			targetDraftId &&
+			targetDraftId !== latestHistory.id &&
+			(latestHistory.payload as { metadata?: { supersedesDraftId?: string } })?.metadata?.supersedesDraftId ===
+				targetDraftId
+		) {
+			return {
+				draftId: latestHistory.id,
+				alreadyExisted: true,
+				jobSkipped: true,
+			};
+		}
+
+		return await createAndEnqueueDraft({
+			brandId,
+			website,
+			additionalDomains,
+			supersedesDraftId: existingSuccessor ? existingSuccessor.id : latestHistory.id,
+			maxCompetitors: args.maxCompetitors,
+			maxPrompts: args.maxPrompts,
+			maxProducts: args.maxProducts,
+			crawledPageTexts: args.crawledPageTexts,
+		});
 	}
 
 	return await createAndEnqueueDraft({
 		brandId,
 		website,
 		additionalDomains,
-		supersedesDraftId,
 		maxCompetitors: args.maxCompetitors,
 		maxPrompts: args.maxPrompts,
 		maxProducts: args.maxProducts,

@@ -46,6 +46,12 @@ const BRAND_RETRY = {
 	website: `${MOCK_BASE_URL}/mock-website-retry`,
 };
 
+const BRAND_DUAL = {
+	id: "brand_b02_dual",
+	name: "精工装配建筑双标签页测试",
+	website: `${MOCK_BASE_URL}/mock-website-dual`,
+};
+
 let mockMode: "normal" | "error_401" = "normal";
 let mockDeepSeekCalls = 0;
 
@@ -116,7 +122,10 @@ const MOCK_DEEPSEEK_NORMAL_OUTPUT = {
 
 function createMockServer(): http.Server {
 	return http.createServer((req, res) => {
-		if ((req.url === "/mock-website" || req.url === "/mock-website-retry") && req.method === "GET") {
+		if (
+			(req.url === "/mock-website" || req.url === "/mock-website-retry" || req.url === "/mock-website-dual") &&
+			req.method === "GET"
+		) {
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 			res.end(MOCK_HTML);
 			return;
@@ -199,8 +208,9 @@ async function seedTestData(client: pg.Client) {
 		[`mem_${TEST_ADMIN.id}`, TEST_ORG.id, TEST_ADMIN.id],
 	);
 
-	// 3. 清理并初始化两个测试品牌（未建档 onboarded = false）
-	for (const b of [BRAND_NORMAL, BRAND_RETRY]) {
+	// 3. 清理并初始化测试品牌（未建档 onboarded = false）
+	for (const b of [BRAND_NORMAL, BRAND_RETRY, BRAND_DUAL]) {
+		await client.query("DELETE FROM pgboss.job WHERE data->>'brandId' = $1;", [b.id]);
 		await client.query("DELETE FROM draft_research WHERE brand_id = $1;", [b.id]);
 		await client.query("DELETE FROM prompts WHERE brand_id = $1;", [b.id]);
 		await client.query("DELETE FROM competitors WHERE brand_id = $1;", [b.id]);
@@ -413,6 +423,75 @@ async function main() {
 		await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "07_retry_recovered_details.png") });
 		log("✓ PASS: 「重新调研」成功打破死锁并重新入队执行完毕！");
 		passedTests++;
+
+		// ---------------------------------------------------------------------
+		// 步骤 5b: 真实双标签页并发重试与状态同步跟踪自验 (Dual-Tab Concurrency Verification)
+		// ---------------------------------------------------------------------
+		totalTests++;
+		log("\n--- [Browser Flow 5b] 真实双标签页并发重试与状态同步跟踪自验 ---");
+
+		// 1. 创建独立并发标签页 Tab 2 (page2)
+		const page2 = await context.newPage();
+
+		// 2. 模拟进入失败状态：先在 error_401 模式下由 Tab 1 触发首次调研
+		mockMode = "error_401";
+		await page.goto(`${APP_URL}/app/${BRAND_DUAL.id}`, { waitUntil: "networkidle" });
+		const dualAnalyzeBtn = page.getByRole("button", { name: /Analyze brand/i });
+		await dualAnalyzeBtn.click();
+
+		const retryBtnTab1 = page.getByRole("button", { name: /Retry research|重新调研/i });
+		await retryBtnTab1.waitFor({ state: "visible", timeout: 15000 });
+		log("✓ Tab 1 触发调研并进入明确失败状态，显示「Retry research (重新调研)」按钮");
+
+		// Tab 2 打开同一品牌向导页面，看到同一失败状态与「重新调研」按钮
+		await page2.goto(`${APP_URL}/app/${BRAND_DUAL.id}`, { waitUntil: "networkidle" });
+		const retryBtnTab2 = page2.getByRole("button", { name: /Retry research|重新调研/i });
+		await retryBtnTab2.waitFor({ state: "visible", timeout: 15000 });
+		log("✓ Tab 2 同时打开并展示同一失败状态与「Retry research (重新调研)」按钮");
+
+		// 3. 恢复正常模式
+		mockMode = "normal";
+
+		// 4. 双标签页同时点击「Retry research (重新调研)」模拟两用户/两标签页并发提交
+		log("✓ 两个浏览器标签页同时点击「Retry research (重新调研)」触发并发竞争...");
+		await Promise.all([retryBtnTab1.click(), retryBtnTab2.click()]);
+
+		// 5. 等待两标签页均自动接收并流转至 Brand details 界面
+		const headingTab1 = page.getByRole("heading", { name: "Brand details" });
+		const headingTab2 = page2.getByRole("heading", { name: "Brand details" });
+
+		await Promise.all([
+			headingTab1.waitFor({ state: "visible", timeout: 20000 }),
+			headingTab2.waitFor({ state: "visible", timeout: 20000 }),
+		]);
+
+		await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "08_dual_tab_page1.png") });
+		await page2.screenshot({ path: path.join(SCREENSHOTS_DIR, "09_dual_tab_page2.png") });
+		log("✓ 成功截获 08_dual_tab_page1.png 与 09_dual_tab_page2.png 真实截图证据");
+
+		// 6. 核验后台数据库与 pg-boss 队列：只创建了 1 个继承草稿，重试仅调度了 1 次作业
+		const dualDrafts = await client.query(
+			"SELECT id, state, research_status, payload FROM draft_research WHERE brand_id = $1 AND state = 'pending_review';",
+			[BRAND_DUAL.id],
+		);
+		const winnerRetryDraftId = dualDrafts.rows[0]?.id;
+		const dualRetryJobs = await client.query(
+			"SELECT COUNT(*) FROM pgboss.job WHERE name = 'analyze-brand-research' AND data->>'draftId' = $1;",
+			[winnerRetryDraftId],
+		);
+		const dualRetryJobCount = parseInt(dualRetryJobs.rows[0].count, 10);
+
+		if (dualDrafts.rows.length === 1 && dualRetryJobCount === 1) {
+			log("✓ PASS: 真实双标签页并发重试核验通过：");
+			log(`  - 两标签页同时点击，无任何死锁或异常报错，均平滑同步流转至详情页`);
+			log(`  - 数据库有且仅有 1 个新继承草稿 (id=${dualDrafts.rows[0].id})`);
+			log(`  - 队列针对该继承草稿仅投递 1 个执行作业 (retryJobCount=${dualRetryJobCount})，无重复收费或重复计算`);
+			passedTests++;
+		} else {
+			log(`✗ FAIL: 双标签页并发结果异常: drafts=${dualDrafts.rows.length}, retryJobs=${dualRetryJobCount}`);
+		}
+
+		await page2.close();
 
 		// ---------------------------------------------------------------------
 		// 步骤 6: 历史遗留任务保全验证（实际投递入队核验）

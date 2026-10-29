@@ -421,6 +421,188 @@ async function main() {
 	}
 
 	// -------------------------------------------------------------------------
+	// 阶段 6: 独立本地真实数据库并发 CAS、条件更新与事务补偿自验
+	// -------------------------------------------------------------------------
+	totalTests++;
+	log("\n--- [Test 6] 独立本地真实数据库并发 CAS、条件更新与事务补偿自验 ---");
+
+	(process.env as Record<string, string | undefined>).DATABASE_URL = DATABASE_URL;
+	const { hashUrlForDraft } = await import("@workspace/lib/onboarding");
+	const { triggerResearch } = await import("../src/server/research");
+
+	const CAS_BRAND_ID = "brand_b02_cas_test";
+	const CAS_OLD_DRAFT_ID = "draft_b02_cas_old";
+	const CAS_WEBSITE = `${MOCK_BASE_URL}/mock-website-cas`;
+
+	// 1. 准备测试品牌与失败草稿
+	await client.query("DELETE FROM draft_research WHERE brand_id = $1;", [CAS_BRAND_ID]);
+	await client.query("DELETE FROM brands WHERE id = $1;", [CAS_BRAND_ID]);
+	await client.query(
+		`INSERT INTO brands (id, name, website, enabled, onboarded, organization_id, additional_domains, aliases, created_at, updated_at)
+		 VALUES ($1, $2, $3, true, false, $4, '{}', '{}', NOW(), NOW());`,
+		[CAS_BRAND_ID, "CAS并发测试品牌", CAS_WEBSITE, TEST_ORG_ID],
+	);
+
+	const casUrlHash = hashUrlForDraft(CAS_WEBSITE);
+	const initialOldTime = new Date(Date.now() - 10 * 60 * 1000);
+	await client.query(
+		`INSERT INTO draft_research (id, brand_id, url_hash, state, payload, research_status, error, created_at, updated_at, expires_at)
+		 VALUES ($1, $2, $3, 'pending_review', '{}'::jsonb, 'failed', 'Network timeout', $4, $4, NOW() + INTERVAL '30 days');`,
+		[CAS_OLD_DRAFT_ID, CAS_BRAND_ID, casUrlHash, initialOldTime],
+	);
+	log(`[DB] Created initial failed draft ${CAS_OLD_DRAFT_ID} in PostgreSQL (port 5433)`);
+
+	// 2. 模拟 5 个并发请求竞争重试
+	log(`[CAS Concurrency] 启动 5 个并发 triggerResearch 重试请求，共同竞争旧草稿 ${CAS_OLD_DRAFT_ID}...`);
+	const concurrentResults = await Promise.all([
+		triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID }),
+		triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID }),
+		triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID }),
+		triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID }),
+		triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID }),
+	]);
+
+	const winners = concurrentResults.filter((r) => !r.jobSkipped);
+	const losers = concurrentResults.filter((r) => r.jobSkipped);
+	const distinctDraftIds = new Set(concurrentResults.map((r) => r.draftId));
+	const winnerDraftId = [...distinctDraftIds][0];
+
+	// 验证在真实数据库中旧草稿被安全作废，且正好有且仅有 1 个新继承草稿处于 pending_review
+	const oldDraftCheck = await client.query("SELECT * FROM draft_research WHERE id = $1;", [CAS_OLD_DRAFT_ID]);
+	const oldRow = oldDraftCheck.rows[0];
+
+	const activeSuccessorsCheck = await client.query(
+		"SELECT * FROM draft_research WHERE brand_id = $1 AND state = 'pending_review';",
+		[CAS_BRAND_ID],
+	);
+	const winnerRow = activeSuccessorsCheck.rows[0];
+
+	// 检查 pg-boss 队列中是否仅向 analyze-brand-research 投递了 1 个 job
+	const jobCountRes = await client.query(
+		"SELECT COUNT(*) FROM pgboss.job WHERE name = 'analyze-brand-research' AND data->>'draftId' = $1;",
+		[winnerDraftId],
+	);
+	const jobCount = parseInt(jobCountRes.rows[0].count, 10);
+
+	const casPassed =
+		winners.length === 1 &&
+		losers.length === 4 &&
+		distinctDraftIds.size === 1 &&
+		oldRow?.state === "rolled_back" &&
+		activeSuccessorsCheck.rows.length === 1 &&
+		winnerRow?.payload?.metadata?.supersedesDraftId === CAS_OLD_DRAFT_ID &&
+		jobCount === 1;
+
+	if (casPassed) {
+		log("✓ PASS: 5 并发重试竞争 CAS 严格生效：");
+		log(`  - 恰好 1 个赢家 (jobSkipped: false), 4 个从属赢家结果 (jobSkipped: true)`);
+		log(`  - 5 个并发调用全部统一获得相同继承草稿 ID: ${winnerDraftId}`);
+		log(`  - PostgreSQL 数据库旧草稿状态精准更新为 rolled_back`);
+		log(`  - PostgreSQL 数据库仅存在 1 个新的 pending_review 继承草稿`);
+		log(`  - pg-boss 队列严格保证仅投递 1 次，无任何重复作业`);
+	} else {
+		log(`✗ FAIL: CAS 并发重试竞争未满足预期: winners=${winners.length}, losers=${losers.length}, distinct=${distinctDraftIds.size}, jobs=${jobCount}`);
+	}
+
+	// 3. 验证幂等性与稳定身份防重：重复请求旧任务 A 或未指定 targetDraftId 时均安全返回继承草稿 B
+	const repeatOldReq = await triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: CAS_OLD_DRAFT_ID });
+	const untargetedReq = await triggerResearch({ brandId: CAS_BRAND_ID, website: CAS_WEBSITE, retry: true });
+	const idempPassed =
+		repeatOldReq.draftId === winnerDraftId &&
+		repeatOldReq.jobSkipped === true &&
+		untargetedReq.draftId === winnerDraftId &&
+		untargetedReq.jobSkipped === true;
+
+	if (idempPassed) {
+		log("✓ PASS: 稳定重试身份与无差别防重验证通过：");
+		log("  - 重复请求已作废的前置草稿 -> 幂等返回已有继承草稿 (jobSkipped: true)");
+		log("  - 未带 targetDraftId 的重复重试 -> 安全识别已有继承草稿 (jobSkipped: true)");
+	} else {
+		log("✗ FAIL: 稳定身份防重未通过");
+	}
+
+	// 4. 验证原子替换与事务回滚补偿机制 (补偿恢复，绝无孤儿 rolled_back 状态)
+	log("[Compensating Rollback] 验证继承草稿创建异常时的原子回滚补偿保护...");
+	const FAIL_COMP_BRAND_ID = "brand_b02_fail_comp";
+	const FAIL_COMP_OLD_DRAFT_ID = "draft_b02_fail_comp_old";
+
+	await client.query("DELETE FROM draft_research WHERE brand_id = $1;", [FAIL_COMP_BRAND_ID]);
+	await client.query("DELETE FROM brands WHERE id = $1;", [FAIL_COMP_BRAND_ID]);
+	await client.query(
+		`INSERT INTO brands (id, name, website, enabled, onboarded, organization_id, additional_domains, aliases, created_at, updated_at)
+		 VALUES ($1, $2, $3, true, false, $4, '{}', '{}', NOW(), NOW());`,
+		[FAIL_COMP_BRAND_ID, "异常补偿测试品牌", CAS_WEBSITE, TEST_ORG_ID],
+	);
+
+	const failCompUrlHash = hashUrlForDraft(CAS_WEBSITE);
+	await client.query(
+		`INSERT INTO draft_research (id, brand_id, url_hash, state, payload, research_status, error, created_at, updated_at, expires_at)
+		 VALUES ($1, $2, $3, 'pending_review', '{}'::jsonb, 'failed', 'Original failure reason', NOW(), NOW(), NOW() + INTERVAL '30 days');`,
+		[FAIL_COMP_OLD_DRAFT_ID, FAIL_COMP_BRAND_ID, failCompUrlHash],
+	);
+
+	// 在 PostgreSQL 中定义触发器，模拟当插入继承草稿时发生数据库级异常
+	await client.query(`
+		CREATE OR REPLACE FUNCTION fail_draft_insert() RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.brand_id = '${FAIL_COMP_BRAND_ID}' THEN
+				RAISE EXCEPTION 'Simulated Postgres insert failure for compensation test';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+	`);
+	await client.query(`
+		DROP TRIGGER IF EXISTS trg_fail_draft_insert ON draft_research;
+		CREATE TRIGGER trg_fail_draft_insert BEFORE INSERT ON draft_research FOR EACH ROW EXECUTE FUNCTION fail_draft_insert();
+	`);
+
+	let compensationThrew = false;
+	try {
+		await triggerResearch({ brandId: FAIL_COMP_BRAND_ID, website: CAS_WEBSITE, retry: true, targetDraftId: FAIL_COMP_OLD_DRAFT_ID });
+	} catch (err: any) {
+		compensationThrew = true;
+		log(`[Compensating Rollback] 成功捕获预期的数据库异常: ${err.message}`);
+	}
+
+	// 移除触发器
+	await client.query(`DROP TRIGGER IF EXISTS trg_fail_draft_insert ON draft_research;`);
+	await client.query(`DROP FUNCTION IF EXISTS fail_draft_insert();`);
+
+	// 核验 PostgreSQL 数据库中的旧草稿：已被精准还原为 pending_review/failed，绝无孤儿 rolled_back
+	const restoredDraftCheck = await client.query("SELECT * FROM draft_research WHERE id = $1;", [FAIL_COMP_OLD_DRAFT_ID]);
+	const restoredRow = restoredDraftCheck.rows[0];
+
+	const orphanCheck = await client.query(
+		"SELECT * FROM draft_research WHERE brand_id = $1 AND state = 'rolled_back';",
+		[FAIL_COMP_BRAND_ID],
+	);
+
+	const compensationPassed =
+		compensationThrew &&
+		restoredRow?.state === "pending_review" &&
+		restoredRow?.research_status === "failed" &&
+		restoredRow?.error === "Original failure reason" &&
+		orphanCheck.rows.length === 0;
+
+	if (compensationPassed) {
+		log("✓ PASS: 原子替换异常回滚补偿机制通过（100% 还原旧草稿状态，0 孤儿 rolled_back 行）：");
+		log(`  - 旧草稿状态已安全还原: state=${restoredRow.state}, research_status=${restoredRow.research_status}`);
+		log(`  - 旧草稿原始错误信息完整保全: error="${restoredRow.error}"`);
+		log(`  - 孤儿 rolled_back 记录数: ${orphanCheck.rows.length}`);
+	} else {
+		log(`✗ FAIL: 异常回滚补偿未通过: restored=${JSON.stringify(restoredRow)}, orphans=${orphanCheck.rows.length}`);
+	}
+
+	// 清理测试数据
+	await client.query("DELETE FROM draft_research WHERE brand_id IN ($1, $2);", [CAS_BRAND_ID, FAIL_COMP_BRAND_ID]);
+	await client.query("DELETE FROM brands WHERE id IN ($1, $2);", [CAS_BRAND_ID, FAIL_COMP_BRAND_ID]);
+
+	if (casPassed && idempPassed && compensationPassed) {
+		passedTests++;
+	}
+
+	// -------------------------------------------------------------------------
 	// 收尾与清理
 	// -------------------------------------------------------------------------
 	log("\n--- 清理资源 ---");

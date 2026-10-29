@@ -288,18 +288,21 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 		expect(sendMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("⑨ [防连续点击 / 60s 在途防护] queued 草稿创建未满 60 秒 → 即使 retry=true 也跳过入队", async () => {
+	it("⑨ [U01 在途排队防护] 已是重试后继草稿且处于 queued 状态 → 跨 60 秒重复请求仍返回同一后继草稿", async () => {
 		findFirstBrandMock.mockResolvedValue({ id: "b1" });
 		findFirstDraftMock.mockResolvedValue({
-			id: "d_recent",
+			id: "d_successor",
 			researchStatus: "queued",
 			state: "pending_review",
-			createdAt: new Date(Date.now() - 5000), // 5 秒前刚刚排队
+			payload: {
+				metadata: { supersedesDraftId: "d_old" },
+			},
+			createdAt: new Date(Date.now() - 65000), // 65 秒前已排队
 		});
 
 		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
 
-		expect(result.draftId).toBe("d_recent");
+		expect(result.draftId).toBe("d_successor");
 		expect(result.alreadyExisted).toBe(true);
 		expect(result.jobSkipped).toBe(true);
 		expect(sendMock).not.toHaveBeenCalled();
@@ -324,6 +327,95 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 		expect(result.draftId).toBe("d_winner");
 		expect(result.alreadyExisted).toBe(true);
 		expect(result.jobSkipped).toBe(true);
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
+	it("⑪ [U02 并发重试竞争] CAS 未获胜的请求返回已建立的胜者后继任务而非作废的旧草稿", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old",
+			researchStatus: "queued",
+			state: "pending_review",
+		});
+		// CAS 更新匹配 0 行（胜者已更新）
+		updateReturningMock.mockResolvedValueOnce([]);
+		// 读到旧草稿已被更新为 rolled_back
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old",
+			researchStatus: "failed",
+			state: "rolled_back",
+		});
+		// 查询活跃后继草稿查得胜者创建的新任务
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_winner_successor",
+			researchStatus: "queued",
+			state: "pending_review",
+		});
+
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
+
+		expect(result.draftId).toBe("d_winner_successor");
+		expect(result.alreadyExisted).toBe(true);
+		expect(result.jobSkipped).toBe(true);
+		expect(sendMock).not.toHaveBeenCalled();
+		expect(insertValuesMock).not.toHaveBeenCalled();
+	});
+
+	it("⑫ [U03 迟到重试防护] 针对前序草稿的重复请求在后继失败后依然返回同一后继，不自动级联重试", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValueOnce(undefined); // active 为空
+		// latestHistory 为原旧失败草稿
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old_failed",
+			state: "failed",
+			researchStatus: "failed",
+			createdAt: new Date("2026-10-28T10:00:00Z"),
+		});
+		// 查得已存在的后继草稿（即使也已失败）
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_first_successor",
+			state: "failed",
+			researchStatus: "failed",
+			createdAt: new Date("2026-10-29T10:00:00Z"),
+			payload: {
+				metadata: { supersedesDraftId: "d_old_failed" },
+			},
+		});
+
+		// 未显式指定 targetDraftId 的重复请求（例如针对 d_old_failed 的重复/迟到重试）
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
+
+		expect(result.draftId).toBe("d_first_successor");
+		expect(result.alreadyExisted).toBe(true);
+		expect(result.jobSkipped).toBe(true);
+		expect(sendMock).not.toHaveBeenCalled();
+		expect(insertValuesMock).not.toHaveBeenCalled();
+	});
+
+	it("⑬ [U04 原子补偿回滚] 后继草稿插入失败时原子补偿回滚旧草稿状态，不残留作废状态", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old",
+			researchStatus: "queued",
+			state: "pending_review",
+			error: null,
+			updatedAt: new Date("2026-10-28T14:00:00Z"),
+		});
+		updateReturningMock.mockResolvedValueOnce([{ id: "d_old" }]);
+		insertValuesMock.mockRejectedValueOnce(new Error("Synthetic insert failure"));
+
+		await expect(triggerResearch({ brandId: "b1", website: "https://x.com", retry: true })).rejects.toThrow(
+			"Synthetic insert failure",
+		);
+
+		// 验证异常时已触发原子补偿更新回滚状态
+		expect(updateSetMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				state: "pending_review",
+				researchStatus: "queued",
+				error: null,
+			}),
+		);
 		expect(sendMock).not.toHaveBeenCalled();
 	});
 });

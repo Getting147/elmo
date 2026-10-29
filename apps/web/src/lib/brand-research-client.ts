@@ -92,10 +92,11 @@ export function triggerResearch(
 	brandId: string,
 	website: string,
 	retry?: boolean,
+	targetDraftId?: string,
 ): Promise<TriggerResearchResult> {
 	return request<TriggerResearchResult>(`/api/v1/brands/${brandId}/research/`, {
 		method: "POST",
-		body: JSON.stringify({ website, retry }),
+		body: JSON.stringify({ website, retry, targetDraftId }),
 	});
 }
 
