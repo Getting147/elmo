@@ -103,10 +103,17 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 		// validateEvidence 已经在 analyzeBrand 内调用（M1 集成）— 无需重复
 
 		// 3. UPDATE payload + research_status='done'（CAS：仅 running + pending_review 态转 done，防重试后作废结果落盘）
+		// 保留原草稿 payload 中的 metadata（如重试关联 supersedesDraftId、retryAuthorizedAt）
+		const currentDraft = await db.query.draftResearch.findFirst({
+			where: eq(draftResearch.id, draftId),
+		});
+		const existingMetadata = (currentDraft?.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+		const finalPayload = existingMetadata ? { ...suggestion, metadata: existingMetadata } : suggestion;
+
 		const updated = await db
 			.update(draftResearch)
 			.set({
-				payload: suggestion as never, // OnboardingSuggestion shape
+				payload: finalPayload as never, // OnboardingSuggestion shape with preserved metadata
 				researchStatus: "done",
 				updatedAt: new Date(),
 			})
