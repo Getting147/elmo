@@ -20,24 +20,19 @@
  * preference order if a deployment wants a specific provider/model.
  */
 import type { z } from "zod";
-import { getProvider, parseScrapeTargets, type Provider, type StructuredResearchResult } from "../providers";
+import { getProvider, type Provider, parseScrapeTargets, type StructuredResearchResult } from "../providers";
 
 /**
- * Direct-API providers in the order onboarding prefers them. GPT-5 Mini was
- * the cheapest + best-recall in compare-onboarding runs, so we go OpenAI
- * direct first, then OpenAI via OpenRouter as a fallback (same model, just
- * different key), then Anthropic, then Mistral.
- *
- * Exported so the compare-onboarding script reads from the same source as
- * production — keeps the two from drifting.
+ * Direct-API providers in the order onboarding prefers them.
+ * BUG-001 / B02: 内部业务统一使用官方已购 DeepSeek API，严禁回退旧供应商。
  */
-export const RESEARCH_PROVIDER_PREFERENCE = ["openai-api", "openrouter", "anthropic-api", "mistral-api"] as const;
+export const RESEARCH_PROVIDER_PREFERENCE = ["deepseek-api"] as const;
 
 export type ResearchProviderId = (typeof RESEARCH_PROVIDER_PREFERENCE)[number];
 
 const ONBOARDING_LLM_TARGET_HELP =
-	"Set ONBOARDING_LLM_TARGET (e.g. claude:anthropic-api) " +
-	"or configure ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY / MISTRAL_API_KEY.";
+	"Please configure DEEPSEEK_API_KEY or LLM_API_KEY (internal research unified to DeepSeek official API). " +
+	"Fallback to expired legacy providers is strictly disabled by policy.";
 
 /**
  * Pick which direct-API provider the onboarding flow should use.
@@ -57,6 +52,11 @@ export function resolveResearchProvider(env: Record<string, string | undefined> 
 	if (explicit) {
 		const [parsed] = parseScrapeTargets(explicit);
 		if (!parsed) throw new Error(`Invalid ONBOARDING_LLM_TARGET: "${explicit}"`);
+		if (parsed.provider !== "deepseek-api") {
+			throw new Error(
+				`Provider "${parsed.provider}" is disabled by policy. Internal research is unified exclusively to DeepSeek official API.`,
+			);
+		}
 		const provider = getProvider(parsed.provider);
 		if (!provider.isConfigured()) {
 			throw new Error(
@@ -91,7 +91,8 @@ export async function runStructuredResearchPrompt<T>(prompt: string, schema: z.Z
 	if (!provider.runStructuredResearch) {
 		throw new Error(`Provider "${provider.id}" does not implement structured research`);
 	}
-	const result = await provider.runStructuredResearch({ prompt, schema });
+	// 单次预算上限硬性生效：maxRetries 显式传 0，避免底层异常时静默重试产生额外开销
+	const result = await provider.runStructuredResearch({ prompt, schema, maxRetries: 0 });
 	return result.object;
 }
 
@@ -112,5 +113,5 @@ export async function runStructuredCompletionPrompt<T>(
 	if (!provider.runStructuredResearch) {
 		throw new Error(`Provider "${provider.id}" does not implement structured research`);
 	}
-	return provider.runStructuredResearch({ prompt, schema, webSearch: false });
+	return provider.runStructuredResearch({ prompt, schema, webSearch: false, maxRetries: 0 });
 }

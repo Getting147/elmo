@@ -3,6 +3,8 @@ import { resolveResearchProvider } from "./llm";
 
 const ENV_KEYS = [
 	"ONBOARDING_LLM_TARGET",
+	"DEEPSEEK_API_KEY",
+	"LLM_API_KEY",
 	"ANTHROPIC_API_KEY",
 	"OPENAI_API_KEY",
 	"OPENROUTER_API_KEY",
@@ -31,19 +33,37 @@ afterEach(() => {
 });
 
 describe("resolveResearchProvider", () => {
-	it("uses the explicit env override when set", () => {
-		process.env.ANTHROPIC_API_KEY = "x";
+	it("uses explicit DeepSeek override when set", () => {
+		process.env.DEEPSEEK_API_KEY = "sk-ds-key";
 		const provider = resolveResearchProvider({
-			ANTHROPIC_API_KEY: "x",
-			ONBOARDING_LLM_TARGET: "claude:anthropic-api",
+			DEEPSEEK_API_KEY: "sk-ds-key",
+			ONBOARDING_LLM_TARGET: "deepseek:deepseek-api",
 		});
-		expect(provider.id).toBe("anthropic-api");
+		expect(provider.id).toBe("deepseek-api");
 	});
 
-	it("throws when ONBOARDING_LLM_TARGET points at an unconfigured provider", () => {
+	it("strictly rejects legacy non-DeepSeek providers even if explicitly targeted", () => {
+		process.env.ANTHROPIC_API_KEY = "x";
 		expect(() =>
 			resolveResearchProvider({
+				ANTHROPIC_API_KEY: "x",
+				ONBOARDING_LLM_TARGET: "claude:anthropic-api",
+			}),
+		).toThrow(/disabled by policy/);
+
+		process.env.OPENAI_API_KEY = "x";
+		expect(() =>
+			resolveResearchProvider({
+				OPENAI_API_KEY: "x",
 				ONBOARDING_LLM_TARGET: "chatgpt:openai-api:gpt-5-mini",
+			}),
+		).toThrow(/disabled by policy/);
+	});
+
+	it("throws when explicit override points at an unconfigured deepseek provider", () => {
+		expect(() =>
+			resolveResearchProvider({
+				ONBOARDING_LLM_TARGET: "deepseek:deepseek-api",
 			}),
 		).toThrow(/isn't configured/);
 	});
@@ -55,40 +75,29 @@ describe("resolveResearchProvider", () => {
 				OLOSTEP_API_KEY: "x",
 				ONBOARDING_LLM_TARGET: "gemini:olostep:online",
 			}),
-		).toThrow(/does not support structured research/);
+		).toThrow(/disabled by policy/);
 	});
 
-	it("prefers OpenAI direct first when configured", () => {
-		// provider.isConfigured() reads from process.env, not the function's
-		// env arg — set both so ONBOARDING_LLM_TARGET lookup and the
-		// per-provider config probe see the same world.
-		process.env.OPENAI_API_KEY = "a";
-		process.env.OPENROUTER_API_KEY = "b";
-		process.env.ANTHROPIC_API_KEY = "c";
-		process.env.MISTRAL_API_KEY = "d";
+	it("prefers DeepSeek when DEEPSEEK_API_KEY is configured", () => {
+		process.env.DEEPSEEK_API_KEY = "sk-ds-key";
+		process.env.OPENAI_API_KEY = "old-expired-openai";
 		const provider = resolveResearchProvider();
-		expect(provider.id).toBe("openai-api");
+		expect(provider.id).toBe("deepseek-api");
 	});
 
-	it("falls back to OpenRouter when OpenAI direct isn't configured", () => {
-		process.env.OPENROUTER_API_KEY = "b";
-		process.env.ANTHROPIC_API_KEY = "c";
-		process.env.MISTRAL_API_KEY = "d";
+	it("prefers DeepSeek when LLM_API_KEY is configured", () => {
+		process.env.LLM_API_KEY = "sk-llm-key";
 		const provider = resolveResearchProvider();
-		expect(provider.id).toBe("openrouter");
+		expect(provider.id).toBe("deepseek-api");
 	});
 
-	it("falls back to Anthropic when OpenAI / OpenRouter aren't configured", () => {
-		process.env.ANTHROPIC_API_KEY = "c";
-		process.env.MISTRAL_API_KEY = "d";
-		const provider = resolveResearchProvider();
-		expect(provider.id).toBe("anthropic-api");
-	});
-
-	it("falls back to Mistral when only Mistral is set", () => {
-		process.env.MISTRAL_API_KEY = "x";
-		const provider = resolveResearchProvider();
-		expect(provider.id).toBe("mistral-api");
+	it("strictly rejects fallback to expired legacy providers (OpenAI/Anthropic/Mistral/OpenRouter)", () => {
+		// 即使环境中残留旧 Key，也不得自动回退
+		process.env.OPENAI_API_KEY = "old-key";
+		process.env.OPENROUTER_API_KEY = "old-key";
+		process.env.ANTHROPIC_API_KEY = "old-key";
+		process.env.MISTRAL_API_KEY = "old-key";
+		expect(() => resolveResearchProvider()).toThrow(/DeepSeek/);
 	});
 
 	it("ignores scraper providers entirely", () => {

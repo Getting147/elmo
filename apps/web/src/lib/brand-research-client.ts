@@ -88,10 +88,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 	return (await resp.json()) as T;
 }
 
-export function triggerResearch(brandId: string, website: string): Promise<TriggerResearchResult> {
+export function triggerResearch(
+	brandId: string,
+	website: string,
+	retry?: boolean,
+	targetDraftId?: string,
+): Promise<TriggerResearchResult> {
 	return request<TriggerResearchResult>(`/api/v1/brands/${brandId}/research/`, {
 		method: "POST",
-		body: JSON.stringify({ website }),
+		body: JSON.stringify({ website, retry, targetDraftId }),
 	});
 }
 

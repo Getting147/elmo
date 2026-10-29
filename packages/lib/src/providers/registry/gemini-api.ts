@@ -40,7 +40,7 @@ export const geminiApi: Provider = {
 			throw new Error(`Gemini API error (${response.status}): ${errText}`);
 		}
 
-		const data = await response.json();
+		const data = (await response.json()) as any;
 		const candidate = data.candidates?.[0];
 		const textContent = (candidate?.content?.parts ?? [])
 			.map((p: { text?: string }) => p.text ?? "")

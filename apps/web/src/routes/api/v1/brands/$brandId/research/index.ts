@@ -6,19 +6,28 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
 import { BrandNotFoundError } from "@/server/onboarding-core";
-import { DraftNotFoundError, listDraftsByBrand, triggerResearch } from "@/server/research";
+import { DraftNotFoundError, listDraftsByBrand, ResearchStartError, triggerResearch } from "@/server/research";
 
 const postBody = z.object({
 	website: z.string().url("website must be a valid URL"),
 	maxCompetitors: z.number().int().min(0).max(10).optional(),
 	maxPrompts: z.number().int().min(0).max(50).optional(),
 	maxProducts: z.number().int().min(0).max(20).optional(),
+	retry: z.boolean().optional(),
+	targetDraftId: z.string().optional(),
 });
 
 /** BrandNotFoundError → 404（POST 统一映射，避免裸 Error 落 500） */
 function brandNotFoundMapper(err: unknown): ApiError | undefined {
 	if (err instanceof BrandNotFoundError) {
 		return new ApiError(404, "Not Found", err.message);
+	}
+	if (err instanceof ResearchStartError) {
+		return new ApiError(
+			500,
+			"Research Start Failed",
+			"Research could not be started. Please retry. 调研未能启动，请重试。",
+		);
 	}
 	return undefined;
 }
@@ -39,6 +48,8 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 							maxCompetitors: body.maxCompetitors,
 							maxPrompts: body.maxPrompts,
 							maxProducts: body.maxProducts,
+							retry: body.retry,
+							targetDraftId: body.targetDraftId,
 						});
 						return result;
 					} catch (err) {

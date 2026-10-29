@@ -11,7 +11,7 @@
 import { db } from "@workspace/lib/db/db";
 import { draftResearch } from "@workspace/lib/db/schema";
 import { analyzeBrand, markFailed } from "@workspace/lib/onboarding";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import type { Job } from "pg-boss";
 
 export interface ProcessResearchJobData {
@@ -43,15 +43,47 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 	}
 	const { draftId, website, input } = job.data;
 
-	// 1. UPDATE research_status='running'（CAS：仅 queued 态转 running，防重入）
+	// 历史遗留任务隔离保护（任务书 3.1 & 验收门槛）：
+	// 任何早于执行方启动前生成的任务不得自动消费，不调用模型，保全历史草稿数据不被更改或删除。
+	// 处置方案与人工恢复由获准发布方按发布手册统一执行。
+	const workerStartTime = process.env.RESEARCH_WORKER_STARTED_AT
+		? new Date(process.env.RESEARCH_WORKER_STARTED_AT)
+		: new Date();
+
+	// 先做只读检查：若创建时间早于 worker 启动时间，直接跳过，零写操作，绝对不修改 updatedAt 或任何字段
+	const existingDraft = await db.query.draftResearch.findFirst({
+		where: eq(draftResearch.id, draftId),
+		columns: { id: true, createdAt: true, researchStatus: true },
+	});
+
+	if (!existingDraft) {
+		return;
+	}
+
+	const isPreStartup = existingDraft.createdAt && new Date(existingDraft.createdAt) < workerStartTime;
+	if (isPreStartup) {
+		console.warn(
+			`[process-research] 隔离执行方启动前的历史遗留任务 ${draftId} (创建于 ${existingDraft.createdAt} < 启动时间 ${workerStartTime.toISOString()})。按授权边界跳过执行，保持原样（零写入），不调用模型。`,
+		);
+		return;
+	}
+
+	// 1. UPDATE research_status='running'（CAS：仅 queued + pending_review 态转 running，防重入，且仅处理本批新任务）
 	const claimed = await db
 		.update(draftResearch)
 		.set({ researchStatus: "running", updatedAt: new Date() })
-		.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "queued")))
-		.returning({ id: draftResearch.id });
+		.where(
+			and(
+				eq(draftResearch.id, draftId),
+				eq(draftResearch.researchStatus, "queued"),
+				eq(draftResearch.state, "pending_review"),
+				gte(draftResearch.createdAt, workerStartTime),
+			),
+		)
+		.returning({ id: draftResearch.id, createdAt: draftResearch.createdAt });
 
 	if (claimed.length === 0) {
-		// 已被其他 worker 抢走（不重新入队）→ 静默退出
+		// 已被其他 worker 抢走或已被重试取消 → 静默退出
 		return;
 	}
 
@@ -65,30 +97,58 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 			maxPrompts: input?.maxPrompts ?? 30,
 			maxProducts: input?.maxProducts ?? 10,
 			crawledPageTexts,
+			requireLiveWebsite: true,
 		});
 
 		// validateEvidence 已经在 analyzeBrand 内调用（M1 集成）— 无需重复
 
-		// 3. UPDATE payload + research_status='done'（CAS：仅 running 态转 done，防重入）
-		await db
+		// 3. UPDATE payload + research_status='done'（CAS：仅 running + pending_review 态转 done，防重试后作废结果落盘）
+		// 保留原草稿 payload 中的 metadata（如重试关联 supersedesDraftId、retryAuthorizedAt）
+		const currentDraft = await db.query.draftResearch.findFirst({
+			where: eq(draftResearch.id, draftId),
+		});
+		const existingMetadata = (currentDraft?.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+		const finalPayload = existingMetadata ? { ...suggestion, metadata: existingMetadata } : suggestion;
+
+		const updated = await db
 			.update(draftResearch)
 			.set({
-				payload: suggestion as never, // OnboardingSuggestion shape
+				payload: finalPayload as never, // OnboardingSuggestion shape with preserved metadata
 				researchStatus: "done",
 				updatedAt: new Date(),
 			})
-			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
+			.where(
+				and(
+					eq(draftResearch.id, draftId),
+					eq(draftResearch.researchStatus, "running"),
+					eq(draftResearch.state, "pending_review"),
+				),
+			)
+			.returning({ id: draftResearch.id });
+
+		if (updated.length === 0) {
+			console.warn(
+				`[process-research] 任务 ${draftId} 状态已非 running/pending_review（已被用户重试取代或状态变更），丢弃旧执行结果，防止覆盖。`,
+			);
+			return;
+		}
 	} catch (err) {
-		// 4. 异常 → markFailed（state='failed' + research_status='failed' + error 字段）
+		// 4. 异常 → markFailed（CAS：仅当仍处于 running + pending_review 态时才写 failed）
 		const errorMsg = err instanceof Error ? err.message : String(err);
 		await db
 			.update(draftResearch)
 			.set({
 				researchStatus: "failed",
+				state: "failed",
+				error: errorMsg,
 				updatedAt: new Date(),
 			})
-			.where(and(eq(draftResearch.id, draftId), eq(draftResearch.researchStatus, "running")));
-		// 同步 state='failed' + error（用现成 helper）
-		await markFailed({ id: draftId, error: errorMsg });
+			.where(
+				and(
+					eq(draftResearch.id, draftId),
+					eq(draftResearch.researchStatus, "running"),
+					eq(draftResearch.state, "pending_review"),
+				),
+			);
 	}
 }

@@ -11,6 +11,7 @@
  * → hashUrlForDraft 幂等键 = cleanUrl 全串 hash；
  * → 同一 website URL 重跑命中同 hash；不同 path 视为不同研究。
  */
+import { createHash } from "node:crypto";
 import { cleanUrl } from "./utils";
 
 export { cleanUrl };
@@ -43,9 +44,6 @@ export function computeExpiresAt(ttlMs: number = DEFAULT_DRAFT_TTL_MS): Date {
 
 /** SHA-256 hex 前 16 字符 */
 function computeHash(input: string): string {
-	// Lazy import crypto（Node 22 内置）— 不污染 top-level import graph
-	// 测试可在无 Node env 时仅 import 函数本体（hashUrlForDraft 已测真实 cleanUrl 路径）
-	const { createHash } = require("node:crypto") as typeof import("node:crypto");
 	return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 

@@ -133,21 +133,30 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		let cancelled = false;
 		(async () => {
 			try {
-				const { drafts } = await fetchBrandDrafts(brandId);
+				const { drafts } = await fetchBrandDrafts(brandId, true);
 				const active = drafts.find(
 					(d) =>
 						d.researchStatus === "queued" ||
 						d.researchStatus === "running" ||
 						(d.researchStatus === "done" && d.state === "pending_review"),
 				);
-				if (cancelled || !active) return;
-				payloadRef.current = active.payload;
-				setDraftId(active.id);
-				if (active.researchStatus === "done") {
-					setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || ""));
-					setPhase("review");
-				} else {
-					setPhase("analyzing");
+				const latestFailed = drafts.find(
+					(d) => (d.researchStatus === "failed" || d.state === "failed") && d.state !== "rolled_back",
+				);
+				if (cancelled) return;
+				if (active) {
+					payloadRef.current = active.payload;
+					setDraftId(active.id);
+					if (active.researchStatus === "done") {
+						setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || ""));
+						setPhase("review");
+					} else {
+						setPhase("analyzing");
+					}
+				} else if (latestFailed) {
+					payloadRef.current = latestFailed.payload;
+					setDraftId(latestFailed.id);
+					setError(latestFailed.error || "Research failed");
 				}
 			} catch {
 				// drafts 不可达（未登录/无权限等）——保持 idle，用户仍可手动触发
@@ -197,17 +206,26 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	const handleAnalyze = useCallback(async () => {
 		if (!brand?.website || !brand?.id) return;
+		const isRetry = Boolean(error);
+		const oldDraftId = draftId;
 		setError(null);
 		setPhase("analyzing");
 		payloadRef.current = null;
+		if (oldDraftId) {
+			queryClient.removeQueries({ queryKey: ["research-draft", oldDraftId] });
+			if (isRetry) {
+				setDraftId(null);
+			}
+		}
 		try {
-			const res = await triggerResearch(brand.id, brand.website);
+			const res = await triggerResearch(brand.id, brand.website, isRetry, oldDraftId || undefined);
 			setDraftId(res.draftId);
+			await queryClient.refetchQueries({ queryKey: ["research-draft", res.draftId] });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Research request failed");
 			setPhase("idle");
 		}
-	}, [brand?.website, brand?.id]);
+	}, [brand?.website, brand?.id, error, draftId, queryClient]);
 
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({
@@ -307,7 +325,9 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				prompts: promptsPayload,
 				summary: data.summary.trim() || undefined,
 				description: data.description.trim() || undefined,
-				productLines: base?.productLines ? confirmedLines.map((entry) => ({ line: entry.line, evidence: 0 })) : undefined,
+				productLines: base?.productLines
+					? confirmedLines.map((entry) => ({ line: entry.line, evidence: 0 }))
+					: undefined,
 			});
 			// confirm 灌库（事务：brand → product lines → competitors → prompts）
 			await confirmDraft(draftId);
@@ -355,11 +375,17 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					>
 						{phase === "analyzing" ? (
 							<>
-								<Loader2 className="h-4 w-4 animate-spin" /> Analyzing brand…
+								<Loader2 className="h-4 w-4 animate-spin" />
+								{draftData?.researchStatus === "queued"
+									? "Queued for research (排队中)…"
+									: draftData?.researchStatus === "running"
+										? "Analyzing brand website (分析中)…"
+										: "Analyzing brand…"}
 							</>
 						) : (
 							<>
-								<Play className="h-4 w-4" /> Analyze brand
+								<Play className="h-4 w-4" />
+								{error ? "Retry research (重新调研)" : "Analyze brand"}
 							</>
 						)}
 					</Button>
