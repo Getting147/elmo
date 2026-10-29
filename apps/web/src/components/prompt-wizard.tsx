@@ -207,14 +207,18 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	const handleAnalyze = useCallback(async () => {
 		if (!brand?.website || !brand?.id) return;
 		const isRetry = Boolean(error);
+		const oldDraftId = draftId;
 		setError(null);
 		setPhase("analyzing");
 		payloadRef.current = null;
-		if (draftId) {
-			queryClient.removeQueries({ queryKey: ["research-draft", draftId] });
+		if (oldDraftId) {
+			queryClient.removeQueries({ queryKey: ["research-draft", oldDraftId] });
+			if (isRetry) {
+				setDraftId(null);
+			}
 		}
 		try {
-			const res = await triggerResearch(brand.id, brand.website, isRetry, draftId || undefined);
+			const res = await triggerResearch(brand.id, brand.website, isRetry, oldDraftId || undefined);
 			setDraftId(res.draftId);
 			await queryClient.refetchQueries({ queryKey: ["research-draft", res.draftId] });
 		} catch (err) {

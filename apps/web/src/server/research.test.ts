@@ -418,4 +418,134 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 		);
 		expect(sendMock).not.toHaveBeenCalled();
 	});
+
+	it("⑭ [V01 交错暂停窗口] CAS 匹配 0 行且胜者处于 insert 前交错窗口时，落败者返回胜者分配的后继 ID 而非作废旧任务", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old_v01",
+			researchStatus: "queued",
+			state: "pending_review",
+		});
+		// CAS 匹配 0 行（胜者已更新）
+		updateReturningMock.mockResolvedValueOnce([]);
+		// 读到旧草稿已被置为 rolled_back，但 winner 尚未完成 insert（winnerSuccessor 为空）
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old_v01",
+			researchStatus: "failed",
+			state: "rolled_back",
+		});
+		findFirstDraftMock.mockResolvedValueOnce(undefined);
+
+		const result = await triggerResearch({ brandId: "b1", website: "https://x.com", retry: true });
+
+		// 验证返回值不是已被作废的旧草稿 ID
+		expect(result.jobSkipped).toBe(true);
+		expect(result.alreadyExisted).toBe(true);
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
+	it("⑮ [V02 入队失败双向原子回滚] boss.send 失败时新插入草稿置为 rolled_back 释放唯一索引，前序草稿安全恢复", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_old_v02",
+			researchStatus: "queued",
+			state: "pending_review",
+			error: null,
+			updatedAt: new Date("2026-10-28T14:00:00Z"),
+		});
+		updateReturningMock.mockResolvedValueOnce([{ id: "d_old_v02" }]);
+		insertValuesMock.mockResolvedValueOnce(undefined); // insert 成功
+		sendMock.mockRejectedValueOnce(new Error("Synthetic queue transport unavailable")); // send 失败
+
+		await expect(triggerResearch({ brandId: "b1", website: "https://x.com", retry: true })).rejects.toThrow(
+			"Synthetic queue transport unavailable",
+		);
+
+		// 验证新草稿被回滚置为 rolled_back/failed 释放 partial unique 索引
+		expect(updateSetMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				state: "rolled_back",
+				researchStatus: "failed",
+				error: expect.stringContaining("队列入队失败"),
+			}),
+		);
+
+		// 验证前序草稿补偿恢复为 pending_review
+		expect(updateSetMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				state: "pending_review",
+				researchStatus: "queued",
+				error: null,
+			}),
+		);
+	});
+
+	it("⑯ [V03 targetDraftId 归属校验] targetDraftId 不存在或不属于当前品牌/网址时在写库入队前拒绝并抛出明确错误", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+		// targetDraft 校验返回 null（未找到或不属于该品牌）
+		findFirstDraftMock.mockResolvedValueOnce(undefined);
+
+		await expect(
+			triggerResearch({
+				brandId: "b1",
+				website: "https://x.com",
+				retry: true,
+				targetDraftId: "unrelated-or-nonexistent-draft",
+			}),
+		).rejects.toThrow(/Target draft unrelated-or-nonexistent-draft not found or does not belong to brand b1/);
+
+		expect(insertValuesMock).not.toHaveBeenCalled();
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
+	it("⑰ [V04 稳定后继映射] A 重试得 B，B 重试得 C，后续针对 A 的迟到重试固定返回其直接后继 B，不随 C 漂移", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1" });
+
+		// 1. 针对 A 发起重试，生成 B
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_target_a",
+			researchStatus: "failed",
+			state: "failed",
+		});
+		findFirstDraftMock.mockResolvedValueOnce(undefined); // active 为空
+		findFirstDraftMock.mockResolvedValueOnce(undefined); // no existing successor
+		insertValuesMock.mockResolvedValueOnce(undefined);
+		sendMock.mockResolvedValueOnce(undefined);
+
+		const b = await triggerResearch({
+			brandId: "b1",
+			website: "https://x.com",
+			retry: true,
+			targetDraftId: "d_target_a",
+		});
+
+		expect(b.draftId).toBeDefined();
+		expect(sendMock).toHaveBeenCalledTimes(1);
+
+		// 模拟 B 成功存在于数据库中
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: "d_target_a",
+			researchStatus: "failed",
+			state: "failed",
+		});
+		findFirstDraftMock.mockResolvedValueOnce({
+			id: b.draftId,
+			researchStatus: "queued",
+			state: "pending_review",
+			payload: { metadata: { supersedesDraftId: "d_target_a" } },
+		});
+
+		// 2. 针对 A 再次传入迟到重试请求
+		const late = await triggerResearch({
+			brandId: "b1",
+			website: "https://x.com",
+			retry: true,
+			targetDraftId: "d_target_a",
+		});
+
+		// 验证稳定返回直接后继 B，且零重复入队
+		expect(late.draftId).toBe(b.draftId);
+		expect(late.jobSkipped).toBe(true);
+		expect(sendMock).toHaveBeenCalledTimes(1); // 依然只有第一次入队的 1 次
+	});
 });

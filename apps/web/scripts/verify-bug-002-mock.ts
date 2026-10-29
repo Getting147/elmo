@@ -521,6 +521,37 @@ async function main() {
 		log("✗ FAIL: 稳定身份防重未通过");
 	}
 
+	// 3b. [V03 & V04 定向核验]
+	log("[V03 & V04 Check] 验证 targetDraftId 归属校验与直接稳定映射...");
+	let v03Rejected = false;
+	try {
+		await triggerResearch({
+			brandId: CAS_BRAND_ID,
+			website: CAS_WEBSITE,
+			retry: true,
+			targetDraftId: "unrelated-nonexistent-draft-id",
+		});
+	} catch (err: any) {
+		v03Rejected = err.message.includes("not found or does not belong");
+	}
+
+	// 校验 V04: 针对 A (CAS_OLD_DRAFT_ID) 的迟到重试固定返回其直接后继 winnerDraftId
+	const v04LateReq = await triggerResearch({
+		brandId: CAS_BRAND_ID,
+		website: CAS_WEBSITE,
+		retry: true,
+		targetDraftId: CAS_OLD_DRAFT_ID,
+	});
+	const v04Passed = v04LateReq.draftId === winnerDraftId && v04LateReq.jobSkipped === true;
+
+	if (v03Rejected && v04Passed) {
+		log("✓ PASS: V03 目标归属校验拦截 & V04 直接后继稳定映射通过：");
+		log("  - 不存在/异品牌 targetDraftId 在写库入队前被严格拒绝");
+		log(`  - 针对 A 的迟到重试固定返回其直接后继 B (${winnerDraftId})，不发生漂移`);
+	} else {
+		log(`✗ FAIL: V03/V04 核验未通过: v03Rejected=${v03Rejected}, v04Passed=${v04Passed}`);
+	}
+
 	// 4. 验证原子替换与事务回滚补偿机制 (补偿恢复，绝无孤儿 rolled_back 状态)
 	log("[Compensating Rollback] 验证继承草稿创建异常时的原子回滚补偿保护...");
 	const FAIL_COMP_BRAND_ID = "brand_b02_fail_comp";
@@ -598,7 +629,7 @@ async function main() {
 	await client.query("DELETE FROM draft_research WHERE brand_id IN ($1, $2);", [CAS_BRAND_ID, FAIL_COMP_BRAND_ID]);
 	await client.query("DELETE FROM brands WHERE id IN ($1, $2);", [CAS_BRAND_ID, FAIL_COMP_BRAND_ID]);
 
-	if (casPassed && idempPassed && compensationPassed) {
+	if (casPassed && idempPassed && v03Rejected && v04Passed && compensationPassed) {
 		passedTests++;
 	}
 
