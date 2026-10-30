@@ -54,22 +54,31 @@ export interface UnverifiedProductLine {
 	reason: string;
 }
 
-/** Human-readable labels for the evidence failure codes emitted by the analyzer. */
-export const EVIDENCE_REASON_LABELS: Record<string, string> = {
+export const EVIDENCE_REASON_LABELS_ZH: Record<string, string> = {
 	URL_NOT_IN_CRAWL: "引用页面不在抓取范围内，无法核对",
 	NAME_NOT_FOUND: "产品名称未能在引用页面中找到",
 	MISSING_URL: "缺少证据链接，无法核对",
 	NO_SKU_DETAIL: "仅泛称或分类，未包含具体型号与证据",
 };
 
+export const EVIDENCE_REASON_LABELS_EN: Record<string, string> = {
+	URL_NOT_IN_CRAWL: "Cited page not in crawl scope",
+	NAME_NOT_FOUND: "Product name not found on cited page",
+	MISSING_URL: "Missing evidence URL",
+	NO_SKU_DETAIL: "Generic category only, no specific model or evidence",
+};
+
+export const EVIDENCE_REASON_LABELS = EVIDENCE_REASON_LABELS_ZH;
+
 /**
  * Reasons arrive as `"<sku>: <CODE>"` entries joined with "; " — map each
  * embedded code to its human label and keep the rest of the text as-is.
  */
-export function formatEvidenceReason(reason: string): string {
+export function formatEvidenceReason(reason: string, lang: "zh" | "en" = "zh"): string {
+	const labels = lang === "en" ? EVIDENCE_REASON_LABELS_EN : EVIDENCE_REASON_LABELS_ZH;
 	return reason.replace(
 		/\b(URL_NOT_IN_CRAWL|NAME_NOT_FOUND|MISSING_URL|NO_SKU_DETAIL)\b/g,
-		(code) => EVIDENCE_REASON_LABELS[code] ?? code,
+		(code) => labels[code] ?? code,
 	);
 }
 
@@ -102,7 +111,7 @@ export function ProductLinesEditor({
 	onIgnoreUnverified,
 	disabled,
 }: ProductLinesEditorProps) {
-	const { t } = useLanguage();
+	const { language, t } = useLanguage();
 
 	const updateLine = (index: number, patch: Partial<EditableProductLine>) => {
 		onChange(lines.map((l, i) => (i === index ? { ...l, ...patch } : l)));
@@ -189,7 +198,7 @@ export function ProductLinesEditor({
 												onClick={() => removeSku(lineIndex, skuIndex)}
 												disabled={disabled}
 												className="cursor-pointer"
-												title={t.removeProductLine}
+												title={t.removeSku}
 											>
 												<Trash2 className="h-4 w-4" />
 											</Button>
@@ -239,7 +248,7 @@ export function ProductLinesEditor({
 								<p className="text-xs text-muted-foreground">{u.skuNames.join(" · ")}</p>
 								<p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
 									<AlertCircle className="h-3 w-3 flex-shrink-0" />
-									{formatEvidenceReason(u.reason)}
+									{formatEvidenceReason(u.reason, language)}
 								</p>
 							</div>
 							{onIgnoreUnverified && (

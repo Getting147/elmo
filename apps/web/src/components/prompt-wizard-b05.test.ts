@@ -85,6 +85,18 @@ describe("B05 中文调研与分类体验前端逻辑测试", () => {
 			// 清除分类
 			const tags3 = setPromptCategory(["unbranded", "dim:旧分类", "cat:历史旧分类"], "");
 			expect(tags3).toEqual(["unbranded"]);
+
+			// 输入自带 dim: 或 cat: 前缀时，剥离冗余前缀，防止生成 dim:dim: 脏数据
+			const tags4 = setPromptCategory(["unbranded"], "dim:集成房屋");
+			expect(tags4).toEqual(["unbranded", "dim:集成房屋"]);
+
+			const tags5 = setPromptCategory(["unbranded"], "cat: 钢结构 ");
+			expect(tags5).toEqual(["unbranded", "dim:钢结构"]);
+		});
+
+		it("getPromptCategory 正确兼容剥离多重或历史前缀与首尾空格", () => {
+			expect(getPromptCategory(["dim:dim:轻钢房屋"])).toBe("轻钢房屋");
+			expect(getPromptCategory(["cat:  模块化建筑  "])).toBe("模块化建筑");
 		});
 	});
 });

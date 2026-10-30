@@ -49,14 +49,14 @@ export function newPromptEntry(partial?: Partial<EditablePrompt>): EditablePromp
 export function getPromptCategory(tags: string[]): string {
 	const match = tags.find((t) => t.startsWith("dim:") || t.startsWith("cat:"));
 	if (!match) return "";
-	return match.slice(match.indexOf(":") + 1);
+	return match.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim();
 }
 
 export function setPromptCategory(tags: string[], category: string): string[] {
 	const cleanTags = tags.filter((t) => !t.startsWith("dim:") && !t.startsWith("cat:"));
-	const trimmed = category.trim();
-	if (trimmed) {
-		cleanTags.push(`dim:${trimmed}`);
+	const stripped = category.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim();
+	if (stripped) {
+		cleanTags.push(`dim:${stripped}`);
 	}
 	return cleanTags;
 }
@@ -140,7 +140,19 @@ export function PromptsListEditor({
 		() => parseBulkPrompts(bulkText, { existing: filledValues, limit: MAX_PROMPTS }),
 		[bulkText, filledValues],
 	);
-	const bulkNotice = bulkText.trim().length > 0 ? describeSkipped(bulkPreview.skipped) : null;
+	const bulkNotice = useMemo(() => {
+		if (bulkText.trim().length === 0) return null;
+		const duplicates = bulkPreview.skipped.duplicateOfExisting.length + bulkPreview.skipped.duplicateInPaste.length;
+		const blanks = bulkPreview.skipped.blank;
+		if (duplicates === 0 && blanks === 0) return null;
+		if (language === "zh") {
+			const parts: string[] = [];
+			if (duplicates > 0) parts.push(`${duplicates} 条重复`);
+			if (blanks > 0) parts.push(`${blanks} 行空白`);
+			return `已跳过 ${parts.join("与")}。`;
+		}
+		return describeSkipped(bulkPreview.skipped);
+	}, [bulkText, bulkPreview.skipped, language]);
 
 	// Over capacity blocks the whole paste rather than quietly taking the lines
 	// that fit, so nobody submits a list believing all of it landed.

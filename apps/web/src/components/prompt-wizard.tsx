@@ -161,7 +161,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				} else if (latestFailed) {
 					payloadRef.current = latestFailed.payload;
 					setDraftId(latestFailed.id);
-					setError(latestFailed.error || "Research failed");
+					setError(latestFailed.error || (language === "zh" ? "品牌调研失败" : "Research failed"));
 				}
 			} catch {
 				// drafts 不可达（未登录/无权限等）——保持 idle，用户仍可手动触发
@@ -357,7 +357,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			onComplete();
 		} catch (err) {
-			setSubmitError(err instanceof Error ? err.message : "Failed to save");
+			setSubmitError(err instanceof Error ? err.message : (language === "zh" ? "保存失败" : "Failed to save"));
 		} finally {
 			setIsSaving(false);
 		}

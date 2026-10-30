@@ -317,6 +317,16 @@ describe("analyzeBrand", () => {
 					category: null,
 					tags: ["政策解读"],
 				},
+				{
+					prompt: "太空舱民宿设计规范",
+					category: "dim:太空舱",
+					tags: ["设计"],
+				},
+				{
+					prompt: "集装箱活动房二手交易平台",
+					category: "!!!",
+					tags: ["二手交易"],
+				},
 			],
 		});
 
@@ -335,7 +345,7 @@ describe("analyzeBrand", () => {
 		expect(result.competitors[0].aliases).toEqual(["中建集成"]);
 
 		// 提示词：通用品类名称（轻钢房屋）不导致“轻钢别墅造价多少钱一平米”被误杀
-		expect(result.suggestedPrompts).toHaveLength(3);
+		expect(result.suggestedPrompts).toHaveLength(5);
 		expect(result.suggestedPrompts[0].prompt).toBe("轻钢别墅造价多少钱一平米");
 		// 校验 category 转换并前置为 dim:轻钢房屋
 		expect(result.suggestedPrompts[0].tags).toEqual(["dim:轻钢房屋", "造价预算", "选型指南"]);
@@ -345,5 +355,11 @@ describe("analyzeBrand", () => {
 
 		// category 为 null 的保持普通标签，不硬塞默认分类
 		expect(result.suggestedPrompts[2].tags).toEqual(["政策解读"]);
+
+		// category 自身自带 dim: 前缀时，剥离冗余前缀后正确保持 dim:太空舱
+		expect(result.suggestedPrompts[3].tags).toEqual(["dim:太空舱", "设计"]);
+
+		// category 规整为空符号（如 !!!）时不产生无意义的 dim: 标签
+		expect(result.suggestedPrompts[4].tags).toEqual(["二手交易"]);
 	});
 });

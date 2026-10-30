@@ -293,7 +293,7 @@ function DashboardPage() {
 
 	if (!brand?.onboarded) {
 		return (
-			<div className="space-y-6 max-w-2xl p-4">
+			<div className="space-y-6 max-w-2xl p-4" data-no-i18n>
 				<div className="space-y-2">
 					<h2 className="text-2xl font-bold">{t.researchTitle}</h2>
 					<p className="text-muted-foreground text-balance">

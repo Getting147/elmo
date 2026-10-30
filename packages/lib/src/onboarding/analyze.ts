@@ -570,12 +570,9 @@ function normalize(args: {
 			if (allNeedles.some((n) => value.includes(n))) continue; // contaminated → drop
 			seen.add(value);
 			let tags = uniqueLowercase((p.tags ?? []).map(normalizeTag).filter(Boolean)).slice(0, 3);
-			const rawCat = typeof p.category === "string" ? p.category.trim() : "";
-			const catDim = rawCat
-				? rawCat.startsWith("dim:") || rawCat.startsWith("cat:")
-					? normalizeTag(rawCat)
-					: `dim:${normalizeTag(rawCat)}`
-				: null;
+			const cleanCat = typeof p.category === "string" ? p.category.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim() : "";
+			const normCat = cleanCat ? normalizeTag(cleanCat) : "";
+			const catDim = normCat ? `dim:${normCat}` : null;
 			if (catDim && !tags.some((t) => t.startsWith("dim:") || t.startsWith("cat:"))) {
 				tags = [catDim, ...tags];
 			}
