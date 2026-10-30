@@ -38,7 +38,7 @@ export function NavMain({ groups }: { groups: NavGroup[] }) {
 		if (href === `/app/${brandId}` || href === `/app/${brandId}/`) {
 			return pathname === `/app/${brandId}` || pathname === `/app/${brandId}/`;
 		}
-		return pathname.startsWith(href);
+		return absolute ? pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`)) : pathname.startsWith(href);
 	};
 
 	return (
