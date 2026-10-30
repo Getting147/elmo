@@ -153,7 +153,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					payloadRef.current = active.payload;
 					setDraftId(active.id);
 					if (active.researchStatus === "done") {
-						setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || ""));
+						setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || "", { isDraftRestore: true }));
 						setPhase("review");
 					} else {
 						setPhase("analyzing");
@@ -551,10 +551,14 @@ export function suggestionToWizardData(
 	suggestion: ResearchDraftPayload,
 	brandNameFallback: string,
 	websiteFallback: string,
+	options?: { isDraftRestore?: boolean },
 ): WizardData {
 	const productLines = suggestion.productLines?.confirmed ?? [];
+	const brandName = options?.isDraftRestore
+		? (suggestion.brandName || brandNameFallback || "")
+		: (brandNameFallback || suggestion.brandName || "");
 	return {
-		brandName: brandNameFallback || suggestion.brandName || "",
+		brandName,
 		website: websiteFallback || suggestion.website || "",
 		additionalDomains: suggestion.additionalDomains || [],
 		aliases: suggestion.aliases || [],

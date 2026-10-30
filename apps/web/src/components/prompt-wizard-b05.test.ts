@@ -63,6 +63,46 @@ describe("B05 中文调研与分类体验前端逻辑测试", () => {
 			const wizardData = suggestionToWizardData(suggestion, "", "https://zspace.cn");
 			expect(wizardData.brandName).toBe("极空间");
 		});
+
+		it("草稿恢复模式 (isDraftRestore: true) 优先采用已保存的用户改名，不被初始 brand.name 覆盖 (B05-F02)", () => {
+			const savedDraftPayload: ResearchDraftPayload = {
+				brandName: "Operator Chosen Modular Name",
+				website: "https://modularsteel.com",
+				aliases: [],
+				additionalDomains: [],
+				competitors: [],
+				suggestedPrompts: [],
+			};
+
+			const wizardData = suggestionToWizardData(
+				savedDraftPayload,
+				"Independent Modular Steel",
+				"https://modularsteel.com",
+				{ isDraftRestore: true },
+			);
+
+			expect(wizardData.brandName).toBe("Operator Chosen Modular Name");
+		});
+
+		it("草稿恢复模式下若 savedDraftPayload.brandName 为空，安全回退至 brandNameFallback", () => {
+			const savedDraftPayload: ResearchDraftPayload = {
+				brandName: "",
+				website: "https://modularsteel.com",
+				aliases: [],
+				additionalDomains: [],
+				competitors: [],
+				suggestedPrompts: [],
+			};
+
+			const wizardData = suggestionToWizardData(
+				savedDraftPayload,
+				"Independent Modular Steel",
+				"https://modularsteel.com",
+				{ isDraftRestore: true },
+			);
+
+			expect(wizardData.brandName).toBe("Independent Modular Steel");
+		});
 	});
 
 	describe("业务分类标签管理 (getPromptCategory / setPromptCategory)", () => {
