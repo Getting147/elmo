@@ -139,21 +139,18 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 	} catch (err) {
 		// 4. 异常 → markFailed（CAS：仅当仍处于 running + pending_review 态时才写 failed）
 		const errorMsg = err instanceof Error ? err.message : String(err);
-		await db
-			.update(draftResearch)
-			.set({
-				researchStatus: "failed",
-				state: "failed",
-				error: errorMsg,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(
-					eq(draftResearch.id, draftId),
-					eq(draftResearch.researchStatus, "running"),
-					eq(draftResearch.state, "pending_review"),
-				),
+		const { updated } = (await markFailed({
+			id: draftId,
+			error: errorMsg,
+			expectedState: "pending_review",
+			expectedResearchStatus: "running",
+		})) ?? { updated: true };
+
+		if (!updated) {
+			console.warn(
+				`[process-research] 任务 ${draftId} 状态已非 running/pending_review（已被用户回滚或状态变更），丢弃失败写回，防止覆盖合法状态。`,
 			);
-		await markFailed({ id: draftId, error: errorMsg });
+			return;
+		}
 	}
 }

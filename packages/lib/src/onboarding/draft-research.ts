@@ -108,12 +108,44 @@ export async function createDraft(args: {
 	}
 }
 
+export interface MarkFailedArgs {
+	id: string;
+	error: string;
+	expectedState?: string;
+	expectedResearchStatus?: string;
+}
+
 /**
  * 标记草稿为 failed（LLM/抓取失败时调用）
+ * 支持 CAS 条件约束（如仅允许从 running + pending_review 态转移至 failed，防止并发回滚或取消后覆盖终态）。
  */
-export async function markFailed(args: { id: string; error: string }): Promise<void> {
-	const { id, error } = args;
-	await db.update(draftResearch).set({ state: "failed", error, updatedAt: new Date() }).where(eq(draftResearch.id, id));
+export async function markFailed(args: MarkFailedArgs): Promise<{ updated: boolean }> {
+	const { id, error, expectedState, expectedResearchStatus } = args;
+	const conditions = [eq(draftResearch.id, id)];
+
+	if (expectedState) {
+		conditions.push(eq(draftResearch.state, expectedState as any));
+	} else {
+		// 默认终态保护：防止无条件覆盖已回滚/已完成/已应用的终态草稿
+		conditions.push(sql`${draftResearch.state} NOT IN ('rolled_back', 'done', 'applied')`);
+	}
+
+	if (expectedResearchStatus) {
+		conditions.push(eq(draftResearch.researchStatus, expectedResearchStatus as any));
+	}
+
+	const result = await db
+		.update(draftResearch)
+		.set({
+			state: "failed",
+			researchStatus: "failed",
+			error,
+			updatedAt: new Date(),
+		})
+		.where(and(...conditions))
+		.returning({ id: draftResearch.id });
+
+	return { updated: result.length > 0 };
 }
 
 /**

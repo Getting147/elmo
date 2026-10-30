@@ -13,6 +13,7 @@ export {
 	getDraftById,
 	hashUrlForDraft,
 	listDraftsByBrand,
+	type MarkFailedArgs,
 	markFailed,
 	markRolledBack,
 } from "./draft-research";

@@ -9,7 +9,8 @@
  * → 同 website URL 重跑命中同 hash（partial unique 命中 → 直返）
  * → 不同 path = 不同 hash（新研究）
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
 	DEFAULT_DRAFT_TTL_MS,
 	hashUrlForDraft,
@@ -17,6 +18,69 @@ import {
 	cleanUrl,
 	pgErrorCode,
 } from "./draft-research-utils";
+
+const { mockDbRows } = vi.hoisted(() => {
+	const mockDbRows = new Map<
+		string,
+		{
+			id: string;
+			state: string;
+			researchStatus: string;
+			error: string | null;
+			updatedAt: Date;
+		}
+	>();
+	return { mockDbRows };
+});
+
+const dialect = new PgDialect();
+
+vi.mock("@workspace/lib/db/db", () => ({
+	db: {
+		update: () => ({
+			set: (setData: Record<string, unknown>) => ({
+				where: (cond: any) => ({
+					returning: () => {
+						const query = dialect.sqlToQuery(cond);
+						const id = query.params[0] as string;
+						const row = mockDbRows.get(id);
+						if (!row) return Promise.resolve([]);
+
+						// 默认终态保护检查
+						if (query.sql.includes("NOT IN ('rolled_back', 'done', 'applied')")) {
+							if (["rolled_back", "done", "applied"].includes(row.state)) {
+								return Promise.resolve([]);
+							}
+						}
+
+						// CAS expectedState 检查
+						const stateMatch = query.sql.match(/"draft_research"\."state" = \$(\d+)/);
+						if (stateMatch) {
+							const paramIdx = parseInt(stateMatch[1], 10) - 1;
+							if (row.state !== query.params[paramIdx]) {
+								return Promise.resolve([]);
+							}
+						}
+
+						// CAS expectedResearchStatus 检查
+						const statusMatch = query.sql.match(/"draft_research"\."research_status" = \$(\d+)/);
+						if (statusMatch) {
+							const paramIdx = parseInt(statusMatch[1], 10) - 1;
+							if (row.researchStatus !== query.params[paramIdx]) {
+								return Promise.resolve([]);
+							}
+						}
+
+						Object.assign(row, setData);
+						return Promise.resolve([{ id: row.id }]);
+					},
+				}),
+			}),
+		}),
+	},
+}));
+
+import { markFailed } from "./draft-research";
 
 describe("I3-6 hashUrlForDraft — 真实实现（SHA-256(cleanUrl) 前 16 hex）", () => {
 	it("16 hex chars", () => {
@@ -180,5 +244,116 @@ describe("PG-23505 判定（生产回归：DrizzleQueryError 包装形态，2026
 		expect(pgErrorCode(new Error("network"))).toBeUndefined();
 		expect(pgErrorCode(null)).toBeUndefined();
 		expect(pgErrorCode(undefined)).toBeUndefined();
+	});
+});
+
+describe("B05-F01 markFailed CAS 状态保护与终态防护", () => {
+	const originalDate = new Date(Date.now() - 60000);
+
+	beforeEach(() => {
+		mockDbRows.clear();
+	});
+
+	it("① markFailed 针对 rolled_back 终态草稿（缺省 expectedState）：命中默认终态防护，返回 updated: false 且保全字段", async () => {
+		mockDbRows.set("draft_rb", {
+			id: "draft_rb",
+			state: "rolled_back",
+			researchStatus: "running",
+			error: null,
+			updatedAt: originalDate,
+		});
+
+		const result = await markFailed({
+			id: "draft_rb",
+			error: "LLM timeout",
+		});
+
+		expect(result).toEqual({ updated: false });
+		const row = mockDbRows.get("draft_rb")!;
+		expect(row.state).toBe("rolled_back");
+		expect(row.researchStatus).toBe("running");
+		expect(row.error).toBeNull();
+		expect(row.updatedAt).toEqual(originalDate);
+	});
+
+	it("② markFailed 针对 rolled_back 终态草稿（显式指定 CAS 条件）：CAS 条件不满足，返回 updated: false 且保全字段", async () => {
+		mockDbRows.set("draft_rb_cas", {
+			id: "draft_rb_cas",
+			state: "rolled_back",
+			researchStatus: "running",
+			error: null,
+			updatedAt: originalDate,
+		});
+
+		const result = await markFailed({
+			id: "draft_rb_cas",
+			error: "LLM timeout",
+			expectedState: "pending_review",
+			expectedResearchStatus: "running",
+		});
+
+		expect(result).toEqual({ updated: false });
+		const row = mockDbRows.get("draft_rb_cas")!;
+		expect(row.state).toBe("rolled_back");
+		expect(row.error).toBeNull();
+		expect(row.updatedAt).toEqual(originalDate);
+	});
+
+	it("③ markFailed 正常失败路径：活跃 running + pending_review 满足 CAS，写回 failed 并返回 updated: true", async () => {
+		mockDbRows.set("draft_active", {
+			id: "draft_active",
+			state: "pending_review",
+			researchStatus: "running",
+			error: null,
+			updatedAt: originalDate,
+		});
+
+		const result = await markFailed({
+			id: "draft_active",
+			error: "Website unreachable",
+			expectedState: "pending_review",
+			expectedResearchStatus: "running",
+		});
+
+		expect(result).toEqual({ updated: true });
+		const row = mockDbRows.get("draft_active")!;
+		expect(row.state).toBe("failed");
+		expect(row.researchStatus).toBe("failed");
+		expect(row.error).toBe("Website unreachable");
+		expect(row.updatedAt.getTime()).toBeGreaterThan(originalDate.getTime());
+	});
+
+	it("④ markFailed 针对 done 和 applied 终态草稿：默认终态保护生效，拒绝覆盖终态", async () => {
+		mockDbRows.set("draft_done", {
+			id: "draft_done",
+			state: "done",
+			researchStatus: "done",
+			error: null,
+			updatedAt: originalDate,
+		});
+		mockDbRows.set("draft_applied", {
+			id: "draft_applied",
+			state: "applied",
+			researchStatus: "done",
+			error: null,
+			updatedAt: originalDate,
+		});
+
+		const resDone = await markFailed({ id: "draft_done", error: "late error" });
+		const resApplied = await markFailed({ id: "draft_applied", error: "late error" });
+
+		expect(resDone).toEqual({ updated: false });
+		expect(resApplied).toEqual({ updated: false });
+		expect(mockDbRows.get("draft_done")!.state).toBe("done");
+		expect(mockDbRows.get("draft_applied")!.state).toBe("applied");
+	});
+
+	it("⑤ markFailed 针对不存在草稿：返回 updated: false", async () => {
+		const result = await markFailed({
+			id: "non_existent_draft",
+			error: "some error",
+		});
+
+		expect(result).toEqual({ updated: false });
 	});
 });
