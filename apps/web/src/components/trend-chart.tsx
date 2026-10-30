@@ -15,8 +15,13 @@ export interface TrendPoint {
 
 /** Build a local Date from a "YYYY-MM-DD" string (avoids the UTC off-by-one of `new Date(iso)`). */
 function localDate(value: string): Date {
-	const [year, month, day] = value.split("-").map(Number);
-	return new Date(year, month - 1, day);
+	if (!value || typeof value !== "string") return new Date();
+	const parts = value.split("-").map(Number);
+	if (parts.length === 3 && !parts.some(isNaN)) {
+		return new Date(parts[0], parts[1] - 1, parts[2]);
+	}
+	const d = new Date(value);
+	return isNaN(d.getTime()) ? new Date() : d;
 }
 
 export function TrendChart({
@@ -87,6 +92,7 @@ export function TrendChart({
 					strokeWidth={2}
 					fill={color}
 					fillOpacity={0.18}
+					dot={data.length === 1 ? { r: 4, fill: color, stroke: color } : false}
 					connectNulls
 				/>
 			</AreaChart>

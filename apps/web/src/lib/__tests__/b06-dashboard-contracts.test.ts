@@ -109,4 +109,92 @@ describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 			expect(visibilityPct).not.toBe((sov.brandShare! * 100).toFixed(1));
 		});
 	});
+
+	describe("4. Probe Isolation Contract", () => {
+		it("excludes probe questions from formal questions list and denominator", () => {
+			const mixedQuestions = [
+				{ question_id: "q1", question_text: "Formal question 1", is_probe: false, brand_mentioned: true },
+				{ question_id: "q2", question_text: "Formal question 2", is_probe: false, brand_mentioned: false },
+				{ question_id: "q_probe_1", question_text: "Probe query", is_probe: true, brand_mentioned: true },
+			];
+
+			const formalQuestions = mixedQuestions.filter((q) => !q.is_probe);
+			expect(formalQuestions).toHaveLength(2);
+			expect(formalQuestions.map((q) => q.question_id)).toEqual(["q1", "q2"]);
+
+			const formalMentions = formalQuestions.filter((q) => q.brand_mentioned).length;
+			const formalRate = formalMentions / formalQuestions.length;
+			expect(formalMentions).toBe(1);
+			expect(formalRate).toBe(0.5);
+
+			// If probe wasn't excluded, rate would incorrectly be 2/3 = 66.7%
+			const corruptedRate = mixedQuestions.filter((q) => q.brand_mentioned).length / mixedQuestions.length;
+			expect(corruptedRate).toBeCloseTo(0.667, 2);
+			expect(formalRate).not.toBe(corruptedRate);
+		});
+	});
+
+	describe("5. Citation Category Mapping Contract", () => {
+		const mapCategory = (rawCategory: string, rawSourceType: string): string => {
+			const raw = (rawSourceType || rawCategory || "").toLowerCase();
+			if (raw === "brand" || raw === "own_domain") return "brand";
+			if (raw === "competitor") return "competitor";
+			if (raw === "media" || raw === "news" || raw === "editorial") return "editorial";
+			if (raw === "social" || raw === "ugc_or_community" || raw === "community") return "social";
+			if (raw === "institutional" || raw === "gov_or_public" || raw === "industry_assoc") return "institutional";
+			if (raw === "ecommerce") return "ecommerce";
+			if (raw === "reviews") return "reviews";
+			if (raw === "pr" || raw === "b2b_or_directory") return "pr";
+			if (raw === "developer") return "developer";
+			if (raw === "reference") return "reference";
+			return "other";
+		};
+
+		it("maps all backend source_type and category variations to valid CITATION_CATEGORIES", () => {
+			const testCases: [string, string, string][] = [
+				["news", "", "editorial"],
+				["media", "", "editorial"],
+				["editorial", "", "editorial"],
+				["ugc_or_community", "", "social"],
+				["community", "", "social"],
+				["social", "", "social"],
+				["gov_or_public", "", "institutional"],
+				["industry_assoc", "", "institutional"],
+				["institutional", "", "institutional"],
+				["own_domain", "", "brand"],
+				["brand", "", "brand"],
+				["competitor", "", "competitor"],
+				["ecommerce", "", "ecommerce"],
+				["reviews", "", "reviews"],
+				["b2b_or_directory", "", "pr"],
+				["pr", "", "pr"],
+				["developer", "", "developer"],
+				["reference", "", "reference"],
+				["unknown_custom_source", "", "other"],
+				["", "", "other"],
+			];
+
+			for (const [rawCategory, rawSourceType, expected] of testCases) {
+				const mapped = mapCategory(rawCategory, rawSourceType);
+				expect(mapped).toBe(expected);
+			}
+		});
+	});
+
+	describe("6. Model Filter Contract", () => {
+		it("only matches baseline run data when filter is ALL_MODELS or matches model_name", () => {
+			const baselineModel = "doubao-pro-32k";
+
+			const isModelMatch = (filterModel: string | undefined, actualModel: string) => {
+				if (!filterModel || filterModel === "all") return true;
+				return filterModel === actualModel;
+			};
+
+			expect(isModelMatch(undefined, baselineModel)).toBe(true);
+			expect(isModelMatch("all", baselineModel)).toBe(true);
+			expect(isModelMatch("doubao-pro-32k", baselineModel)).toBe(true);
+			expect(isModelMatch("gpt-4o", baselineModel)).toBe(false);
+			expect(isModelMatch("claude-3-5-sonnet", baselineModel)).toBe(false);
+		});
+	});
 });

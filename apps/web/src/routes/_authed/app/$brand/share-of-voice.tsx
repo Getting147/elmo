@@ -79,16 +79,32 @@ function ShareOfVoicePage() {
 	const baselineData = useMemo(() => {
 		if (!activeBaseline.hasBaselineRuns) return null;
 		const { runData, metricsData } = activeBaseline;
+
+		// Model filter check
+		if (model && model !== ALL_MODELS_VALUE && model !== runData?.model_name) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				totalRuns: 0,
+				totalMentions: 0,
+				entries: [],
+				brandShare: null,
+				shareTimeSeries: [],
+			};
+		}
+
 		const p0Summary = metricsData?.p0_summary;
 		const validQuestions =
 			p0Summary?.effective_sample_count ??
 			p0Summary?.planned_questions ??
 			runData?.valid_questions ??
 			0;
-		const sampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
+		const rawSampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
+		const sampleDate = /^\d{4}-\d{2}-\d{2}$/.test(rawSampleDate) ? rawSampleDate : "";
 		const brandName = brand?.name || "Target Brand";
 
-		const allQuestions: any[] = metricsData?.questions || [];
+		// Strictly isolate formal questions only (!is_probe)
+		const rawQuestions: any[] = metricsData?.questions || [];
+		const allQuestions = rawQuestions.filter((q: any) => !q.is_probe);
 		const matchingQuestions = tags.length > 0
 			? allQuestions.filter((q) => tags.includes(q.dimension_name))
 			: allQuestions;
@@ -99,7 +115,7 @@ function ShareOfVoicePage() {
 			0;
 		const rawCompetitors: any[] = metricsData?.competitors || [];
 
-		if (tags.length > 0 && allQuestions.length > 0) {
+		if (tags.length > 0) {
 			brandMentions = matchingQuestions.filter((q) => q.effective_mention).length;
 		}
 
@@ -123,9 +139,11 @@ function ShareOfVoicePage() {
 			prompts: e.mentions,
 		}));
 
+		const totalRuns = tags.length > 0 ? matchingQuestions.length : validQuestions;
+
 		return {
 			brandName,
-			totalRuns: validQuestions,
+			totalRuns,
 			totalMentions: sovResult.total,
 			entries,
 			brandShare: sovResult.brandShare,
@@ -133,10 +151,11 @@ function ShareOfVoicePage() {
 				? [{ date: sampleDate, share: sovResult.brandShare !== null ? Math.round(sovResult.brandShare * 100) : null }]
 				: [],
 		};
-	}, [activeBaseline, brand?.name, tags]);
+	}, [activeBaseline, brand?.name, tags, model]);
 
 	const baselineTags = useMemo(() => {
-		const questions: any[] = activeBaseline.metricsData?.questions || [];
+		const rawQuestions: any[] = activeBaseline.metricsData?.questions || [];
+		const questions = rawQuestions.filter((q: any) => !q.is_probe);
 		const set = new Set<string>();
 		for (const q of questions) {
 			if (q.dimension_name) set.add(q.dimension_name);
@@ -151,9 +170,9 @@ function ShareOfVoicePage() {
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
-	const effectiveLoading = activeBaseline.hasBaselineRuns
+	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
-		: isLoading && !data;
+		: isLoading && !data);
 
 	const infoContent = (
 		<>
@@ -352,6 +371,7 @@ function ShareOfVoicePage() {
 						metricsData={activeBaseline.metricsData}
 						onSelectRun={activeBaseline.selectRun}
 						brandId={brandId}
+						isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 					/>
 				)}
 				<FilterSection>

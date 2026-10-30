@@ -36,7 +36,11 @@ export function BaselineOpportunitiesView({
 	const hasAnalysis = Boolean(analysisData && (analysisData.payload || analysisData.analysis_id));
 	const payload = analysisData?.payload;
 
-	const isApproved = analysisData?.status === "approved";
+	const isApproved =
+		analysisData?.status === "approved" ||
+		analysisData?.review_status === "approved" ||
+		payload?.status === "approved" ||
+		payload?.review_status === "approved";
 	const analystName = analysisData?.analyst_name || (isZh ? "Negency 分析团队" : "Negency Analytics Team");
 	const modelName = payload?.ai_metadata?.model || "deepseek-chat";
 	const evaluationDate = (analysisData?.updated_at || analysisData?.created_at || runData?.completed_at || "")
@@ -78,6 +82,7 @@ export function BaselineOpportunitiesView({
 				metricsData={metricsData}
 				onSelectRun={activeBaseline.selectRun}
 				brandId={brandId}
+				isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 			/>
 
 			{!hasAnalysis ? (

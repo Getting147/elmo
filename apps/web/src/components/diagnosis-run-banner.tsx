@@ -20,6 +20,7 @@ export interface DiagnosisRunBannerProps {
 	onSelectRun: (runId: string) => void;
 	brandId?: string;
 	pageTitle?: string;
+	isRequestedRunMissing?: boolean;
 }
 
 export function DiagnosisRunBanner({
@@ -30,6 +31,7 @@ export function DiagnosisRunBanner({
 	onSelectRun,
 	brandId,
 	pageTitle,
+	isRequestedRunMissing,
 }: DiagnosisRunBannerProps) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
@@ -167,6 +169,17 @@ export function DiagnosisRunBanner({
 					{isZh ? "道正式题" : "prompts"}
 				</span>
 			</div>
+
+			{isRequestedRunMissing && (
+				<div className="bg-amber-100/70 dark:bg-amber-950/40 rounded-lg p-2.5 flex items-center gap-2 text-amber-900 dark:text-amber-200 text-xs">
+					<IconAlertTriangle size={14} className="shrink-0" />
+					<span>
+						{isZh
+							? "URL 指定的任务编号未在当前品牌记录中找到，已自动呈现该品牌最近一次诊断任务。"
+							: "The requested task was not found for this brand. Displaying the most recent diagnostic run."}
+					</span>
+				</div>
+			)}
 
 			{/* Status Alerts if running or failed */}
 			{isRunning && (

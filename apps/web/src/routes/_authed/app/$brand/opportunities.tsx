@@ -19,6 +19,8 @@ import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { BaselineOpportunitiesView } from "@/components/baseline-opportunities-view";
 import { buildTitle, getAppName, getBrandName } from "@/lib/route-head";
 
+import { useLanguage } from "@/lib/language-context";
+
 export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
 	head: ({ matches, match }) => {
 		const appName = getAppName(match);
@@ -37,8 +39,22 @@ function OpportunitiesPage() {
 	const { brand: brandId } = Route.useParams();
 	const activeBaseline = useActiveBaselineRun(brandId);
 	const { data, isLoading, isError } = useOpportunities(brandId);
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 
 	const infoContent = "Recommendations based on your visibility and citation metrics. Refreshed weekly.";
+
+	if (activeBaseline.isLoadingRunsList) {
+		return (
+			<PageHeader
+				title="Opportunities"
+				subtitle="What to create, pitch, and seed to earn more AI citations — generated from your tracked answer data."
+				infoContent={infoContent}
+			>
+				<LoadingState />
+			</PageHeader>
+		);
+	}
 
 	if (activeBaseline.hasBaselineRuns) {
 		return (
@@ -56,12 +72,19 @@ function OpportunitiesPage() {
 	if (isLoading) {
 		content = <LoadingState />;
 	} else if (isError) {
-		content = <EmptyCard>Couldn't generate recommendations right now. Reload the page to try again.</EmptyCard>;
+		content = (
+			<EmptyCard>
+				{isZh
+					? "暂时无法生成建议。请刷新页面重试。"
+					: "Couldn't generate recommendations right now. Reload the page to try again."}
+			</EmptyCard>
+		);
 	} else if (!data || data.reason === "insufficient-data" || !data.report) {
 		content = (
 			<EmptyCard>
-				We need a bit more tracking data before we can recommend opportunities — check back once your prompts have run
-				for a few days.
+				{isZh
+					? "在推荐增长机会之前，我们还需要一些跟踪数据——待评测提示词运行数天后再来查看。"
+					: "We need a bit more tracking data before we can recommend opportunities — check back once your prompts have run for a few days."}
 			</EmptyCard>
 		);
 	} else {

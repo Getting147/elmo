@@ -93,6 +93,29 @@ function QueryFanoutPage() {
 	const baselineData = useMemo(() => {
 		if (!activeBaseline.hasBaselineRuns) return null;
 		const { runData, metricsData, evidenceData } = activeBaseline;
+		const modelName = runData?.model_name || "doubao-pro-32k";
+
+		// Model filter check
+		if (model && model !== ALL_MODELS_VALUE && model !== modelName) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				model: modelName,
+				totalRuns: 0,
+				totalQueries: 0,
+				uniqueQueries: 0,
+				fanoutRuns: 0,
+				avgPerExecution: 0,
+				coverageRate: 0,
+				byPrompt: [],
+				topQueries: [],
+				topByPrompts: [],
+				topByRuns: [],
+				terms: [],
+				wordChanges: { added: [], dropped: [], preserved: [] },
+				byModel: [],
+			};
+		}
+
 		const formalQuestions: any[] = evidenceData?.formal_questions || [];
 		const validQuestions =
 			metricsData?.p0_summary?.effective_sample_count ??
@@ -154,18 +177,18 @@ function QueryFanoutPage() {
 			promptRefs: Array.from(item.promptRefs.values()).sort((a, b) => b.runs - a.runs),
 		})).sort((a, b) => b.runs - a.runs);
 
-		const modelName = runData?.model_name || "doubao-pro-32k";
+		const effectiveRunsCount = tags.length > 0 ? matchingQuestions.length : validQuestions;
 		const fanoutRuns = byPrompt.filter((p) => p.totalQueries > 0).length;
 		const uniqueQueries = queryMap.size;
 		const avgPerExecution = fanoutRuns > 0 ? +(totalQueries / fanoutRuns).toFixed(1) : 0;
-		const coverageRate = validQuestions > 0 ? +(fanoutRuns / validQuestions).toFixed(2) : 0;
+		const coverageRate = effectiveRunsCount > 0 ? +(fanoutRuns / effectiveRunsCount).toFixed(2) : 0;
 		const topByPrompts = [...topQueries].sort((a, b) => b.prompts - a.prompts);
 		const topByRuns = [...topQueries].sort((a, b) => b.runs - a.runs);
 
 		return {
 			brandName: brand?.name || "Target Brand",
 			model: modelName,
-			totalRuns: validQuestions,
+			totalRuns: effectiveRunsCount,
 			totalQueries,
 			uniqueQueries,
 			fanoutRuns,
@@ -180,7 +203,7 @@ function QueryFanoutPage() {
 			byModel: [
 				{
 					model: modelName,
-					runs: validQuestions,
+					runs: effectiveRunsCount,
 					fanoutRuns,
 					totalQueries,
 					avgPerExecution,
@@ -188,12 +211,13 @@ function QueryFanoutPage() {
 				},
 			],
 		};
-	}, [activeBaseline, brand?.name, tags]);
+	}, [activeBaseline, brand?.name, tags, model]);
 
 	const baselineTags = useMemo(() => {
-		const questions: any[] = activeBaseline.evidenceData?.formal_questions || activeBaseline.metricsData?.questions || [];
+		const rawFormal = activeBaseline.evidenceData?.formal_questions;
+		const rawQuestions: any[] = rawFormal || activeBaseline.metricsData?.questions?.filter((q: any) => !q.is_probe) || [];
 		const set = new Set<string>();
-		for (const q of questions) {
+		for (const q of rawQuestions) {
 			if (q.dimension_name) set.add(q.dimension_name);
 		}
 		return Array.from(set);
@@ -206,9 +230,9 @@ function QueryFanoutPage() {
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
-	const effectiveLoading = activeBaseline.hasBaselineRuns
+	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
-		: isLoading && !data;
+		: isLoading && !data);
 
 	const infoContent = (
 		<p>
@@ -291,6 +315,7 @@ function QueryFanoutPage() {
 						metricsData={activeBaseline.metricsData}
 						onSelectRun={activeBaseline.selectRun}
 						brandId={brandId}
+						isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 					/>
 				)}
 				<FilterSection>
@@ -475,6 +500,8 @@ function SortHead<K extends string>({
 const GRID = "grid grid-cols-[1.25rem_1fr_4.5rem_7rem] items-center gap-3";
 
 function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: string }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	const [expanded, setExpanded] = useState<Set<string>>(
 		() => new Set(prompts.length === 1 ? [prompts[0].promptId] : []),
 	);
@@ -505,20 +532,22 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 				<div className="flex items-center justify-between gap-4">
 					<div>
 						<CardTitle className="flex items-center gap-1.5 text-base">
-							Prompts
+							{isZh ? "评测问题 (Prompts)" : "Prompts"}
 							<InfoTip>
 								Each prompt's fan-out: how many searches it generates (Queries) and how many per run that searched
 								(Avg/Prompt Run). Expand a prompt to see the searches, with your prompt's keywords bolded.
 							</InfoTip>
 						</CardTitle>
-						<CardDescription>The web searches each prompt triggers.</CardDescription>
+						<CardDescription>
+							{isZh ? "每道评测问题触发的联网搜索检索词明细。" : "The web searches each prompt triggers."}
+						</CardDescription>
 					</div>
 					<div className="relative w-64 shrink-0">
 						<IconSearch className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2" />
 						<Input
 							value={search}
 							onChange={(e) => setSearch(e.target.value)}
-							placeholder="Search prompts..."
+							placeholder={isZh ? "搜索评测问题..." : "Search prompts..."}
 							className="h-8 pl-8 text-sm"
 						/>
 					</div>
@@ -583,7 +612,9 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 						);
 					})}
 					{rows.length === 0 && (
-						<div className="text-muted-foreground py-6 text-center text-sm">No prompts match your search.</div>
+						<div className="text-muted-foreground py-6 text-center text-sm">
+							{isZh ? "未找到符合搜索条件的问题。" : "No prompts match your search."}
+						</div>
 					)}
 				</div>
 			</CardContent>
@@ -600,6 +631,8 @@ type TopSort = "prompts" | "runs";
 const TOP_GRID = "grid grid-cols-[1.25rem_1fr_5rem_5.5rem] items-center gap-3";
 
 function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	const [sort, setSort] = useState<TopSort>("prompts");
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -617,13 +650,15 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 		<Card className="gap-4">
 			<CardHeader>
 				<CardTitle className="flex items-center gap-1.5 text-base">
-					Top Queries
+					{isZh ? "高频检索词 (Top Queries)" : "Top Queries"}
 					<InfoTip>
 						The searches with the widest reach — sort by how many distinct prompts triggered them, or how many prompt
 						runs issued them. Expand a query to see the prompts behind it.
 					</InfoTip>
 				</CardTitle>
-				<CardDescription>The searches that recur across your prompts.</CardDescription>
+				<CardDescription>
+					{isZh ? "在多道评测问题中反复出现的联网搜索词。" : "The searches that recur across your prompts."}
+				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				<div className={cn(TOP_GRID, "text-muted-foreground/80 border-b py-2 text-[11px] font-medium")}>
@@ -683,7 +718,9 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 						);
 					})}
 					{rows.length === 0 && (
-						<div className="text-muted-foreground py-6 text-center text-sm">No queries for this period.</div>
+						<div className="text-muted-foreground py-6 text-center text-sm">
+							{isZh ? "当前所选周期内暂无检索词记录。" : "No queries for this period."}
+						</div>
 					)}
 				</div>
 			</CardContent>

@@ -96,6 +96,10 @@ function PromptsContent({ brandId, editLink }: { brandId: string | undefined; ed
 		return orderPrompts(filtered, order);
 	}, [promptsSummary, search, order]);
 
+	if (activeBaseline.isLoadingRunsList) {
+		return <ContentLoadingSkeleton />;
+	}
+
 	if (activeBaseline.hasBaselineRuns) {
 		return (
 			<BaselinePromptsView

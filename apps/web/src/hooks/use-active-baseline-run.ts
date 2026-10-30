@@ -12,6 +12,8 @@ import {
 
 export interface ActiveBaselineRunResult {
 	hasBaselineRuns: boolean;
+	isLoadingRunsList: boolean;
+	isRequestedRunMissing: boolean;
 	activeRunId: string | undefined;
 	activeRunSummary: any | null;
 	runsList: any[];
@@ -59,6 +61,9 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	});
 
 	const runs = runsListData?.items || [];
+	const isRequestedRunMissing = Boolean(
+		requestedRunId && !isLoadingRunsList && runs.length > 0 && !runs.some((r: any) => r.run_id === requestedRunId),
+	);
 
 	// 2. Resolve active run summary
 	const activeRunSummary = useMemo(() => {
@@ -136,7 +141,9 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	);
 
 	return {
-		hasBaselineRuns: runs.length > 0,
+		hasBaselineRuns: Boolean(runsListData && runs.length > 0),
+		isLoadingRunsList,
+		isRequestedRunMissing,
 		activeRunId,
 		activeRunSummary,
 		runsList: runs,

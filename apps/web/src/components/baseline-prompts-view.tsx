@@ -38,8 +38,10 @@ export function BaselinePromptsView({
 	const { runData, metricsData, evidenceData, isLoading, isError } = activeBaseline;
 
 	// Questions list: merge formal questions from metrics and evidence
+	// Strictly exclude probe questions (!is_probe) to prevent polluting formal question denominator (Task 4.3 & 5.2)
 	const questions = useMemo(() => {
-		const metricsQuestions: any[] = metricsData?.questions || [];
+		const rawMetricsQuestions: any[] = metricsData?.questions || [];
+		const metricsQuestions: any[] = rawMetricsQuestions.filter((q: any) => !q.is_probe);
 		const evidenceQuestions: any[] = evidenceData?.formal_questions || [];
 
 		// Create a map by question code or question text
@@ -135,6 +137,36 @@ export function BaselinePromptsView({
 	const sampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
 
 	const visibilityBarElement = useMemo(() => {
+		if (filters.isFiltered) {
+			if (filteredQuestions.length === 0) {
+				return (
+					<VisibilityBarEmpty
+						message={
+							isZh
+								? "当前筛选条件下暂无问题与可见度数据"
+								: "No prompts or visibility data match your selected filters."
+						}
+					/>
+				);
+			}
+			const filteredCount = filteredQuestions.length;
+			const filteredMentions = filteredQuestions.filter((q) => q.effective_mention).length;
+			const filteredRate = filteredCount > 0 ? filteredMentions / filteredCount : 0;
+			const filteredCitations = filteredQuestions.reduce((sum, q) => sum + (q.citation_count || 0), 0);
+			return (
+				<VisibilityBar
+					currentVisibility={Math.round(filteredRate * 100)}
+					totalRuns={filteredCount}
+					totalPrompts={filteredCount}
+					totalCitations={filteredCitations}
+					visibilityTimeSeries={
+						sampleDate ? [{ date: sampleDate, visibility: Math.round(filteredRate * 100) }] : []
+					}
+					lookback={lookback}
+				/>
+			);
+		}
+
 		if (validQuestions === 0) {
 			return (
 				<VisibilityBarEmpty
@@ -158,7 +190,16 @@ export function BaselinePromptsView({
 				lookback={lookback}
 			/>
 		);
-	}, [validQuestions, mentionRate, domainMetrics?.total_citations, sampleDate, lookback, isZh]);
+	}, [
+		filters.isFiltered,
+		filteredQuestions,
+		validQuestions,
+		mentionRate,
+		domainMetrics?.total_citations,
+		sampleDate,
+		lookback,
+		isZh,
+	]);
 
 	if (isLoading && !runData && !metricsData) {
 		return (
@@ -183,6 +224,7 @@ export function BaselinePromptsView({
 				metricsData={metricsData}
 				onSelectRun={activeBaseline.selectRun}
 				brandId={brandId}
+				isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 			/>
 
 			<FilteredListShell
@@ -341,18 +383,32 @@ function QuestionCard({
 									{isZh ? "引用信源明细:" : "Citations:"}
 								</div>
 								<div className="flex flex-wrap gap-1.5">
-									{question.citations.map((c: any, i: number) => (
-										<a
-											key={i}
-											href={c.url}
-											target="_blank"
-											rel="noopener noreferrer"
-											className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-background border border-border/60 text-[11px] text-blue-600 dark:text-blue-400 hover:underline max-w-xs truncate"
-										>
-											<span className="truncate">{c.title || c.domain || c.url}</span>
-											<IconExternalLink size={10} className="shrink-0 opacity-60" />
-										</a>
-									))}
+									{question.citations.map((c: any, i: number) => {
+										const isSafeUrl = typeof c.url === "string" && /^https?:\/\//i.test(c.url);
+										const label = c.title || c.domain || c.url || "Source";
+										if (isSafeUrl) {
+											return (
+												<a
+													key={i}
+													href={c.url}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-background border border-border/60 text-[11px] text-blue-600 dark:text-blue-400 hover:underline max-w-xs truncate"
+												>
+													<span className="truncate">{label}</span>
+													<IconExternalLink size={10} className="shrink-0 opacity-60" />
+												</a>
+											);
+										}
+										return (
+											<span
+												key={i}
+												className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-background border border-border/60 text-[11px] text-muted-foreground max-w-xs truncate"
+											>
+												<span className="truncate">{label}</span>
+											</span>
+										);
+									})}
 								</div>
 							</div>
 						)}
