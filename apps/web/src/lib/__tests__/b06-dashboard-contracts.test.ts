@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { computeShareOfVoice } from "@/lib/visibility-stats";
 import { validateBrandFilterSearch } from "@/hooks/use-list-filters";
+import {
+	computeIsRequestedRunMissing,
+	isInvalidBaselineRunId,
+} from "@/hooks/use-active-baseline-run";
 
 describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 	describe("1. SOV (Share of Voice) Calculation Contract", () => {
@@ -64,24 +68,47 @@ describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 		});
 	});
 
-	describe("2. URL search validation for runId (cross-dashboard navigation persistence)", () => {
+	describe("2. URL search validation for runId (cross-dashboard navigation persistence & F01 tamper resistance)", () => {
 		it("accepts valid alphanumeric, underscore and hyphen runId", () => {
 			const valid = validateBrandFilterSearch({ runId: "run_20261030_123456-abc" });
 			expect(valid.runId).toBe("run_20261030_123456-abc");
 		});
 
-		it("rejects invalid or malicious runId strings", () => {
+		it("preserves 'null' and 'undefined' string runId without erasing to undefined (F01)", () => {
+			// String "null"
+			const nullStr = validateBrandFilterSearch({ runId: "null" });
+			expect(nullStr.runId).toBe("null");
+
+			// Router-parsed null primitive (when ?runId=null is parsed via JSON.parse)
+			const nullPrimitive = validateBrandFilterSearch({ runId: null });
+			expect(nullPrimitive.runId).toBe("null");
+
+			// String "undefined"
+			const undefinedStr = validateBrandFilterSearch({ runId: "undefined" });
+			expect(undefinedStr.runId).toBe("undefined");
+		});
+
+		it("neutralizes invalid or malicious runId strings into invalid token without stripping to undefined", () => {
 			const malicious1 = validateBrandFilterSearch({ runId: "<script>alert(1)</script>" });
-			expect(malicious1.runId).toBeUndefined();
+			expect(malicious1.runId).toBe("__invalid_run__");
 
 			const malicious2 = validateBrandFilterSearch({ runId: "../../../etc/passwd" });
-			expect(malicious2.runId).toBeUndefined();
+			expect(malicious2.runId).toBe("__invalid_run__");
 
 			const malicious3 = validateBrandFilterSearch({ runId: "run' OR 1=1--" });
-			expect(malicious3.runId).toBeUndefined();
+			expect(malicious3.runId).toBe("__invalid_run__");
+
+			const malicious4 = validateBrandFilterSearch({ runId: "run_test<script>" });
+			expect(malicious4.runId).toBe("__invalid_run__");
 
 			const empty = validateBrandFilterSearch({ runId: "" });
 			expect(empty.runId).toBeUndefined();
+
+			const omitted = validateBrandFilterSearch({});
+			expect(omitted.runId).toBeUndefined();
+
+			const explicitUndefined = validateBrandFilterSearch({ runId: undefined });
+			expect(explicitUndefined.runId).toBeUndefined();
 		});
 	});
 
@@ -350,20 +377,133 @@ describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 		});
 	});
 
-	describe("9. RunId Identity & Historical Lookup Contract", () => {
-		it("strictly preserves requestedRunId and does not fall back to runs[0] when specified", () => {
-			const runs = [{ run_id: "run_latest_001" }, { run_id: "run_prev_002" }];
+	describe("9. RunId Identity, Missing Detection & Legitimate Navigation Contract (F01)", () => {
+		const sampleRuns = [
+			{ run_id: "run_latest_001", brand_id: "brand_std", status: "completed" },
+			{ run_id: "run_prev_002", brand_id: "brand_std", status: "completed" },
+		];
 
-			const resolveActiveRunId = (requestedRunId?: string) => {
-				return requestedRunId || runs[0]?.run_id;
-			};
+		describe("9.1 Legitimate Navigation Preservation", () => {
+			it("defaults to latest run (runs[0]) when runId is omitted from URL", () => {
+				const requestedRunId = undefined;
+				const activeRunId = requestedRunId || sampleRuns[0]?.run_id;
+				const isRequestedRunMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+				});
 
-			// When not specified, defaults to runs[0]
-			expect(resolveActiveRunId(undefined)).toBe("run_latest_001");
+				expect(activeRunId).toBe("run_latest_001");
+				expect(isRequestedRunMissing).toBe(false);
+			});
 
-			// When specified, strictly returns requestedRunId
-			expect(resolveActiveRunId("run_historical_999")).toBe("run_historical_999");
-			expect(resolveActiveRunId("run_non_existent")).toBe("run_non_existent");
+			it("selects specific run from dropdown when present in runs list", () => {
+				const requestedRunId = "run_prev_002";
+				const activeRunId = requestedRunId || sampleRuns[0]?.run_id;
+				const isRequestedRunMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+				});
+
+				expect(activeRunId).toBe("run_prev_002");
+				expect(isRequestedRunMissing).toBe(false);
+			});
+
+			it("successfully fetches and preserves deep historical runs beyond top-30 list", () => {
+				const requestedRunId = "run_historical_999";
+				const historicalRunData = {
+					run_id: "run_historical_999",
+					brand_id: "brand_std",
+					status: "completed",
+					model_name: "doubao-pro-32k",
+				};
+
+				// While loading: do not flag missing prematurely
+				const loadingMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+					isLoadingRun: true,
+					runData: undefined,
+				});
+				expect(loadingMissing).toBe(false);
+
+				// Once loaded: verify missing is false and run is injected
+				const loadedMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+					isLoadingRun: false,
+					runData: historicalRunData,
+				});
+				expect(loadedMissing).toBe(false);
+
+				// Effective runs list prepends historical run
+				const effectiveRuns = [historicalRunData, ...sampleRuns];
+				expect(effectiveRuns[0].run_id).toBe("run_historical_999");
+				expect(effectiveRuns).toHaveLength(3);
+			});
+		});
+
+		describe("9.2 Adversarial Tampering & Invalid RunId Handling", () => {
+			it("flags isRequestedRunMissing: true for literal 'null'", () => {
+				const requestedRunId = "null";
+				const isMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+				});
+
+				expect(isMissing).toBe(true);
+			});
+
+			it("flags isRequestedRunMissing: true for literal 'undefined'", () => {
+				const requestedRunId = "undefined";
+				const isMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+				});
+
+				expect(isMissing).toBe(true);
+			});
+
+			it("flags isRequestedRunMissing: true immediately for invalid characters / XSS / injection", () => {
+				const invalidIds = [
+					"__invalid_run__",
+					"run_test<script>",
+					"<script>alert(1)</script>",
+					"../../../etc/passwd",
+					"run' OR 1=1--",
+					"run invalid spaces",
+					"run!@#$%",
+				];
+
+				for (const id of invalidIds) {
+					const isMissing = computeIsRequestedRunMissing({
+						requestedRunId: id,
+						runs: sampleRuns,
+					});
+					expect(isMissing).toBe(true);
+				}
+			});
+
+			it("flags isRequestedRunMissing: true when run does not exist (404 Not Found)", () => {
+				const requestedRunId = "run_non_existent";
+				const isMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+					runError: { status: 404, message: "Run not_found" },
+				});
+
+				expect(isMissing).toBe(true);
+			});
+
+			it("flags isRequestedRunMissing: true and blocks cross-brand access (403 Forbidden)", () => {
+				const requestedRunId = "run_b06_zeromention_001";
+				const isMissing = computeIsRequestedRunMissing({
+					requestedRunId,
+					runs: sampleRuns,
+					runError: { status: 403, message: "Access denied: brand mismatch" },
+				});
+
+				expect(isMissing).toBe(true);
+			});
 		});
 	});
 });

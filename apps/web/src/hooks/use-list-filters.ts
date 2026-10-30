@@ -27,9 +27,12 @@ function asString(value: unknown): string | undefined {
 }
 
 function safeRunId(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	if (value === null) return "null";
+	if (typeof value === "object") return "__invalid_run__";
 	const str = asString(value);
 	if (!str) return undefined;
-	return /^[a-zA-Z0-9_-]+$/.test(str) ? str : undefined;
+	return /^[a-zA-Z0-9_-]+$/.test(str) ? str : "__invalid_run__";
 }
 
 export function validateBrandFilterSearch(search: Record<string, unknown>): BrandFilterSearch {

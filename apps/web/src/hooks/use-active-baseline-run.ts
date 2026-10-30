@@ -41,6 +41,66 @@ export interface ActiveBaselineRunResult {
 }
 
 /**
+ * Synchronous format validation helper:
+ * Returns true if runId is invalid (primitive null, invalid characters, sentinel tokens).
+ * Empty string and undefined are considered "unspecified" (not invalid format).
+ */
+export function isInvalidBaselineRunId(runId: unknown): boolean {
+	if (runId === undefined) return false;
+	if (runId === null) return true;
+	const str = String(runId).trim();
+	if (str === "") return false;
+	return !/^[a-zA-Z0-9_-]+$/.test(str) || str === "__invalid_run__";
+}
+
+/**
+ * Pure evaluation helper for determining if a requested run is missing.
+ * Facilitates direct unit test assertions without requiring full React hook harness.
+ */
+export function computeIsRequestedRunMissing(params: {
+	requestedRunId?: string;
+	runs?: Array<{ run_id: string }>;
+	isLoadingRunsList?: boolean;
+	isLoadingRun?: boolean;
+	runData?: { run_id: string } | null;
+	runError?: unknown;
+}): boolean {
+	const {
+		requestedRunId,
+		runs = [],
+		isLoadingRunsList = false,
+		isLoadingRun = false,
+		runData,
+		runError,
+	} = params;
+
+	if (!requestedRunId) return false;
+
+	const isRunInvalidFormat = isInvalidBaselineRunId(requestedRunId);
+	if (isRunInvalidFormat) return true;
+
+	const isRunNotFound = Boolean(
+		runError &&
+			((runError as any)?.status === 404 ||
+				(runError as any)?.status === 403 ||
+				String((runError as any)?.message || "").includes("404") ||
+				String((runError as any)?.message || "").includes("403") ||
+				String((runError as any)?.message || "").includes("not_found") ||
+				String((runError as any)?.message || "").includes("denied")),
+	);
+
+	const isRunFound = Boolean(
+		runs.some((r: any) => r.run_id === requestedRunId) ||
+		(runData && runData.run_id === requestedRunId)
+	);
+
+	return Boolean(
+		isRunNotFound ||
+		(!isLoadingRunsList && !isLoadingRun && !isRunFound)
+	);
+}
+
+/**
  * Hook to manage active baseline diagnostic run state across the 5 dashboards.
  * - Reads `runId` from URL search params.
  * - If `runId` is not explicitly provided, defaults to the latest explicitly initiated task.
@@ -50,8 +110,14 @@ export interface ActiveBaselineRunResult {
  * - Read-only queries with org & brand validation, no hidden sampling/analysis triggers.
  */
 export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselineRunResult {
-	const urlSearch = useSearch({ strict: false }) as { runId?: string };
-	const requestedRunId = urlSearch?.runId;
+	const urlSearch = useSearch({ strict: false }) as Record<string, unknown>;
+	const rawRunId = urlSearch?.runId;
+	const requestedRunId = useMemo(() => {
+		if (rawRunId === undefined) return undefined;
+		if (rawRunId === null) return "null";
+		const str = String(rawRunId).trim();
+		return str === "" ? undefined : str;
+	}, [rawRunId]);
 
 	// 1. Query baseline runs list for this brand
 	const {
@@ -73,6 +139,11 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	// only falling back to runs[0] when no runId was explicitly requested.
 	const activeRunId = requestedRunId || runs[0]?.run_id;
 
+	// Synchronous format check: characters outside [a-zA-Z0-9_-] or sentinel tokens are immediately flagged
+	const isRunInvalidFormat = Boolean(
+		requestedRunId && isInvalidBaselineRunId(requestedRunId)
+	);
+
 	// 2. Query run details directly (authenticates existence and org/brand ownership)
 	const {
 		data: runData,
@@ -82,7 +153,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-run", brandId, activeRunId],
 		queryFn: () => getBaselineRunFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId,
+		enabled: !!brandId && !!activeRunId && !isRunInvalidFormat,
 		staleTime: 30_000,
 		retry: false,
 	});
@@ -97,10 +168,16 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 				String((runError as any)?.message || "").includes("denied")),
 	);
 
+	const isRunFound = Boolean(
+		(requestedRunId && runs.some((r: any) => r.run_id === requestedRunId)) ||
+		(runData && runData.run_id === requestedRunId)
+	);
+
 	const isRequestedRunMissing = Boolean(
 		requestedRunId &&
-			(isRunNotFound ||
-				(!isLoadingRunsList && !isLoadingRun && !runData && runs.length > 0 && !runs.some((r: any) => r.run_id === requestedRunId))),
+			(isRunInvalidFormat ||
+				isRunNotFound ||
+				(!isLoadingRunsList && !isLoadingRun && !isRunFound)),
 	);
 
 	// 3. Resolve active run summary
@@ -130,6 +207,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 
 	// Inject active run into runs list if it was a historical run not in the top-30 list
 	const effectiveRunsList = useMemo(() => {
+		if (isRequestedRunMissing) return runs;
 		if (runData && runData.run_id && !runs.some((r: any) => r.run_id === runData.run_id)) {
 			return [
 				{
@@ -144,7 +222,16 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 			];
 		}
 		return runs;
-	}, [runs, runData]);
+	}, [runs, runData, isRequestedRunMissing]);
+
+	// Gate downstream queries: only execute when run identity is verified
+	const isKnownRun = Boolean(activeRunId && runs.some((r: any) => r.run_id === activeRunId));
+	const isRunReady = Boolean(
+		brandId &&
+		activeRunId &&
+		!isRequestedRunMissing &&
+		(isKnownRun || Boolean(runData && runData.run_id === activeRunId))
+	);
 
 	// 4. Query metrics
 	const {
@@ -155,7 +242,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-metrics", brandId, activeRunId],
 		queryFn: () => getBaselineMetricsFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
+		enabled: isRunReady,
 		staleTime: 30_000,
 	});
 
@@ -168,7 +255,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
+		enabled: isRunReady,
 		staleTime: 30_000,
 	});
 
@@ -181,7 +268,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-analysis", brandId, activeRunId],
 		queryFn: () => getBaselineAnalysisFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
+		enabled: isRunReady,
 		staleTime: 30_000,
 		retry: false,
 	});
