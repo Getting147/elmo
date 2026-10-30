@@ -15,6 +15,8 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { OpportunitiesReport } from "@/components/opportunities-report";
 import { PageHeader } from "@/components/page-header";
 import { useOpportunities } from "@/hooks/use-opportunities";
+import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
+import { BaselineOpportunitiesView } from "@/components/baseline-opportunities-view";
 import { buildTitle, getAppName, getBrandName } from "@/lib/route-head";
 
 export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
@@ -33,9 +35,22 @@ export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
 
 function OpportunitiesPage() {
 	const { brand: brandId } = Route.useParams();
+	const activeBaseline = useActiveBaselineRun(brandId);
 	const { data, isLoading, isError } = useOpportunities(brandId);
 
 	const infoContent = "Recommendations based on your visibility and citation metrics. Refreshed weekly.";
+
+	if (activeBaseline.hasBaselineRuns) {
+		return (
+			<PageHeader
+				title="Opportunities"
+				subtitle="What to create, pitch, and seed to earn more AI citations — generated from your tracked answer data."
+				infoContent={infoContent}
+			>
+				<BaselineOpportunitiesView brandId={brandId} activeBaseline={activeBaseline} />
+			</PageHeader>
+		);
+	}
 
 	let content: React.ReactNode;
 	if (isLoading) {

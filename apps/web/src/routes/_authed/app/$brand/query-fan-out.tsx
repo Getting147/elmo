@@ -30,7 +30,10 @@ import { useListFilters } from "@/hooks/use-list-filters";
 import { useBrand } from "@/hooks/use-brands";
 import { HistoryButton } from "@/components/history-button";
 import { InfoTip, QueryWordsSection, VariationLine } from "@/components/fanout-sections";
-import { promptKeywords, type PromptFanoutStat, type TopQueryStat } from "@/lib/fanout-analysis";
+import { promptKeywords, type PromptFanoutStat, type TopQueryStat, type QueryPromptRef, type FanoutQueryStat } from "@/lib/fanout-analysis";
+import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
+import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
+import { useLanguage } from "@/lib/language-context";
 
 /** The active tab lives in `?tab=` so each tab is directly linkable. */
 const FANOUT_TABS = ["fanout", "top-queries", "words"] as const;
@@ -60,6 +63,9 @@ export const Route = createFileRoute("/_authed/app/$brand/query-fan-out")({
 function QueryFanoutPage() {
 	const { brand: brandId } = Route.useParams();
 	const { model, lookback, tags } = useListFilters();
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
 	const tab = Route.useSearch({ select: (s) => s.tab ?? "fanout" });
 	const navigate = Route.useNavigate();
 	const setTab = (next: FanoutTab) =>
@@ -70,6 +76,7 @@ function QueryFanoutPage() {
 		});
 
 	const { brand } = useBrand(brandId);
+	const activeBaseline = useActiveBaselineRun(brandId);
 	const availableModels = getAvailableModels(brand?.effectiveModels ?? []);
 	const modelParam = model === ALL_MODELS_VALUE ? undefined : model;
 
@@ -82,6 +89,127 @@ function QueryFanoutPage() {
 		model: modelParam,
 	});
 
+	// Compute baseline query fan-out data when baseline run is active
+	const baselineData = useMemo(() => {
+		if (!activeBaseline.hasBaselineRuns) return null;
+		const { runData, metricsData, evidenceData } = activeBaseline;
+		const formalQuestions: any[] = evidenceData?.formal_questions || [];
+		const validQuestions =
+			metricsData?.p0_summary?.effective_sample_count ??
+			metricsData?.p0_summary?.valid_questions ??
+			runData?.valid_questions ??
+			formalQuestions.length;
+
+		// Filter by tags if selected
+		const matchingQuestions = tags.length > 0
+			? formalQuestions.filter((q) => tags.includes(q.dimension_name))
+			: formalQuestions;
+
+		let totalQueries = 0;
+		const byPrompt: PromptFanoutStat[] = [];
+		const queryMap = new Map<string, { query: string; prompts: Set<string>; runs: number; promptRefs: Map<string, QueryPromptRef> }>();
+
+		for (const q of matchingQuestions) {
+			const queries: string[] = Array.isArray(q.search_queries) ? q.search_queries : [];
+			totalQueries += queries.length;
+
+			const variations: FanoutQueryStat[] = queries.map((sq) => ({
+				query: sq,
+				count: 1,
+				brandMentionRate: q.effective_mention ? 100 : 0,
+			}));
+
+			const promptStat: PromptFanoutStat = {
+				promptId: q.question_code || q.question_id || q.question_text,
+				promptValue: q.question_text || "",
+				totalQueries: queries.length,
+				uniqueQueries: new Set(queries).size,
+				runs: 1,
+				avgPerExecution: queries.length,
+				variations,
+			};
+			byPrompt.push(promptStat);
+
+			for (const sq of queries) {
+				let item = queryMap.get(sq);
+				if (!item) {
+					item = { query: sq, prompts: new Set(), runs: 0, promptRefs: new Map() };
+					queryMap.set(sq, item);
+				}
+				item.prompts.add(promptStat.promptId);
+				item.runs += 1;
+				let ref = item.promptRefs.get(promptStat.promptId);
+				if (!ref) {
+					ref = { promptId: promptStat.promptId, promptValue: promptStat.promptValue, runs: 0 };
+					item.promptRefs.set(promptStat.promptId, ref);
+				}
+				ref.runs += 1;
+			}
+		}
+
+		const topQueries: TopQueryStat[] = Array.from(queryMap.values()).map((item) => ({
+			query: item.query,
+			prompts: item.prompts.size,
+			runs: item.runs,
+			promptRefs: Array.from(item.promptRefs.values()).sort((a, b) => b.runs - a.runs),
+		})).sort((a, b) => b.runs - a.runs);
+
+		const modelName = runData?.model_name || "doubao-pro-32k";
+		const fanoutRuns = byPrompt.filter((p) => p.totalQueries > 0).length;
+		const uniqueQueries = queryMap.size;
+		const avgPerExecution = fanoutRuns > 0 ? +(totalQueries / fanoutRuns).toFixed(1) : 0;
+		const coverageRate = validQuestions > 0 ? +(fanoutRuns / validQuestions).toFixed(2) : 0;
+		const topByPrompts = [...topQueries].sort((a, b) => b.prompts - a.prompts);
+		const topByRuns = [...topQueries].sort((a, b) => b.runs - a.runs);
+
+		return {
+			brandName: brand?.name || "Target Brand",
+			model: modelName,
+			totalRuns: validQuestions,
+			totalQueries,
+			uniqueQueries,
+			fanoutRuns,
+			avgPerExecution,
+			coverageRate,
+			byPrompt,
+			topQueries,
+			topByPrompts,
+			topByRuns,
+			terms: [],
+			wordChanges: { added: [], dropped: [], preserved: [] },
+			byModel: [
+				{
+					model: modelName,
+					runs: validQuestions,
+					fanoutRuns,
+					totalQueries,
+					avgPerExecution,
+					topQueries: topQueries.map((t) => ({ query: t.query, count: t.runs, brandMentionRate: 0 })),
+				},
+			],
+		};
+	}, [activeBaseline, brand?.name, tags]);
+
+	const baselineTags = useMemo(() => {
+		const questions: any[] = activeBaseline.evidenceData?.formal_questions || activeBaseline.metricsData?.questions || [];
+		const set = new Set<string>();
+		for (const q of questions) {
+			if (q.dimension_name) set.add(q.dimension_name);
+		}
+		return Array.from(set);
+	}, [activeBaseline.evidenceData?.formal_questions, activeBaseline.metricsData?.questions]);
+
+	const baselineModels = useMemo(() => {
+		return [activeBaseline.runData?.model_name || "doubao-pro-32k"];
+	}, [activeBaseline.runData?.model_name]);
+
+	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
+	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
+	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveLoading = activeBaseline.hasBaselineRuns
+		? activeBaseline.isLoading && !activeBaseline.runData
+		: isLoading && !data;
+
 	const infoContent = (
 		<p>
 			When an AI engine with web search capabilities responds to a prompt, it may choose to make a number of web
@@ -91,24 +219,32 @@ function QueryFanoutPage() {
 	);
 
 	let content: React.ReactNode;
-	if (isLoading && !data) {
+	if (effectiveLoading) {
 		content = <LoadingState />;
-	} else if (isError && !data) {
-		content = <EmptyState message="Couldn't load query fan-out right now. Reload the page to try again." />;
-	} else if (!data || data.totalRuns === 0) {
-		// totalRuns counts only web-search-enabled runs — a brand whose models all
-		// run without web search lands here even with plenty of runs.
+	} else if (isError && !effectiveData) {
+		content = <EmptyState message={isZh ? "无法加载检索发散数据，请刷新页面重试。" : "Couldn't load query fan-out right now. Reload the page to try again."} />;
+	} else if (!effectiveData || effectiveData.totalRuns === 0) {
 		content = (
-			<EmptyState message="No runs with web search enabled for the selected filters. Fan-out appears once your prompts have been run by an engine with web search." />
+			<EmptyState
+				message={
+					isZh
+						? "当前筛选条件下无启用联网搜索的评测任务。评测任务启用联网后将在此展现。"
+						: "No runs with web search enabled for the selected filters. Fan-out appears once your prompts have been run by an engine with web search."
+				}
+			/>
 		);
-	} else if (data.totalQueries === 0) {
-		// Runs happened but none exposed fan-out — still show the KPIs (run counts)
-		// above the explanation rather than hiding everything.
+	} else if (effectiveData.totalQueries === 0) {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
-					<StatRow data={data} />
-					<EmptyState message="No web queries in this period — the engines you track didn't expose any searches for these prompts and filters." />
+					<StatRow data={effectiveData as any} />
+					<EmptyState
+						message={
+							isZh
+								? "该轮未返回可用检索词（模型在生成回答时未在原始响应中暴露检索词详情）。"
+								: "No web queries returned in this diagnostic run — the model did not expose search query details in the raw response."
+						}
+					/>
 				</div>
 			</TooltipProvider>
 		);
@@ -116,22 +252,24 @@ function QueryFanoutPage() {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
-					<StatRow data={data} />
+					<StatRow data={effectiveData as any} />
 					<Tabs value={tab} onValueChange={(v) => setTab(v as FanoutTab)} className="gap-4">
 						<TabsList>
-							<TabsTrigger value="fanout">Prompt Fan-Out</TabsTrigger>
-							<TabsTrigger value="top-queries">Top Queries</TabsTrigger>
-							<TabsTrigger value="words">Query Words</TabsTrigger>
+							<TabsTrigger value="fanout">{isZh ? "问题发散明细 (Prompt Fan-Out)" : "Prompt Fan-Out"}</TabsTrigger>
+							<TabsTrigger value="top-queries">{isZh ? "高频检索词 (Top Queries)" : "Top Queries"}</TabsTrigger>
+							{!activeBaseline.hasBaselineRuns && <TabsTrigger value="words">Query Words</TabsTrigger>}
 						</TabsList>
 						<TabsContent value="fanout">
-							<Prompts prompts={data.byPrompt} brandId={brandId} />
+							<Prompts prompts={effectiveData.byPrompt} brandId={brandId} />
 						</TabsContent>
 						<TabsContent value="top-queries">
-							<TopQueries data={data} brandId={brandId} />
+							<TopQueries data={effectiveData as any} brandId={brandId} />
 						</TabsContent>
-						<TabsContent value="words">
-							<QueryWordsSection terms={data.terms} wordChanges={data.wordChanges} />
-						</TabsContent>
+						{!activeBaseline.hasBaselineRuns && (
+							<TabsContent value="words">
+								<QueryWordsSection terms={effectiveData.terms} wordChanges={effectiveData.wordChanges} />
+							</TabsContent>
+						)}
 					</Tabs>
 				</div>
 			</TooltipProvider>
@@ -144,15 +282,27 @@ function QueryFanoutPage() {
 			subtitle="The web searches AI engines run when answering your prompts."
 			infoContent={infoContent}
 		>
-			<FilterSection>
-				<FilterBar
-					availableTags={availableTags}
-					availableModels={availableModels}
-					showSearch={false}
-					showModelSelector
-				/>
-			</FilterSection>
-			{content}
+			<div className="space-y-6">
+				{activeBaseline.hasBaselineRuns && (
+					<DiagnosisRunBanner
+						activeRunId={activeBaseline.activeRunId}
+						runsList={activeBaseline.runsList}
+						runData={activeBaseline.runData}
+						metricsData={activeBaseline.metricsData}
+						onSelectRun={activeBaseline.selectRun}
+						brandId={brandId}
+					/>
+				)}
+				<FilterSection>
+					<FilterBar
+						availableTags={effectiveTags}
+						availableModels={effectiveModels}
+						showSearch={false}
+						showModelSelector
+					/>
+				</FilterSection>
+				{content}
+			</div>
 		</PageHeader>
 	);
 }

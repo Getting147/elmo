@@ -23,6 +23,10 @@ import { ColHead } from "@/components/col-head";
 import { ShareOfVoiceDonut } from "@/components/share-of-voice-donut";
 import { TrendChart } from "@/components/trend-chart";
 import { useLanguage } from "@/lib/language-context";
+import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
+import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
+import { computeShareOfVoice } from "@/lib/visibility-stats";
+import { useMemo } from "react";
 
 export const Route = createFileRoute("/_authed/app/$brand/share-of-voice")({
 	head: ({ matches, match }) => {
@@ -62,6 +66,7 @@ function ShareOfVoicePage() {
 	const isZh = language === "zh";
 
 	const { brand } = useBrand(brandId);
+	const activeBaseline = useActiveBaselineRun(brandId);
 	const availableModels = getAvailableModels(brand?.effectiveModels ?? []);
 	const modelParam = model === ALL_MODELS_VALUE ? undefined : model;
 
@@ -69,6 +74,86 @@ function ShareOfVoicePage() {
 	const availableTags = promptsSummary?.availableTags ?? [];
 
 	const { data, isLoading } = useShareOfVoice(brandId, { lookback, model: modelParam, tags });
+
+	// Compute baseline SOV data when baseline runs exist
+	const baselineData = useMemo(() => {
+		if (!activeBaseline.hasBaselineRuns) return null;
+		const { runData, metricsData } = activeBaseline;
+		const p0Summary = metricsData?.p0_summary;
+		const validQuestions =
+			p0Summary?.effective_sample_count ??
+			p0Summary?.planned_questions ??
+			runData?.valid_questions ??
+			0;
+		const sampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
+		const brandName = brand?.name || "Target Brand";
+
+		const allQuestions: any[] = metricsData?.questions || [];
+		const matchingQuestions = tags.length > 0
+			? allQuestions.filter((q) => tags.includes(q.dimension_name))
+			: allQuestions;
+
+		let brandMentions =
+			p0Summary?.broad_mention_count ??
+			p0Summary?.effective_mention_count ??
+			0;
+		const rawCompetitors: any[] = metricsData?.competitors || [];
+
+		if (tags.length > 0 && allQuestions.length > 0) {
+			brandMentions = matchingQuestions.filter((q) => q.effective_mention).length;
+		}
+
+		const competitorList = rawCompetitors.map((c: any) => {
+			let mentions = c.p0_mention_count ?? c.overall_mention_count ?? 0;
+			if (tags.length > 0 && Array.isArray(c.dimension_hits)) {
+				mentions = c.dimension_hits
+					.filter((d: any) => tags.includes(d.dimension_name || d.name))
+					.reduce((sum: number, d: any) => sum + (d.mention_count || d.count || 0), 0);
+			}
+			return { name: c.name, mentions };
+		});
+
+		const sovResult = computeShareOfVoice(
+			{ name: brandName, mentions: brandMentions },
+			competitorList,
+		);
+
+		const entries = sovResult.entries.map((e) => ({
+			...e,
+			prompts: e.mentions,
+		}));
+
+		return {
+			brandName,
+			totalRuns: validQuestions,
+			totalMentions: sovResult.total,
+			entries,
+			brandShare: sovResult.brandShare,
+			shareTimeSeries: sampleDate
+				? [{ date: sampleDate, share: sovResult.brandShare !== null ? Math.round(sovResult.brandShare * 100) : null }]
+				: [],
+		};
+	}, [activeBaseline, brand?.name, tags]);
+
+	const baselineTags = useMemo(() => {
+		const questions: any[] = activeBaseline.metricsData?.questions || [];
+		const set = new Set<string>();
+		for (const q of questions) {
+			if (q.dimension_name) set.add(q.dimension_name);
+		}
+		return Array.from(set);
+	}, [activeBaseline.metricsData?.questions]);
+
+	const baselineModels = useMemo(() => {
+		return [activeBaseline.runData?.model_name || "doubao-pro-32k"];
+	}, [activeBaseline.runData?.model_name]);
+
+	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
+	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
+	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveLoading = activeBaseline.hasBaselineRuns
+		? activeBaseline.isLoading && !activeBaseline.runData
+		: isLoading && !data;
 
 	const infoContent = (
 		<>
@@ -80,11 +165,11 @@ function ShareOfVoicePage() {
 		</>
 	);
 
-	const maxMentions = data?.entries.reduce((m, e) => Math.max(m, e.mentions), 0) ?? 0;
-	const barColors = shareOfVoiceColorMap(data?.entries ?? []);
+	const maxMentions = effectiveData?.entries.reduce((m, e) => Math.max(m, e.mentions), 0) ?? 0;
+	const barColors = shareOfVoiceColorMap(effectiveData?.entries ?? []);
 
 	let content: React.ReactNode;
-	if (isLoading && !data) {
+	if (effectiveLoading) {
 		content = (
 			<Card>
 				<CardHeader>
@@ -97,20 +182,34 @@ function ShareOfVoicePage() {
 				</CardContent>
 			</Card>
 		);
-	} else if (!data || data.totalRuns === 0 || data.entries.length === 0) {
+	} else if (!effectiveData || effectiveData.totalRuns === 0 || effectiveData.entries.length === 0) {
 		content = (
 			<Card>
 				<CardContent className="pt-6">
 					<div className="text-muted-foreground text-center py-8">
-						No mention data yet for the selected filters. Mentions appear once your prompts have been run.
+						{isZh
+							? "当前筛选条件下暂无评测数据。发起诊断任务后将在此展现。"
+							: "No mention data yet for the selected filters. Mentions appear once your prompts have been run."}
+					</div>
+				</CardContent>
+			</Card>
+		);
+	} else if (maxMentions === 0 || effectiveData.entries.every((e) => e.mentions === 0)) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-muted-foreground text-center py-8">
+						{isZh
+							? "本轮未产生品牌或竞品有效提及，声量份额不可计算（总提及数为 0）。"
+							: "No brand or competitor mentions recorded in this diagnostic run. Share of voice cannot be computed."}
 					</div>
 				</CardContent>
 			</Card>
 		);
 	} else {
 		// Whole-window cumulative raw SOV to strictly align with reports (e.g. 70.6%)
-		const cumulativeShare = data.brandShare !== null && data.brandShare !== undefined
-			? (data.brandShare * 100).toFixed(1)
+		const cumulativeShare = effectiveData.brandShare !== null && effectiveData.brandShare !== undefined
+			? (effectiveData.brandShare * 100).toFixed(1)
 			: null;
 		content = (
 			<TooltipProvider delayDuration={150}>
@@ -120,7 +219,13 @@ function ShareOfVoicePage() {
 							<div className="flex items-center justify-between">
 								<CardTitle>Share of Voice</CardTitle>
 								<Badge variant="secondary" className="text-xs font-normal">
-									{isZh ? "近 30 天累计" : "Last 30 days cumulative"}
+									{isZh
+										? activeBaseline.hasBaselineRuns
+											? "当前诊断任务"
+											: "近 30 天累计"
+										: activeBaseline.hasBaselineRuns
+											? "Current diagnostic run"
+											: "Last 30 days cumulative"}
 								</Badge>
 							</div>
 						</CardHeader>
@@ -130,11 +235,16 @@ function ShareOfVoicePage() {
 									{cumulativeShare !== null ? `${cumulativeShare}%` : "—"}
 								</div>
 								<p className="text-sm text-muted-foreground mt-1 max-w-[18rem]">
-									{data.brandName} across {data.totalRuns.toLocaleString()} runs
-									{data.entries.length > 1 ? ` and ${data.entries.length - 1} competitors` : ""}.
+									{effectiveData.brandName} across {effectiveData.totalRuns.toLocaleString()}{" "}
+									{isZh ? "道评测题" : "runs"}
+									{effectiveData.entries.length > 1
+										? isZh
+											? ` 及 ${effectiveData.entries.length - 1} 家对比竞品`
+											: ` and ${effectiveData.entries.length - 1} competitors`
+										: ""}.
 								</p>
 							</div>
-							<ShareOfVoiceDonut entries={data.entries} />
+							<ShareOfVoiceDonut entries={effectiveData.entries} />
 						</CardContent>
 					</Card>
 
@@ -143,13 +253,19 @@ function ShareOfVoicePage() {
 							<div className="flex items-center justify-between">
 								<CardTitle>Share of Voice Trends</CardTitle>
 								<Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-									{isZh ? "逐日截面趋势 (LVCF)" : "Daily snapshot trend (LVCF)"}
+									{isZh
+										? activeBaseline.hasBaselineRuns
+											? "单点截面"
+											: "逐日截面趋势 (LVCF)"
+										: activeBaseline.hasBaselineRuns
+											? "Single snapshot"
+											: "Daily snapshot trend (LVCF)"}
 								</Badge>
 							</div>
 						</CardHeader>
 						<CardContent>
 							<TrendChart
-								data={data.shareTimeSeries.map((p) => ({ date: p.date, value: p.share }))}
+								data={effectiveData.shareTimeSeries.map((p) => ({ date: p.date, value: p.share }))}
 								label="Share of Voice"
 								color="#2563eb"
 								className="aspect-auto h-[180px] w-full"
@@ -180,7 +296,7 @@ function ShareOfVoicePage() {
 								</TableRow>
 							</TableHeader>
 							<TableBody>
-								{data.entries.map((e, i) => (
+								{effectiveData.entries.map((e, i) => (
 									<TableRow key={e.name} className={e.isBrand ? "bg-muted/40" : undefined}>
 										<TableCell className="text-muted-foreground tabular-nums">{i + 1}</TableCell>
 										<TableCell className="font-medium">
@@ -227,15 +343,27 @@ function ShareOfVoicePage() {
 			subtitle="How often AI engines mention you versus your competitors."
 			infoContent={infoContent}
 		>
-			<FilterSection>
-				<FilterBar
-					availableTags={availableTags}
-					availableModels={availableModels}
-					showSearch={false}
-					showModelSelector
-				/>
-			</FilterSection>
-			<div className="space-y-6">{content}</div>
+			<div className="space-y-6">
+				{activeBaseline.hasBaselineRuns && (
+					<DiagnosisRunBanner
+						activeRunId={activeBaseline.activeRunId}
+						runsList={activeBaseline.runsList}
+						runData={activeBaseline.runData}
+						metricsData={activeBaseline.metricsData}
+						onSelectRun={activeBaseline.selectRun}
+						brandId={brandId}
+					/>
+				)}
+				<FilterSection>
+					<FilterBar
+						availableTags={effectiveTags}
+						availableModels={effectiveModels}
+						showSearch={false}
+						showModelSelector
+					/>
+				</FilterSection>
+				<div className="space-y-6">{content}</div>
+			</div>
 		</PageHeader>
 	);
 }
