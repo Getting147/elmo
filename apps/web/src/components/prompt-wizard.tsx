@@ -36,6 +36,7 @@ import {
 	type ResearchDraftPayload,
 	triggerResearch,
 } from "@/lib/brand-research-client";
+import { useLanguage } from "@/lib/language-context";
 import { trackEvent } from "@/lib/posthog";
 import { safeUUID } from "@/lib/uuid";
 
@@ -72,27 +73,31 @@ const EditableTagsInput = memo(
 		onValueChange: (value: string[]) => void;
 		placeholder?: string;
 		maxItems?: number;
-	}) => (
-		<div className="space-y-2">
-			<TagsInput
-				value={items}
-				onValueChange={onValueChange}
-				placeholder={placeholder}
-				searchPlaceholder={placeholder}
-				maxItems={maxItems}
-			/>
-			<p className="text-xs text-muted-foreground">
-				<strong>
-					{items.length}/{maxItems}
-				</strong>{" "}
-				{items.length >= maxItems ? "items added. Remove an item to add a new one." : "items entered."}
-			</p>
-		</div>
-	),
+	}) => {
+		const { t } = useLanguage();
+		return (
+			<div className="space-y-2" data-no-i18n>
+				<TagsInput
+					value={items}
+					onValueChange={onValueChange}
+					placeholder={placeholder}
+					searchPlaceholder={placeholder}
+					maxItems={maxItems}
+				/>
+				<p className="text-xs text-muted-foreground">
+					<strong>
+						{items.length}/{maxItems}
+					</strong>{" "}
+					{items.length >= maxItems ? t.itemsAddedMax : t.itemsEntered}
+				</p>
+			</div>
+		);
+	},
 );
 EditableTagsInput.displayName = "EditableTagsInput";
 
 export default function PromptWizard({ onComplete }: PromptWizardProps) {
+	const { language, t } = useLanguage();
 	const { brand } = useBrand();
 	const queryClient = useQueryClient();
 	const router = useRouter();
@@ -218,14 +223,14 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			}
 		}
 		try {
-			const res = await triggerResearch(brand.id, brand.website, isRetry, oldDraftId || undefined);
+			const res = await triggerResearch(brand.id, brand.website, isRetry, oldDraftId || undefined, language);
 			setDraftId(res.draftId);
 			await queryClient.refetchQueries({ queryKey: ["research-draft", res.draftId] });
 		} catch (err) {
-			setError(err instanceof Error ? err.message : "Research request failed");
+			setError(err instanceof Error ? err.message : (language === "zh" ? "调研请求失败" : "Research request failed"));
 			setPhase("idle");
 		}
-	}, [brand?.website, brand?.id, error, draftId, queryClient]);
+	}, [brand?.website, brand?.id, error, draftId, language, queryClient]);
 
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({
@@ -249,7 +254,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	useEffect(() => {
 		if (phase !== "analyzing" || !draftData) return;
 		if (draftData.researchStatus === "failed" || draftData.state === "failed") {
-			setError(draftData.error || "Brand research failed. Please try again.");
+			setError(draftData.error || t.researchFailed);
 			setPhase("idle");
 			return;
 		}
@@ -263,17 +268,21 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				product_line_count: draftData.payload.productLines?.confirmed?.length || 0,
 			});
 		}
-	}, [phase, draftData, brand?.name, brand?.website]);
+	}, [phase, draftData, brand?.name, brand?.website, t.researchFailed]);
 
 	// Give up on a stuck research instead of polling forever.
 	useEffect(() => {
 		if (phase !== "analyzing") return;
 		const timer = window.setTimeout(
-			() => stopAnalyzing("Brand research timed out. Please try again."),
+			() => stopAnalyzing(t.researchTimedOut),
 			ANALYZE_TIMEOUT_MS,
 		);
 		return () => window.clearTimeout(timer);
-	}, [phase, stopAnalyzing]);
+	}, [phase, stopAnalyzing, t.researchTimedOut]);
+
+	const categoryOptions = useMemo(() => {
+		return data.productLines.map((l) => l.name.trim()).filter(Boolean);
+	}, [data.productLines]);
 
 	const previewCounts = useMemo(() => {
 		const enabled = data.prompts.filter((p) => p.enabled && p.value.trim().length > 0).length;
@@ -356,10 +365,18 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	if (phase === "idle" || phase === "analyzing") {
 		return (
-			<div className="max-w-2xl mx-auto space-y-3">
+			<div className="max-w-2xl mx-auto space-y-3" data-no-i18n>
 				<p className="text-sm text-muted-foreground">
-					We'll analyze <strong>{brand?.website}</strong> using web search to suggest competitors, additional
-					domains/aliases, and a starter set of AI prompts to track.
+					{language === "zh" ? (
+						<>
+							系统将通过网页搜索深入分析 <strong>{brand?.website}</strong>，推荐竞品、相关域名/别名，并生成一套初始 AI 评测提示词。
+						</>
+					) : (
+						<>
+							We'll analyze <strong>{brand?.website}</strong> using web search to suggest competitors, additional
+							domains/aliases, and a starter set of AI prompts to track.
+						</>
+					)}
 				</p>
 				{error && (
 					<div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
@@ -377,21 +394,21 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 							<>
 								<Loader2 className="h-4 w-4 animate-spin" />
 								{draftData?.researchStatus === "queued"
-									? "Queued for research (排队中)…"
+									? t.queuedForResearch
 									: draftData?.researchStatus === "running"
-										? "Analyzing brand website (分析中)…"
-										: "Analyzing brand…"}
+										? t.analyzingBrandWebsite
+										: t.analyzingBrand}
 							</>
 						) : (
 							<>
 								<Play className="h-4 w-4" />
-								{error ? "Retry research (重新调研)" : "Analyze brand"}
+								{error ? t.retryResearch : t.analyzeBrandBtn}
 							</>
 						)}
 					</Button>
 					{phase === "analyzing" && (
 						<Button variant="outline" onClick={() => stopAnalyzing(null)} className="cursor-pointer">
-							Cancel
+							{t.cancelBtn}
 						</Button>
 					)}
 				</div>
@@ -400,58 +417,58 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	}
 
 	return (
-		<div className="max-w-2xl mx-auto space-y-6">
+		<div className="max-w-2xl mx-auto space-y-6" data-no-i18n>
 			<div className="space-y-2">
-				<h2 className="text-2xl font-bold">Brand details</h2>
+				<h2 className="text-2xl font-bold">{t.brandDetailsTitle}</h2>
 				<p className="text-muted-foreground">
-					Confirm the brand identity, additional domains, and aliases used for tracking.
+					{t.brandDetailsSubtitle}
 				</p>
 				<div className="space-y-3">
 					<div>
-						<p className="text-xs text-muted-foreground">Brand name</p>
-						<Input value={data.brandName} onChange={(e) => updateBrandName(e.target.value)} placeholder="Brand name" />
+						<p className="text-xs text-muted-foreground">{t.brandNameLabel}</p>
+						<Input value={data.brandName} onChange={(e) => updateBrandName(e.target.value)} placeholder={t.brandNamePlaceholder} />
 					</div>
 					<div>
-						<p className="text-xs text-muted-foreground">One-line positioning</p>
+						<p className="text-xs text-muted-foreground">{t.oneLinePositioningLabel}</p>
 						<Input
 							value={data.summary}
 							onChange={(e) => updateSummary(e.target.value)}
-							placeholder="What the brand is, in one sentence"
+							placeholder={t.oneLinePositioningPlaceholder}
 						/>
 					</div>
 					<div>
-						<p className="text-xs text-muted-foreground">Description</p>
+						<p className="text-xs text-muted-foreground">{t.descriptionLabel}</p>
 						<Textarea
 							value={data.description}
 							onChange={(e) => updateDescription(e.target.value)}
-							placeholder="Short company / product introduction"
+							placeholder={t.descriptionPlaceholder}
 							rows={3}
 						/>
 					</div>
 					<div>
-						<p className="text-xs text-muted-foreground">Website URL</p>
+						<p className="text-xs text-muted-foreground">{t.websiteUrlLabel}</p>
 						<Input
 							type="url"
 							value={data.website}
 							onChange={(e) => updateWebsite(e.target.value)}
-							placeholder="https://example.com"
+							placeholder={t.websiteUrlPlaceholder}
 						/>
 					</div>
 					<div>
-						<p className="text-xs text-muted-foreground">Additional domains</p>
+						<p className="text-xs text-muted-foreground">{t.additionalDomainsLabel}</p>
 						<EditableTagsInput
 							items={data.additionalDomains}
 							onValueChange={updateAdditionalDomains}
-							placeholder="Add domain..."
+							placeholder={t.additionalDomainsPlaceholder}
 							maxItems={10}
 						/>
 					</div>
 					<div>
-						<p className="text-xs text-muted-foreground">Aliases</p>
+						<p className="text-xs text-muted-foreground">{t.aliasesLabel}</p>
 						<EditableTagsInput
 							items={data.aliases}
 							onValueChange={updateAliases}
-							placeholder="Add alias..."
+							placeholder={t.aliasesPlaceholder}
 							maxItems={10}
 						/>
 					</div>
@@ -462,9 +479,9 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			<div className="space-y-3">
 				<div>
-					<h2 className="text-2xl font-bold">Product lines</h2>
+					<h2 className="text-2xl font-bold">{t.productLinesTitle}</h2>
 					<p className="text-muted-foreground">
-						Product lines and SKUs your content covers. Every SKU keeps an evidence URL from the website scan.
+						{t.productLinesSubtitle}
 					</p>
 				</div>
 				<ProductLinesEditor
@@ -480,8 +497,8 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			<div className="space-y-3">
 				<div>
-					<h2 className="text-2xl font-bold">Competitors</h2>
-					<p className="text-muted-foreground">Companies you want tracked alongside your brand.</p>
+					<h2 className="text-2xl font-bold">{t.competitorsSectionTitle}</h2>
+					<p className="text-muted-foreground">{t.competitorsSectionSubtitle}</p>
 				</div>
 				<CompetitorsEditor competitors={data.competitors} onChange={updateCompetitors} disabled={isSaving} />
 			</div>
@@ -490,13 +507,17 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			<div className="space-y-3">
 				<div>
-					<h2 className="text-2xl font-bold">Prompts</h2>
+					<h2 className="text-2xl font-bold">{t.promptsSectionTitle}</h2>
 					<p className="text-muted-foreground">
-						Pick which AI tracking prompts to start with. Untick any you don't want, edit tags, or add your own at the
-						bottom.
+						{t.promptsSectionSubtitle}
 					</p>
 				</div>
-				<PromptsListEditor prompts={data.prompts} onChange={updatePrompts} showSystemTags={false} />
+				<PromptsListEditor
+					prompts={data.prompts}
+					onChange={updatePrompts}
+					showSystemTags={false}
+					categoryOptions={categoryOptions}
+				/>
 			</div>
 
 			{submitError && (
@@ -513,11 +534,11 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			>
 				{isSaving ? (
 					<>
-						<Loader2 className="h-4 w-4 animate-spin" /> Saving…
+						<Loader2 className="h-4 w-4 animate-spin" /> {t.savingBtn}
 					</>
 				) : (
 					<>
-						<Rocket className="h-4 w-4" /> Start tracking ({previewCounts.totalNew} new prompts)
+						<Rocket className="h-4 w-4" /> {language === "zh" ? `开始监控（${previewCounts.totalNew} 条新提示词）` : `Start tracking (${previewCounts.totalNew} new prompts)`}
 					</>
 				)}
 			</Button>
@@ -526,14 +547,14 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 }
 
 /** suggestion/payload → WizardData（review 编辑区初始值）。模块级纯函数便于测试。 */
-function suggestionToWizardData(
+export function suggestionToWizardData(
 	suggestion: ResearchDraftPayload,
 	brandNameFallback: string,
 	websiteFallback: string,
 ): WizardData {
 	const productLines = suggestion.productLines?.confirmed ?? [];
 	return {
-		brandName: suggestion.brandName || brandNameFallback,
+		brandName: brandNameFallback || suggestion.brandName || "",
 		website: websiteFallback || suggestion.website || "",
 		additionalDomains: suggestion.additionalDomains || [],
 		aliases: suggestion.aliases || [],

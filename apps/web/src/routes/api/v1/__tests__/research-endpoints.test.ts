@@ -149,6 +149,49 @@ describe("F1 POST /api/v1/brands/{id}/research", () => {
 		});
 	});
 
+	it("透传合法 language 参数 (zh / en)，非法值返回 400", async () => {
+		triggerResearchMock.mockClear();
+
+		// zh 透传
+		const resZh = await getHandler(ResearchRoute, "POST")({
+			request: makeRequest("POST", "/brands/b1/research", {
+				website: "https://x.com",
+				language: "zh",
+			}),
+			params: { brandId: "b1" },
+		});
+		expect(resZh.status).toBe(200);
+		expect(triggerResearchMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ brandId: "b1", website: "https://x.com", language: "zh" }),
+		);
+
+		// en 透传
+		const resEn = await getHandler(ResearchRoute, "POST")({
+			request: makeRequest("POST", "/brands/b1/research", {
+				website: "https://x.com",
+				language: "en",
+			}),
+			params: { brandId: "b1" },
+		});
+		expect(resEn.status).toBe(200);
+		expect(triggerResearchMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ brandId: "b1", website: "https://x.com", language: "en" }),
+		);
+
+		// 非法 language 校验失败
+		const resInvalid = await getHandler(ResearchRoute, "POST")({
+			request: makeRequest("POST", "/brands/b1/research", {
+				website: "https://x.com",
+				language: "fr",
+			}),
+			params: { brandId: "b1" },
+		});
+		expect(resInvalid.status).toBe(400);
+		const body = (await resInvalid.json()) as { error: string; message: string };
+		expect(body.error).toBe("Validation Error");
+		expect(body.message).toContain("language");
+	});
+
 	it("website 非法 URL → 400 Validation Error", async () => {
 		const res = await getHandler(
 			ResearchRoute,

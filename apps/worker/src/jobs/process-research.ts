@@ -17,9 +17,11 @@ import type { Job } from "pg-boss";
 export interface ProcessResearchJobData {
 	draftId: string;
 	brandId: string;
+	brandName?: string;
 	website: string;
 	additionalDomains: string[];
 	input?: {
+		language?: "zh" | "en";
 		maxCompetitors?: number;
 		maxPrompts?: number;
 		maxProducts?: number;
@@ -93,6 +95,8 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 
 		const suggestion = await analyzeBrand({
 			website,
+			brandName: job.data.brandName,
+			language: input?.language ?? "zh",
 			maxCompetitors: input?.maxCompetitors ?? 10,
 			maxPrompts: input?.maxPrompts ?? 30,
 			maxProducts: input?.maxProducts ?? 10,
@@ -150,5 +154,6 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 					eq(draftResearch.state, "pending_review"),
 				),
 			);
+		await markFailed({ id: draftId, error: errorMsg });
 	}
 }

@@ -260,4 +260,90 @@ describe("analyzeBrand", () => {
 		expect(result.competitors).toHaveLength(3);
 		expect(result.suggestedPrompts).toHaveLength(5);
 	});
+
+	it("B05: 无语言参数时默认 zh，提示词包含中文输出要求；显式 en 时指定英文要求", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValue({
+			brandName: "精工建",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			suggestedPrompts: [],
+		});
+
+		// 默认缺省 language -> zh
+		await analyzeBrand({ website: "szjgfw.com", brandName: "精工建" });
+		const defaultPrompt = vi.mocked(runStructuredResearchPrompt).mock.calls[0]?.[0];
+		expect(defaultPrompt).toContain("OUTPUT LANGUAGE REQUIREMENT: All outputs (summary, description, product line names, SKU oneLiner, suggestedPrompts, category, tags) MUST be in Simplified Chinese (简体中文)");
+
+		// 显式 en
+		vi.mocked(runStructuredResearchPrompt).mockClear();
+		await analyzeBrand({ website: "szjgfw.com", brandName: "精工建", language: "en" });
+		const enPrompt = vi.mocked(runStructuredResearchPrompt).mock.calls[0]?.[0];
+		expect(enPrompt).toContain("OUTPUT LANGUAGE REQUIREMENT: All outputs must be in English");
+	});
+
+	it("B05: 中文标签与分类建议正确保留，category 转为 dim: 标签且不擦除中文字符", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "深圳市精工建轻钢房屋有限公司",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [
+				{ name: "中建集成房屋", domains: ["cscec-ih.com"], aliases: ["中建集成"] },
+				{ name: "远大住工", domains: ["bhome.com.cn"], aliases: [] },
+			],
+			productLines: [
+				{
+					name: "轻钢房屋",
+					skus: [],
+				},
+				{
+					name: "集装箱房",
+					skus: [],
+				},
+			],
+			suggestedPrompts: [
+				{
+					prompt: "轻钢别墅造价多少钱一平米",
+					category: "轻钢房屋",
+					tags: ["造价预算", "选型指南"],
+				},
+				{
+					prompt: "工程营地集装箱房定做厂家",
+					category: "集装箱房",
+					tags: ["dim:集装箱房", "厂家定制"],
+				},
+				{
+					prompt: "装配式建筑政策补贴标准",
+					category: null,
+					tags: ["政策解读"],
+				},
+			],
+		});
+
+		const result = await analyzeBrand({
+			website: "szjgfw.com",
+			brandName: "深圳市精工建轻钢房屋有限公司",
+			language: "zh",
+		});
+
+		// 品牌名保持传入的中文名称
+		expect(result.brandName).toBe("深圳市精工建轻钢房屋有限公司");
+
+		// 中文竞品正常保留
+		expect(result.competitors).toHaveLength(2);
+		expect(result.competitors[0].name).toBe("中建集成房屋");
+		expect(result.competitors[0].aliases).toEqual(["中建集成"]);
+
+		// 提示词：通用品类名称（轻钢房屋）不导致“轻钢别墅造价多少钱一平米”被误杀
+		expect(result.suggestedPrompts).toHaveLength(3);
+		expect(result.suggestedPrompts[0].prompt).toBe("轻钢别墅造价多少钱一平米");
+		// 校验 category 转换并前置为 dim:轻钢房屋
+		expect(result.suggestedPrompts[0].tags).toEqual(["dim:轻钢房屋", "造价预算", "选型指南"]);
+
+		// 已有 dim: 标签的不重复添加
+		expect(result.suggestedPrompts[1].tags).toEqual(["dim:集装箱房", "厂家定制"]);
+
+		// category 为 null 的保持普通标签，不硬塞默认分类
+		expect(result.suggestedPrompts[2].tags).toEqual(["政策解读"]);
+	});
 });

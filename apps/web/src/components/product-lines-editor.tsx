@@ -13,6 +13,7 @@ import { Textarea } from "@workspace/ui/components/textarea";
 import { AlertCircle, Package, Plus, Trash2 } from "lucide-react";
 
 import { safeUUID } from "@/lib/uuid";
+import { useLanguage } from "@/lib/language-context";
 
 export interface EditableSku {
 	_key: string;
@@ -58,6 +59,7 @@ export const EVIDENCE_REASON_LABELS: Record<string, string> = {
 	URL_NOT_IN_CRAWL: "引用页面不在抓取范围内，无法核对",
 	NAME_NOT_FOUND: "产品名称未能在引用页面中找到",
 	MISSING_URL: "缺少证据链接，无法核对",
+	NO_SKU_DETAIL: "仅泛称或分类，未包含具体型号与证据",
 };
 
 /**
@@ -66,7 +68,7 @@ export const EVIDENCE_REASON_LABELS: Record<string, string> = {
  */
 export function formatEvidenceReason(reason: string): string {
 	return reason.replace(
-		/\b(URL_NOT_IN_CRAWL|NAME_NOT_FOUND|MISSING_URL)\b/g,
+		/\b(URL_NOT_IN_CRAWL|NAME_NOT_FOUND|MISSING_URL|NO_SKU_DETAIL)\b/g,
 		(code) => EVIDENCE_REASON_LABELS[code] ?? code,
 	);
 }
@@ -100,6 +102,8 @@ export function ProductLinesEditor({
 	onIgnoreUnverified,
 	disabled,
 }: ProductLinesEditorProps) {
+	const { t } = useLanguage();
+
 	const updateLine = (index: number, patch: Partial<EditableProductLine>) => {
 		onChange(lines.map((l, i) => (i === index ? { ...l, ...patch } : l)));
 	};
@@ -122,10 +126,10 @@ export function ProductLinesEditor({
 		);
 
 	return (
-		<div className="space-y-4">
+		<div className="space-y-4" data-no-i18n>
 			{lines.length === 0 && (
 				<p className="text-sm text-muted-foreground">
-					No product lines yet. Add one below or keep this section empty.
+					{t.noProductLines}
 				</p>
 			)}
 
@@ -138,7 +142,7 @@ export function ProductLinesEditor({
 							<Input
 								value={line.name}
 								onChange={(e) => updateLine(lineIndex, { name: e.target.value })}
-								placeholder="Product line name (e.g. Refrigerators)"
+								placeholder={t.productLineNamePlaceholder}
 								disabled={disabled}
 								className="flex-1"
 							/>
@@ -148,7 +152,7 @@ export function ProductLinesEditor({
 								onClick={() => removeLine(lineIndex)}
 								disabled={disabled}
 								className="cursor-pointer"
-								title="Remove product line"
+								title={t.removeProductLine}
 							>
 								<Trash2 className="h-4 w-4" />
 							</Button>
@@ -156,7 +160,7 @@ export function ProductLinesEditor({
 
 						{!skusValid && (
 							<p className="text-xs text-amber-600">
-								Every SKU needs a name and a valid evidence URL before it can be saved.
+								{t.skuRequirementError}
 							</p>
 						)}
 
@@ -168,14 +172,14 @@ export function ProductLinesEditor({
 											<Input
 												value={sku.name}
 												onChange={(e) => updateSku(lineIndex, skuIndex, { name: e.target.value })}
-												placeholder="SKU / model name"
+												placeholder={t.skuNamePlaceholder}
 												disabled={disabled}
 												className="flex-1"
 											/>
 											<Input
 												value={sku.model ?? ""}
 												onChange={(e) => updateSku(lineIndex, skuIndex, { model: e.target.value })}
-												placeholder="Model (optional)"
+												placeholder={t.skuModelPlaceholder}
 												disabled={disabled}
 												className="w-40"
 											/>
@@ -185,7 +189,7 @@ export function ProductLinesEditor({
 												onClick={() => removeSku(lineIndex, skuIndex)}
 												disabled={disabled}
 												className="cursor-pointer"
-												title="Remove SKU"
+												title={t.removeProductLine}
 											>
 												<Trash2 className="h-4 w-4" />
 											</Button>
@@ -193,7 +197,7 @@ export function ProductLinesEditor({
 										<Textarea
 											value={sku.oneLiner}
 											onChange={(e) => updateSku(lineIndex, skuIndex, { oneLiner: e.target.value })}
-											placeholder="One-line feature summary"
+											placeholder={t.skuOneLinerPlaceholder}
 											disabled={disabled}
 											rows={1}
 										/>
@@ -201,7 +205,7 @@ export function ProductLinesEditor({
 											type="url"
 											value={sku.evidenceUrl}
 											onChange={(e) => updateSku(lineIndex, skuIndex, { evidenceUrl: e.target.value })}
-											placeholder="https://… evidence page"
+											placeholder={t.skuEvidenceUrlPlaceholder}
 											disabled={disabled}
 										/>
 									</div>
@@ -210,23 +214,23 @@ export function ProductLinesEditor({
 						)}
 
 						<Button variant="outline" size="sm" onClick={() => addSku(lineIndex)} disabled={disabled} className="cursor-pointer">
-							<Plus className="h-3 w-3" /> Add SKU
+							<Plus className="h-3 w-3" /> {t.addSkuBtn}
 						</Button>
 					</div>
 				);
 			})}
 
 			<Button variant="outline" size="sm" onClick={addLine} disabled={disabled} className="cursor-pointer">
-				<Plus className="h-3 w-3" /> Add product line
+				<Plus className="h-3 w-3" /> {t.addProductLineBtn}
 			</Button>
 
 			{unverified && unverified.length > 0 && (
 				<div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
 					<p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-						Suggestions that could not be verified against the website
+						{t.unverifiedTitle}
 					</p>
 					<p className="text-xs text-amber-700 dark:text-amber-300">
-						These were left out. Ignore them, or add them manually above with a valid evidence URL.
+						{t.unverifiedSubtitle}
 					</p>
 					{unverified.map((u) => (
 						<div key={u._key} className="flex items-start justify-between gap-2 rounded-sm border border-amber-200 bg-white/60 p-2 dark:border-amber-900 dark:bg-amber-950/20">
@@ -246,7 +250,7 @@ export function ProductLinesEditor({
 									disabled={disabled}
 									className="cursor-pointer"
 								>
-									Ignore
+									{t.ignoreBtn}
 								</Button>
 							)}
 						</div>

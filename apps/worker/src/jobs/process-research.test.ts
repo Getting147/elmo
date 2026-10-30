@@ -36,6 +36,18 @@ vi.mock("@workspace/lib/db/schema", () => ({
 
 vi.mock("@workspace/lib/db/db", () => ({
 	db: {
+		query: {
+			draftResearch: {
+				findFirst: vi.fn().mockImplementation(() =>
+					Promise.resolve({
+						id: "d1",
+						createdAt: new Date(Date.now() + 60000),
+						researchStatus: "queued",
+						payload: {},
+					}),
+				),
+			},
+		},
 		// update().set(data).where(cond).returning(select) 链 — 每次调用独立 builder
 		update: () => ({
 			set: (data: unknown) => {
@@ -146,5 +158,24 @@ describe("c3-job-fix5 processResearchJob — 4 态转移", () => {
 		const map = passed.crawledPageTexts as Map<string, string>;
 		expect(map.get("home")).toBe("text one");
 		expect(map.get("about")).toBe("text two");
+	});
+
+	it("⑥ B05: brandName 与 language 正确传递给 analyzeBrand", async () => {
+		analyzeBrandMock.mockResolvedValue({ aliases: [] } as never);
+		await processResearchJob([
+			makeJob({
+				brandName: "深圳市精工建轻钢房屋有限公司",
+				input: {
+					language: "zh",
+				},
+			}),
+		]);
+
+		expect(analyzeBrandMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				brandName: "深圳市精工建轻钢房屋有限公司",
+				language: "zh",
+			}),
+		);
 	});
 });
