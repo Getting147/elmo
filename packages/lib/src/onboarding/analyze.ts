@@ -57,6 +57,13 @@ const promptSchema = z.object({
 		.describe(
 			"Short search-style fragment, lowercase, under ~12 words. NOT a full sentence — the kind of thing people actually type into ChatGPT.",
 		),
+	category: z
+		.string()
+		.nullable()
+		.optional()
+		.describe(
+			"Recommended business dimension or product line category for this prompt (e.g. '轻钢房屋', '模块化建筑'). Null if genuinely cross-business/generic.",
+		),
 	tags: z
 		.array(z.string())
 		.describe(`1-3 tags per prompt (ideally 1-2), drawn from the shared brand-tailored vocabulary. ${TAG_GUIDANCE}`),
@@ -193,6 +200,8 @@ export interface AnalyzeBrandOptions {
 	 */
 	website: string;
 	brandName?: string;
+	/** Output language: zh (Simplified Chinese, default) or en. */
+	language?: "zh" | "en";
 	/** 0 disables competitor generation entirely. */
 	maxCompetitors?: number;
 	/** 0 disables prompt generation entirely. */
@@ -241,12 +250,14 @@ export interface AnalysisContext {
 	maxProducts: number;
 	/** Epic A-2 (V1.0): evidence 校验用的抓取页文本 (url → preprocessed text) */
 	crawledPageTexts: Map<string, string>;
+	language?: "zh" | "en";
 }
 
 export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promise<AnalysisContext> {
 	const {
 		website,
 		brandName,
+		language = "zh",
 		maxCompetitors = DEFAULT_MAX_COMPETITORS,
 		maxPrompts = DEFAULT_MAX_PROMPTS,
 		maxProducts = 10,
@@ -293,6 +304,7 @@ export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promis
 		includeCompetitors: maxCompetitors > 0,
 		includePrompts: maxPrompts > 0,
 		includeProducts: maxProducts > 0,
+		language,
 	});
 
 	return {
@@ -306,6 +318,7 @@ export async function buildAnalysisContext(options: AnalyzeBrandOptions): Promis
 		maxPrompts,
 		maxProducts,
 		crawledPageTexts,
+		language,
 	};
 }
 
@@ -337,12 +350,12 @@ export async function analyzeBrand(options: AnalyzeBrandOptions): Promise<Onboar
 	return result;
 }
 
-/** Normalize an LLM-supplied tag to lowercase kebab-case. */
-function toKebabCase(tag: string): string {
-	return tag
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
+/** Normalize an LLM-supplied tag: trim, lowercase, preserve unicode/letters/digits and colon/hyphen/underscore. */
+function normalizeTag(tag: string): string {
+	const trimmed = tag.trim().toLowerCase();
+	return trimmed
+		.replace(/\s*:\s*/g, ":")
+		.replace(/[^\p{L}\p{N}:_-]+/gu, "-")
 		.replace(/^-+|-+$/g, "");
 }
 
@@ -386,6 +399,7 @@ function buildPrompt(args: {
 	includeCompetitors: boolean;
 	includePrompts: boolean;
 	includeProducts: boolean;
+	language?: "zh" | "en";
 }): string {
 	const excerptBlock = args.websiteExcerpt
 		? `\nText from ${args.analysisUrl}:\n---\n${args.websiteExcerpt}\n---\n`
@@ -401,6 +415,12 @@ function buildPrompt(args: {
 	const scopeNote = isSubPage(args.analysisUrl)
 		? `\nThis is one page on ${args.trackedDomain}, not the site root. If it covers a sub-brand, product line, or regional arm, scope the brand name, competitors, and prompts to THAT rather than to the parent company.\n`
 		: "";
+
+	const isZh = (args.language ?? "zh") === "zh";
+	const langInstruction = isZh
+		? `\nOUTPUT LANGUAGE REQUIREMENT: All outputs (summary, description, product line names, SKU oneLiner, suggestedPrompts, category, tags) MUST be in Simplified Chinese (简体中文). Do NOT translate Chinese corporate names into pinyin or English. Competitors: prioritize authentic Chinese enterprise names for Chinese competitors (e.g. "中建集成房屋", "远大住工", "中铁装配"), keep English names in aliases if verifiable.
+For suggestedPrompts: All prompts must be in natural Simplified Chinese that real Chinese users query in AI models (e.g. "轻钢别墅造价多少钱一平米", "集成房屋厂家哪家好"). Each prompt MUST include a 'category' specifying its business line/dimension (e.g. "轻钢房屋", "集成建筑") matching one of the product lines, or null if cross-business/generic.\n`
+		: `\nOUTPUT LANGUAGE REQUIREMENT: All outputs must be in English. Each prompt should specify a 'category' indicating its business category or product line dimension, or null if generic.\n`;
 
 	const skipNotes: string[] = [];
 	if (!args.includeCompetitors) skipNotes.push("Return an empty array for competitors.");
@@ -418,11 +438,11 @@ function buildPrompt(args: {
 		? ` Also produce a one-sentence 'summary' positioning the brand and a ~500-char 'description' of the business; and list up to ${DEFAULT_MAX_COMPETITORS_HINT} product lines, each with 1-10 SKUs.
 For productLines: ALWAYS output 2-3 real product lines (top-level categories, e.g. "Refrigerators", "Washing Machines"), each with 1-2 real SKUs. SKUs must be real models you are confident about — do not invent model numbers. Prefer an evidenceUrl (a page where the SKU actually appears, no query string) when you have one; if a SKU is confidently real but no exact page was retrievable, leave evidenceUrl null — it will be flagged for human confirmation rather than dropped. Never invent a URL. Product-line and model knowledge is common knowledge for established brands: output real lines/models even when the excerpt is thin — never omit the whole section for lack of a URL.
 PARTIAL LINES ARE VALID: if you are confident a brand makes a category (e.g. "Air Conditioners") but cannot name a specific real model, output the line with skus: [] (an empty list) — a category-level line is useful and will be flagged for human review; it is far better than skipping the line or emptying the whole productLines section.
-For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded).`
+For suggestedPrompts: ALL prompts must be UNBRANDED — never include the brand's own name, its aliases, or its proprietary product/SKU names (a branded prompt forces AI answers to mention the brand and inflates organic mention-rate). Use ONLY generic category/persona/use-case queries with descriptive non-proprietary terms, e.g. "best [category]", "best [category] for [persona]", "[category] vs alternatives", "where to buy [category]", "[category] with [feature] under [price]". Aim for a mix of short search-style fragments (under 12 words) and longer decision-style questions (15+ words, specific use case, still unbranded). Each prompt should recommend a business dimension in 'category'.`
 		: "";
 
 	return `Analyze the brand at ${args.analysisUrl}.
-
+${langInstruction}
 ${nameLine}
 ${scopeNote}${excerptBlock}
 Use web search to verify facts. Never invent information — return empty arrays only when information is genuinely unavailable.
@@ -530,7 +550,8 @@ function normalize(args: {
 		for (const line of raw.productLines ?? []) {
 			if (line && typeof line === "object") {
 				const lineObj = line as { name?: unknown; skus?: unknown };
-				if (typeof lineObj.name === "string") productNeedles.add(lineObj.name.toLowerCase());
+				// lineObj.name 是通用品类/业务线名称（如"Refrigerators"或"轻钢房屋"），而非专有专名；
+				// 仅专有 SKU 专名加入检测，防止通用品类搜索词被误杀
 				if (Array.isArray(lineObj.skus)) {
 					for (const sku of lineObj.skus) {
 						if (sku && typeof sku === "object" && typeof (sku as { name?: unknown }).name === "string") {
@@ -548,7 +569,13 @@ function normalize(args: {
 			if (!value || seen.has(value)) continue;
 			if (allNeedles.some((n) => value.includes(n))) continue; // contaminated → drop
 			seen.add(value);
-			const tags = uniqueLowercase((p.tags ?? []).map(toKebabCase).filter(Boolean)).slice(0, 3);
+			let tags = uniqueLowercase((p.tags ?? []).map(normalizeTag).filter(Boolean)).slice(0, 3);
+			const cleanCat = typeof p.category === "string" ? p.category.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim() : "";
+			const normCat = cleanCat ? normalizeTag(cleanCat) : "";
+			const catDim = normCat ? `dim:${normCat}` : null;
+			if (catDim && !tags.some((t) => t.startsWith("dim:") || t.startsWith("cat:"))) {
+				tags = [catDim, ...tags];
+			}
 			suggestedPrompts.push({ prompt: value, tags });
 		}
 	}

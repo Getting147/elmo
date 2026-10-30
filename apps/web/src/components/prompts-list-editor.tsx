@@ -24,6 +24,7 @@ import { Inbox, ListPlus, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { safeUUID } from "@/lib/uuid";
+import { useLanguage } from "@/lib/language-context";
 
 export interface EditablePrompt {
 	id?: string;
@@ -45,27 +46,78 @@ export function newPromptEntry(partial?: Partial<EditablePrompt>): EditablePromp
 	};
 }
 
+export function getPromptCategory(tags: string[]): string {
+	const match = tags.find((t) => t.startsWith("dim:") || t.startsWith("cat:"));
+	if (!match) return "";
+	return match.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim();
+}
+
+export function setPromptCategory(tags: string[], category: string): string[] {
+	const cleanTags = tags.filter((t) => !t.startsWith("dim:") && !t.startsWith("cat:"));
+	const stripped = category.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim();
+	if (stripped) {
+		cleanTags.push(`dim:${stripped}`);
+	}
+	return cleanTags;
+}
+
 interface PromptsListEditorProps {
 	prompts: EditablePrompt[];
 	onChange: (next: EditablePrompt[]) => void;
 	/** Show the read-only System Tags column. Default true. */
 	showSystemTags?: boolean;
+	/** Available category options for autocomplete (e.g. from product lines). */
+	categoryOptions?: string[];
 	/** `_key`s of rows edited since the last save, flagged with an accent rail
 	 *  so a change is findable in a list of up to {@link MAX_PROMPTS} rows. */
 	changedKeys?: ReadonlySet<string>;
 }
 
-export function PromptsListEditor({ prompts, onChange, showSystemTags = true, changedKeys }: PromptsListEditorProps) {
+export function PromptsListEditor({
+	prompts,
+	onChange,
+	showSystemTags = true,
+	categoryOptions,
+	changedKeys,
+}: PromptsListEditorProps) {
+	const { language, t } = useLanguage();
 	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+
+	const allCategoryOptions = useMemo(() => {
+		const set = new Set<string>(categoryOptions ?? []);
+		for (const p of prompts) {
+			const c = getPromptCategory(p.tags);
+			if (c) set.add(c);
+		}
+		return [...set].filter(Boolean);
+	}, [categoryOptions, prompts]);
 
 	const allTagOptions = useMemo(() => {
 		const set = new Set<string>();
-		for (const p of prompts) for (const t of p.tags) set.add(t);
+		for (const p of prompts) {
+			for (const t of p.tags) {
+				if (!t.startsWith("dim:") && !t.startsWith("cat:")) {
+					set.add(t);
+				}
+			}
+		}
 		return [...set].sort().map((t) => ({ value: t }));
 	}, [prompts]);
 
 	const update = (index: number, patch: Partial<EditablePrompt>) => {
 		onChange(prompts.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+	};
+	const handleCategoryChange = (index: number, newCat: string) => {
+		const nextTags = setPromptCategory(prompts[index].tags, newCat);
+		update(index, { tags: nextTags });
+	};
+	const handleCustomTagsChange = (index: number, newCustomTags: string[]) => {
+		const currentCategory = getPromptCategory(prompts[index].tags);
+		const nextTags = [...newCustomTags.filter((t) => !t.startsWith("dim:") && !t.startsWith("cat:"))];
+		if (currentCategory) {
+			nextTags.push(`dim:${currentCategory}`);
+		}
+		update(index, { tags: nextTags });
 	};
 	const add = () => {
 		if (prompts.length >= MAX_PROMPTS) return;
@@ -88,14 +140,28 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 		() => parseBulkPrompts(bulkText, { existing: filledValues, limit: MAX_PROMPTS }),
 		[bulkText, filledValues],
 	);
-	const bulkNotice = bulkText.trim().length > 0 ? describeSkipped(bulkPreview.skipped) : null;
+	const bulkNotice = useMemo(() => {
+		if (bulkText.trim().length === 0) return null;
+		const duplicates = bulkPreview.skipped.duplicateOfExisting.length + bulkPreview.skipped.duplicateInPaste.length;
+		const blanks = bulkPreview.skipped.blank;
+		if (duplicates === 0 && blanks === 0) return null;
+		if (language === "zh") {
+			const parts: string[] = [];
+			if (duplicates > 0) parts.push(`${duplicates} 条重复`);
+			if (blanks > 0) parts.push(`${blanks} 行空白`);
+			return `已跳过 ${parts.join("与")}。`;
+		}
+		return describeSkipped(bulkPreview.skipped);
+	}, [bulkText, bulkPreview.skipped, language]);
 
 	// Over capacity blocks the whole paste rather than quietly taking the lines
 	// that fit, so nobody submits a list believing all of it landed.
 	const overCapacity = bulkPreview.skipped.overCapacity.length;
 	const bulkError =
 		overCapacity > 0
-			? `This paste is ${overCapacity} prompt${overCapacity === 1 ? "" : "s"} over the ${MAX_PROMPTS} limit. Remove ${overCapacity === 1 ? "a line" : "some lines"} to continue.`
+			? language === "zh"
+				? `本次粘贴超出 ${overCapacity} 条提示词（最多 ${MAX_PROMPTS} 条）。请删除部分行后再继续。`
+				: `This paste is ${overCapacity} prompt${overCapacity === 1 ? "" : "s"} over the ${MAX_PROMPTS} limit. Remove ${overCapacity === 1 ? "a line" : "some lines"} to continue.`
 			: null;
 
 	const closeBulk = () => {
@@ -133,18 +199,24 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 
 	const validCount = prompts.filter((p) => p.enabled && p.value.trim().length > 0).length;
 
-	// Desktop layout only — column order is [select] [text] [system?] [tags] [switch].
+	// Desktop layout only — column order is [select] [text] [system?] [category] [tags] [switch].
 	// Mobile renders a stacked per-prompt block instead (no selection, no bulk).
 	const gridCols = showSystemTags
-		? "md:grid-cols-[2.25rem_minmax(0,1fr)_6rem_minmax(14rem,1fr)_2.75rem]"
-		: "md:grid-cols-[2.25rem_minmax(0,1fr)_minmax(14rem,1fr)_2.75rem]";
+		? "md:grid-cols-[2.25rem_minmax(0,1.6fr)_4.5rem_minmax(7.5rem,9.5rem)_minmax(7rem,1fr)_2.75rem]"
+		: "md:grid-cols-[2.25rem_minmax(0,1.8fr)_minmax(8rem,10.5rem)_minmax(8rem,1fr)_2.75rem]";
 
 	return (
-		<div className="space-y-4">
+		<div className="space-y-4" data-no-i18n>
+			<datalist id="prompt-category-options">
+				{allCategoryOptions.map((c) => (
+					<option key={c} value={c} />
+				))}
+			</datalist>
+
 			{liveSelectedCount > 0 && (
 				<div className="hidden md:flex flex-wrap items-center justify-between gap-x-2 gap-y-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
 					<span className="text-muted-foreground">
-						<strong className="text-foreground">{liveSelectedCount}</strong> selected
+						<strong className="text-foreground">{liveSelectedCount}</strong> {t.selectedCount}
 					</span>
 					<div className="flex items-center gap-2">
 						<Button
@@ -154,7 +226,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 							onClick={() => applyEnabledToSelection(true)}
 							className="cursor-pointer"
 						>
-							Enable
+							{t.enableBtn}
 						</Button>
 						<Button
 							type="button"
@@ -163,10 +235,10 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 							onClick={() => applyEnabledToSelection(false)}
 							className="cursor-pointer"
 						>
-							Disable
+							{t.disableBtn}
 						</Button>
 						<Button type="button" size="sm" variant="ghost" onClick={clearSelection} className="cursor-pointer">
-							Clear
+							{t.clearSelectionBtn}
 						</Button>
 					</div>
 				</div>
@@ -182,39 +254,48 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 					/>
 				</div>
 				<div className="flex items-center gap-1 min-w-0">
-					Prompt Text
+					{t.promptTextCol}
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
 						</TooltipTrigger>
 						<TooltipContent>
-							<p className="max-w-xs">The question or query that will be sent to AI models for evaluation.</p>
+							<p className="max-w-xs">{t.promptTextTooltip}</p>
 						</TooltipContent>
 					</Tooltip>
 				</div>
 				{showSystemTags && (
 					<div className="hidden md:flex items-center gap-1">
-						System
+						{t.systemTagsCol}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
 							</TooltipTrigger>
 							<TooltipContent>
-								<p className="max-w-xs">
-									Auto-generated tags like &quot;branded&quot; or &quot;unbranded&quot; based on prompt content.
-								</p>
+								<p className="max-w-xs">{t.systemTagsTooltip}</p>
 							</TooltipContent>
 						</Tooltip>
 					</div>
 				)}
 				<div className="flex items-center gap-1 min-w-0">
-					Tags
+					{t.categoryCol}
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
 						</TooltipTrigger>
 						<TooltipContent>
-							<p className="max-w-xs">Custom labels to organize and filter prompts.</p>
+							<p className="max-w-xs">{t.categoryTooltip}</p>
+						</TooltipContent>
+					</Tooltip>
+				</div>
+				<div className="flex items-center gap-1 min-w-0">
+					{t.tagsCol}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+						</TooltipTrigger>
+						<TooltipContent>
+							<p className="max-w-xs">{t.tagsTooltip}</p>
 						</TooltipContent>
 					</Tooltip>
 				</div>
@@ -227,31 +308,112 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 				<div className="border-2 border-dashed border-muted rounded-lg min-h-48 flex items-center justify-center">
 					<div className="text-center py-8 text-muted-foreground">
 						<Inbox className="h-12 w-12 mx-auto mb-4 opacity-50" />
-						<p>No prompts yet.</p>
+						<p>{t.noPromptsYet}</p>
 					</div>
 				</div>
 			) : (
 				<div className="space-y-3">
-					{prompts.map((prompt, index) => (
-						<div
-							key={prompt._key}
-							className={cn(
-								"-ml-3 border-l-2 pl-3 transition-colors",
-								changedKeys?.has(prompt._key) ? "border-amber-500" : "border-transparent",
-								!prompt.enabled && "opacity-60",
-							)}
-						>
-							{changedKeys?.has(prompt._key) && <span className="sr-only">Has unsaved changes</span>}
-							{/* Mobile: stacked, no selection/bulk */}
-							<div className={`md:hidden flex flex-col gap-2 pb-3 ${index < prompts.length - 1 ? "border-b" : ""}`}>
-								<div className="flex items-start gap-2">
+					{prompts.map((prompt, index) => {
+						const promptCategory = getPromptCategory(prompt.tags);
+						const customTags = prompt.tags.filter((tag) => !tag.startsWith("dim:") && !tag.startsWith("cat:"));
+						const isUnclassified = !promptCategory && prompt.enabled && prompt.value.trim().length > 0;
+
+						return (
+							<div
+								key={prompt._key}
+								className={cn(
+									"-ml-3 border-l-2 pl-3 transition-colors",
+									changedKeys?.has(prompt._key) ? "border-amber-500" : "border-transparent",
+									!prompt.enabled && "opacity-60",
+								)}
+							>
+								{changedKeys?.has(prompt._key) && <span className="sr-only">Has unsaved changes</span>}
+								{/* Mobile: stacked, no selection/bulk */}
+								<div className={`md:hidden flex flex-col gap-2 pb-3 ${index < prompts.length - 1 ? "border-b" : ""}`}>
+									<div className="flex items-start gap-2">
+										<Input
+											value={prompt.value}
+											onChange={(e) => update(index, { value: e.target.value })}
+											placeholder={t.promptTextPlaceholder}
+											className="min-w-0 flex-1"
+										/>
+										<div className="pt-2">
+											<Switch
+												checked={prompt.enabled}
+												onCheckedChange={(checked) => update(index, { enabled: checked })}
+												aria-label={prompt.enabled ? "Disable prompt" : "Enable prompt"}
+											/>
+										</div>
+									</div>
+									<div className="flex gap-2">
+										<div className="flex-1 space-y-1">
+											<Input
+												list="prompt-category-options"
+												value={promptCategory}
+												onChange={(e) => handleCategoryChange(index, e.target.value)}
+												placeholder={t.selectCategoryPlaceholder}
+												className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
+											/>
+											{isUnclassified && (
+												<p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium whitespace-nowrap">
+													{t.unclassifiedWarning}
+												</p>
+											)}
+										</div>
+										<div className="flex-1">
+											<TagsInput
+												value={customTags}
+												onValueChange={(tags) => handleCustomTagsChange(index, tags)}
+												options={allTagOptions}
+												placeholder={t.addTagPlaceholder}
+												searchPlaceholder={t.searchOrCreateTagPlaceholder}
+												normalizeValue={(raw) => raw.toLowerCase().trim()}
+											/>
+										</div>
+									</div>
+								</div>
+
+								{/* Desktop (md+): single-line grid */}
+								<div className={`hidden md:grid ${gridCols} gap-2 items-start`}>
+									<div className="flex justify-center pt-2">
+										<Checkbox
+											checked={selectedKeys.has(prompt._key)}
+											onCheckedChange={() => toggleSelect(prompt._key)}
+											aria-label="Select prompt"
+										/>
+									</div>
 									<Input
 										value={prompt.value}
 										onChange={(e) => update(index, { value: e.target.value })}
-										placeholder="Enter prompt text..."
-										className="min-w-0 flex-1"
+										placeholder={t.promptTextPlaceholder}
+										className="min-w-0"
 									/>
-									<div className="pt-2">
+									{showSystemTags && (
+										<TagsInput value={prompt.systemTags} onValueChange={() => {}} disabled placeholder="—" />
+									)}
+									<div className="space-y-1">
+										<Input
+											list="prompt-category-options"
+											value={promptCategory}
+											onChange={(e) => handleCategoryChange(index, e.target.value)}
+											placeholder={t.selectCategoryPlaceholder}
+											className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
+										/>
+										{isUnclassified && (
+											<p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium whitespace-nowrap">
+												{t.unclassifiedWarning}
+											</p>
+										)}
+									</div>
+									<TagsInput
+										value={customTags}
+										onValueChange={(tags) => handleCustomTagsChange(index, tags)}
+										options={allTagOptions}
+										placeholder={t.addTagPlaceholder}
+										searchPlaceholder={t.searchOrCreateTagPlaceholder}
+										normalizeValue={(raw) => raw.toLowerCase().trim()}
+									/>
+									<div className="flex justify-center pt-2">
 										<Switch
 											checked={prompt.enabled}
 											onCheckedChange={(checked) => update(index, { enabled: checked })}
@@ -259,52 +421,9 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 										/>
 									</div>
 								</div>
-								<TagsInput
-									value={prompt.tags}
-									onValueChange={(tags) => update(index, { tags })}
-									options={allTagOptions}
-									placeholder="Add tag..."
-									searchPlaceholder="Search or create tag..."
-									normalizeValue={(raw) => raw.toLowerCase().trim()}
-								/>
 							</div>
-
-							{/* Desktop (md+): single-line grid */}
-							<div className={`hidden md:grid ${gridCols} gap-2 items-start`}>
-								<div className="flex justify-center pt-2">
-									<Checkbox
-										checked={selectedKeys.has(prompt._key)}
-										onCheckedChange={() => toggleSelect(prompt._key)}
-										aria-label="Select prompt"
-									/>
-								</div>
-								<Input
-									value={prompt.value}
-									onChange={(e) => update(index, { value: e.target.value })}
-									placeholder="Enter prompt text..."
-									className="min-w-0"
-								/>
-								{showSystemTags && (
-									<TagsInput value={prompt.systemTags} onValueChange={() => {}} disabled placeholder="—" />
-								)}
-								<TagsInput
-									value={prompt.tags}
-									onValueChange={(tags) => update(index, { tags })}
-									options={allTagOptions}
-									placeholder="Add tag..."
-									searchPlaceholder="Search or create tag..."
-									normalizeValue={(raw) => raw.toLowerCase().trim()}
-								/>
-								<div className="flex justify-center pt-2">
-									<Switch
-										checked={prompt.enabled}
-										onCheckedChange={(checked) => update(index, { enabled: checked })}
-										aria-label={prompt.enabled ? "Disable prompt" : "Enable prompt"}
-									/>
-								</div>
-							</div>
-						</div>
-					))}
+						);
+					})}
 				</div>
 			)}
 
@@ -318,7 +437,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 							onClick={add}
 							className="flex items-center gap-2 cursor-pointer"
 						>
-							<Plus className="h-4 w-4" /> Add Prompt
+							<Plus className="h-4 w-4" /> {t.addPromptBtn}
 						</Button>
 					)}
 					<Button
@@ -328,7 +447,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 						onClick={() => setBulkOpen((open) => !open)}
 						className="flex items-center gap-2 cursor-pointer"
 					>
-						<ListPlus className="h-4 w-4" /> Add Multiple
+						<ListPlus className="h-4 w-4" /> {t.addMultipleBtn}
 					</Button>
 				</div>
 			)}
@@ -338,7 +457,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 					<Textarea
 						value={bulkText}
 						onChange={(e) => setBulkText(e.target.value)}
-						placeholder="One prompt per line"
+						placeholder={t.onePromptPerLinePlaceholder}
 						rows={6}
 						aria-label="Prompts to add, one per line"
 					/>
@@ -349,11 +468,12 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 							onClick={addBulk}
 							disabled={bulkPreview.added.length === 0 || overCapacity > 0}
 						>
-							Add {bulkPreview.added.length > 0 ? `${bulkPreview.added.length} ` : ""}
-							{bulkPreview.added.length === 1 ? "Prompt" : "Prompts"}
+							{language === "zh"
+								? `添加 ${bulkPreview.added.length > 0 ? `${bulkPreview.added.length} 条` : ""}提示词`
+								: `Add ${bulkPreview.added.length > 0 ? `${bulkPreview.added.length} ` : ""}${bulkPreview.added.length === 1 ? "Prompt" : "Prompts"}`}
 						</Button>
 						<Button variant="ghost" size="sm" type="button" onClick={closeBulk}>
-							Cancel
+							{t.cancelBtn}
 						</Button>
 						{bulkNotice && <span className="text-xs text-muted-foreground">{bulkNotice}</span>}
 					</div>
@@ -367,7 +487,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 
 			{atCapacity && (
 				<p className="text-xs text-muted-foreground">
-					Maximum of {MAX_PROMPTS} prompts allowed. Remove a prompt to add a new one.
+					{t.itemsAddedMax}
 				</p>
 			)}
 
@@ -375,7 +495,7 @@ export function PromptsListEditor({ prompts, onChange, showSystemTags = true, ch
 				<strong>
 					{validCount}/{MAX_PROMPTS}
 				</strong>{" "}
-				prompts configured
+				{t.promptsConfigured}
 			</p>
 		</div>
 	);

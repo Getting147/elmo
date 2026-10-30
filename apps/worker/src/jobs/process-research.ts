@@ -17,9 +17,11 @@ import type { Job } from "pg-boss";
 export interface ProcessResearchJobData {
 	draftId: string;
 	brandId: string;
+	brandName?: string;
 	website: string;
 	additionalDomains: string[];
 	input?: {
+		language?: "zh" | "en";
 		maxCompetitors?: number;
 		maxPrompts?: number;
 		maxProducts?: number;
@@ -93,6 +95,8 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 
 		const suggestion = await analyzeBrand({
 			website,
+			brandName: job.data.brandName,
+			language: input?.language ?? "zh",
 			maxCompetitors: input?.maxCompetitors ?? 10,
 			maxPrompts: input?.maxPrompts ?? 30,
 			maxProducts: input?.maxProducts ?? 10,
@@ -135,20 +139,18 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 	} catch (err) {
 		// 4. 异常 → markFailed（CAS：仅当仍处于 running + pending_review 态时才写 failed）
 		const errorMsg = err instanceof Error ? err.message : String(err);
-		await db
-			.update(draftResearch)
-			.set({
-				researchStatus: "failed",
-				state: "failed",
-				error: errorMsg,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(
-					eq(draftResearch.id, draftId),
-					eq(draftResearch.researchStatus, "running"),
-					eq(draftResearch.state, "pending_review"),
-				),
+		const { updated } = (await markFailed({
+			id: draftId,
+			error: errorMsg,
+			expectedState: "pending_review",
+			expectedResearchStatus: "running",
+		})) ?? { updated: true };
+
+		if (!updated) {
+			console.warn(
+				`[process-research] 任务 ${draftId} 状态已非 running/pending_review（已被用户回滚或状态变更），丢弃失败写回，防止覆盖合法状态。`,
 			);
+			return;
+		}
 	}
 }

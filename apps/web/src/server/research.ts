@@ -303,8 +303,10 @@ async function findDirectSuccessor(db: ResearchDatabase, brandId: string, urlHas
 async function createAndEnqueueDraft(
 	options: {
 		brandId: string;
+		brandName?: string;
 		website: string;
 		additionalDomains: string[];
+		language?: "zh" | "en";
 		supersedesDraftId?: string;
 		maxCompetitors?: number;
 		maxPrompts?: number;
@@ -313,21 +315,23 @@ async function createAndEnqueueDraft(
 	},
 	db: ResearchDatabase,
 ): Promise<ResearchResult> {
-	const { brandId, website, additionalDomains, supersedesDraftId } = options;
+	const { brandId, brandName, website, additionalDomains, language = "zh", supersedesDraftId } = options;
 	const urlHash = hashUrlForDraft(website);
 	const newDraftId = `dres_${randomUUID()}`;
 	const expiresAt = computeExpiresAt();
 
 	const payload: OnboardingSuggestion & { metadata?: Record<string, unknown> } = {
 		...emptySuggestionPayload({ brandId, website, additionalDomains }),
-		...(supersedesDraftId
-			? {
-					metadata: {
+		brandName: brandName || "",
+		metadata: {
+			language,
+			...(supersedesDraftId
+				? {
 						supersedesDraftId,
 						retryAuthorizedAt: new Date().toISOString(),
-					},
-				}
-			: {}),
+					}
+				: {}),
+		},
 	};
 
 	let draftInserted = false;
@@ -383,9 +387,11 @@ async function createAndEnqueueDraft(
 		await boss.send(ANALYZE_BRAND_RESEARCH_QUEUE, {
 			draftId: newDraftId,
 			brandId,
+			brandName,
 			website,
 			additionalDomains,
 			input: {
+				language,
 				maxCompetitors: options.maxCompetitors,
 				maxPrompts: options.maxPrompts,
 				maxProducts: options.maxProducts,
@@ -418,7 +424,9 @@ async function createAndEnqueueDraft(
 
 type TriggerResearchArgs = {
 	brandId: string;
+	brandName?: string;
 	website: string;
+	language?: "zh" | "en";
 	additionalDomains?: string[];
 	maxCompetitors?: number;
 	maxPrompts?: number;
@@ -452,11 +460,13 @@ async function triggerResearchLocked(args: TriggerResearchArgs, db: ResearchData
 	// 查 brand 存在性（404 守卫 — FK CASCADE 不影响端点层）
 	const brandRow = await db.query.brands.findFirst({
 		where: eq(brands.id, brandId),
-		columns: { id: true },
+		columns: { id: true, name: true },
 	});
 	if (!brandRow) {
 		throw new BrandNotFoundError(brandId);
 	}
+	const brandName = args.brandName || brandRow.name;
+	const language = args.language ?? "zh";
 
 	const urlHash = hashUrlForDraft(website);
 
@@ -619,7 +629,9 @@ async function triggerResearchLocked(args: TriggerResearchArgs, db: ResearchData
 			const res = await createAndEnqueueDraft(
 				{
 					brandId,
+					brandName,
 					website,
+					language,
 					additionalDomains,
 					supersedesDraftId: existingActive.id,
 					maxCompetitors: args.maxCompetitors,
@@ -650,7 +662,9 @@ async function triggerResearchLocked(args: TriggerResearchArgs, db: ResearchData
 		return await createAndEnqueueDraft(
 			{
 				brandId,
+				brandName,
 				website,
+				language,
 				additionalDomains,
 				maxCompetitors: args.maxCompetitors,
 				maxPrompts: args.maxPrompts,
@@ -709,7 +723,9 @@ async function triggerResearchLocked(args: TriggerResearchArgs, db: ResearchData
 		return createAndEnqueueDraft(
 			{
 				brandId,
+				brandName,
 				website,
+				language,
 				additionalDomains,
 				supersedesDraftId: effectiveTargetDraft.id,
 				maxCompetitors: args.maxCompetitors,
@@ -724,7 +740,9 @@ async function triggerResearchLocked(args: TriggerResearchArgs, db: ResearchData
 	return await createAndEnqueueDraft(
 		{
 			brandId,
+			brandName,
 			website,
+			language,
 			additionalDomains,
 			maxCompetitors: args.maxCompetitors,
 			maxPrompts: args.maxPrompts,

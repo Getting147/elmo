@@ -556,4 +556,46 @@ describe("triggerResearch 契约与恢复逻辑 (B02 S02/S04)", () => {
 		expect(late.jobSkipped).toBe(true);
 		expect(sendMock).toHaveBeenCalledTimes(1); // 依然只有第一次入队的 1 次
 	});
+
+	it("⑱ [B05 中文与品牌名透传] triggerResearch 将 brand.name 与 language 透传至草稿 payload 及 pg-boss job", async () => {
+		findFirstBrandMock.mockResolvedValue({ id: "b1", name: "浙江集客智能装备" });
+		findFirstDraftMock.mockResolvedValue(undefined); // 无历史草稿
+		insertValuesMock.mockResolvedValueOnce(undefined);
+		sendMock.mockResolvedValueOnce(undefined);
+
+		const result = await triggerResearch({
+			brandId: "b1",
+			website: "https://x.com",
+			language: "zh",
+		});
+
+		expect(result.draftId).toBeDefined();
+		expect(result.alreadyExisted).toBe(false);
+		expect(result.jobSkipped).toBe(false);
+
+		// 检查落库 payload 包含用户中文品牌名与 language
+		expect(insertValuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				brandId: "b1",
+				payload: expect.objectContaining({
+					brandName: "浙江集客智能装备",
+					metadata: expect.objectContaining({
+						language: "zh",
+					}),
+				}),
+			}),
+		);
+
+		// 检查 pg-boss job 数据透传 brandName 与 language
+		expect(sendMock).toHaveBeenCalledWith(
+			"analyze-brand-research",
+			expect.objectContaining({
+				brandId: "b1",
+				brandName: "浙江集客智能装备",
+				input: expect.objectContaining({
+					language: "zh",
+				}),
+			}),
+		);
+	});
 });

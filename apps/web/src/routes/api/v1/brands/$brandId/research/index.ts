@@ -10,6 +10,7 @@ import { DraftNotFoundError, listDraftsByBrand, ResearchStartError, triggerResea
 
 const postBody = z.object({
 	website: z.string().url("website must be a valid URL"),
+	language: z.enum(["zh", "en"]).optional(),
 	maxCompetitors: z.number().int().min(0).max(10).optional(),
 	maxPrompts: z.number().int().min(0).max(50).optional(),
 	maxProducts: z.number().int().min(0).max(20).optional(),
@@ -45,11 +46,12 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 						const result = await triggerResearch({
 							brandId,
 							website: body.website,
+							...(body.language !== undefined ? { language: body.language } : {}),
 							maxCompetitors: body.maxCompetitors,
 							maxPrompts: body.maxPrompts,
 							maxProducts: body.maxProducts,
-							retry: body.retry,
-							targetDraftId: body.targetDraftId,
+							...(body.retry !== undefined ? { retry: body.retry } : {}),
+							...(body.targetDraftId !== undefined ? { targetDraftId: body.targetDraftId } : {}),
 						});
 						return result;
 					} catch (err) {

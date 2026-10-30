@@ -147,7 +147,7 @@ vi.mock("@workspace/lib/onboarding", () => ({
 	createDraft: vi.fn(),
 	getDraftById: vi.fn(),
 	listDraftsByBrand: vi.fn(),
-	markFailed: vi.fn(),
+	markFailed: vi.fn().mockResolvedValue({ updated: true }),
 	markRolledBack: vi.fn(),
 }));
 let triggerResearch: any;

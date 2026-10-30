@@ -12,11 +12,22 @@ describe("formatEvidenceReason", () => {
 		expect(formatEvidenceReason("NAME_NOT_FOUND")).toBe("产品名称未能在引用页面中找到");
 		expect(formatEvidenceReason("URL_NOT_IN_CRAWL")).toBe("引用页面不在抓取范围内，无法核对");
 		expect(formatEvidenceReason("MISSING_URL")).toBe("缺少证据链接，无法核对");
+		expect(formatEvidenceReason("NO_SKU_DETAIL")).toBe("仅泛称或分类，未包含具体型号与证据");
+	});
+
+	it("supports English mapping when lang is 'en'", () => {
+		expect(formatEvidenceReason("NAME_NOT_FOUND", "en")).toBe("Product name not found on cited page");
+		expect(formatEvidenceReason("URL_NOT_IN_CRAWL", "en")).toBe("Cited page not in crawl scope");
+		expect(formatEvidenceReason("MISSING_URL", "en")).toBe("Missing evidence URL");
+		expect(formatEvidenceReason("NO_SKU_DETAIL", "en")).toBe("Generic category only, no specific model or evidence");
 	});
 
 	it("maps a code embedded after a SKU name (analyze.ts payload shape)", () => {
 		expect(formatEvidenceReason("Galaxy S25: NAME_NOT_FOUND")).toBe(
 			"Galaxy S25: 产品名称未能在引用页面中找到",
+		);
+		expect(formatEvidenceReason("Galaxy S25: NAME_NOT_FOUND", "en")).toBe(
+			"Galaxy S25: Product name not found on cited page",
 		);
 	});
 
@@ -30,6 +41,7 @@ describe("formatEvidenceReason", () => {
 	it("leaves unknown text untouched", () => {
 		const unknown = "custom reason without a code";
 		expect(formatEvidenceReason(unknown)).toBe(unknown);
+		expect(formatEvidenceReason(unknown, "en")).toBe(unknown);
 	});
 });
 

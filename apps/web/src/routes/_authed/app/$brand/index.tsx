@@ -186,7 +186,7 @@ function DashboardPage() {
 
 	const visibilityTimeSeries = dashboardSummary?.visibilityTimeSeries || [];
 
-	const { language } = useLanguage();
+	const { language, t } = useLanguage();
 	const isZh = language === "zh";
 
 	const currentVisibility = lastValue(visibilityTimeSeries, "overall");
@@ -293,12 +293,11 @@ function DashboardPage() {
 
 	if (!brand?.onboarded) {
 		return (
-			<div className="space-y-6 max-w-2xl p-4">
+			<div className="space-y-6 max-w-2xl p-4" data-no-i18n>
 				<div className="space-y-2">
-					<h2 className="text-2xl font-bold">Research Brand Data</h2>
+					<h2 className="text-2xl font-bold">{t.researchTitle}</h2>
 					<p className="text-muted-foreground text-balance">
-						We will analyze your website and find the best generative AI prompts to track. This process may take a
-						couple of minutes.
+						{t.researchSubtitle}
 					</p>
 				</div>
 				<PromptWizard
