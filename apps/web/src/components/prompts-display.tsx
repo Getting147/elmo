@@ -8,7 +8,7 @@ import { usePromptsSummary } from "@/hooks/use-prompts-summary";
 import { useBatchChartData } from "@/hooks/use-batch-chart-data";
 import { useBrand } from "@/hooks/use-brands";
 import { useListFilters } from "@/hooks/use-list-filters";
-import { Link, useSearch } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { VirtualizedPromptList } from "@/components/virtualized-prompt-list";
 import { ChartDataProvider } from "@/contexts/chart-data-context";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -35,10 +35,12 @@ interface PromptsDisplayProps {
  *  filter state itself — each section reads the URL keys it cares about
  *  so a filter change only re-renders the sections that depend on it. */
 export function PromptsDisplay({ pageTitle, pageDescription, pageInfoContent, editLink }: PromptsDisplayProps) {
-	const { brand } = useBrand();
+	const params = useParams({ strict: false }) as { brand?: string };
+	const { brand } = useBrand(params.brand);
+	const resolvedBrandId = brand?.id || params.brand;
 	return (
 		<PageHeader title={pageTitle} subtitle={pageDescription} infoContent={pageInfoContent}>
-			<PromptsContent brandId={brand?.id} editLink={editLink} />
+			<PromptsContent brandId={resolvedBrandId} editLink={editLink} />
 		</PageHeader>
 	);
 }

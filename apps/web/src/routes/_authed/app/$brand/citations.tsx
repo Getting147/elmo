@@ -21,8 +21,13 @@ import { getAvailableModels, ALL_MODELS_VALUE } from "@/components/filter-bar";
 import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
+import { type CitationCategory, emptyCategoryCounts, toRoundedPercentages } from "@/lib/domain-categories";
 import type { CitationData } from "@/components/citations/types";
-import { type CitationCategory, emptyCategoryCounts } from "@/lib/domain-categories";
+import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { Button } from "@workspace/ui/components/button";
+import { IconAlertCircle } from "@tabler/icons-react";
+import { FilterBar } from "@/components/filter-bar";
 
 export const Route = createFileRoute("/_authed/app/$brand/citations")({
 	head: ({ matches, match }) => {
@@ -82,6 +87,18 @@ function CitationsPage() {
 			};
 		}
 
+		// Lookback filter check
+		if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, filters.lookback)) {
+			return {
+				totalCitations: 0,
+				uniqueDomains: 0,
+				categoryCounts: emptyCategoryCounts(),
+				domainDistribution: [],
+				specificUrls: [],
+				citationTimeSeries: [],
+			};
+		}
+
 		const formalQuestions: any[] = evidenceData?.formal_questions || [];
 
 		// Filter by tags if tags are specified
@@ -111,16 +128,24 @@ function CitationsPage() {
 
 		const categoryCounts = emptyCategoryCounts();
 
-		// Known brand domains
+		// Known brand domains (prioritize immutable snapshot from baseline run metrics)
 		const brandDomains = new Set<string>();
-		if (brand?.website) {
-			try {
-				const u = new URL(brand.website.startsWith("http") ? brand.website : `https://${brand.website}`);
-				brandDomains.add(u.hostname.replace(/^www\./, "").toLowerCase());
-			} catch {}
-		}
-		for (const d of brand?.additionalDomains || []) {
-			brandDomains.add(d.replace(/^www\./, "").toLowerCase());
+		if (Array.isArray(metricsData?.domain_metrics?.own_domains) && metricsData.domain_metrics.own_domains.length > 0) {
+			for (const d of metricsData.domain_metrics.own_domains) {
+				if (typeof d === "string" && d.trim()) {
+					brandDomains.add(d.replace(/^www\./, "").toLowerCase().trim());
+				}
+			}
+		} else {
+			if (brand?.website) {
+				try {
+					const u = new URL(brand.website.startsWith("http") ? brand.website : `https://${brand.website}`);
+					brandDomains.add(u.hostname.replace(/^www\./, "").toLowerCase());
+				} catch {}
+			}
+			for (const d of brand?.additionalDomains || []) {
+				brandDomains.add(d.replace(/^www\./, "").toLowerCase());
+			}
 		}
 
 		// Known competitor domains from baseline metrics or brand competitors
@@ -149,15 +174,27 @@ function CitationsPage() {
 			domain = (domain || "unknown").toLowerCase();
 
 			let cat: CitationCategory = "other";
-			const isOwn = brandDomains.has(domain) || c.category === "own_domain" || c.source_type === "own_domain" || c.category === "brand";
-			const isComp = competitorDomains.has(domain) || c.category === "competitor" || c.source_type === "competitor";
+			const raw = (c.source_type || c.category || "").toLowerCase();
+			const isOwn =
+				brandDomains.has(domain) ||
+				raw === "own_domain" ||
+				raw === "brand" ||
+				raw === "official" ||
+				c.category === "own_domain" ||
+				c.source_type === "own_domain" ||
+				c.category === "brand" ||
+				c.source_type === "official";
+			const isComp =
+				competitorDomains.has(domain) ||
+				raw === "competitor" ||
+				c.category === "competitor" ||
+				c.source_type === "competitor";
 
 			if (isOwn) {
 				cat = "brand";
 			} else if (isComp) {
 				cat = "competitor";
 			} else {
-				const raw = (c.source_type || c.category || "").toLowerCase();
 				if (raw === "media" || raw === "news" || raw === "editorial") {
 					cat = "editorial";
 				} else if (raw === "social" || raw === "ugc_or_community" || raw === "community") {
@@ -217,9 +254,9 @@ function CitationsPage() {
 			categoryCounts,
 			domainDistribution,
 			specificUrls,
-			citationTimeSeries: sampleDate ? [{ date: sampleDate, ...categoryCounts }] : [],
+			citationTimeSeries: sampleDate ? [{ date: sampleDate, ...toRoundedPercentages(categoryCounts) }] : [],
 		};
-	}, [activeBaseline, filters.tags, brand, modelParam]);
+	}, [activeBaseline, filters.tags, filters.lookback, brand, modelParam]);
 
 	const baselineTags = useMemo(() => {
 		const rawFormal = activeBaseline.evidenceData?.formal_questions;
@@ -232,8 +269,11 @@ function CitationsPage() {
 	}, [activeBaseline.evidenceData?.formal_questions, activeBaseline.metricsData?.questions]);
 
 	const baselineModels = useMemo(() => {
-		return [activeBaseline.runData?.model_name || "doubao-pro-32k"];
-	}, [activeBaseline.runData?.model_name]);
+		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
+		const brandModels = brand?.effectiveModels || [];
+		const combined = Array.from(new Set([runModel, ...brandModels]));
+		return getAvailableModels(combined);
+	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
 
 	const effectiveCitationData = activeBaseline.hasBaselineRuns ? baselineCitationData : citationData;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : citationData?.availableTags || [];
@@ -260,6 +300,95 @@ function CitationsPage() {
 	);
 
 	const showFullSkeleton = effectiveLoading && !effectiveCitationData;
+
+	if (activeBaseline.isRequestedRunMissing) {
+		return (
+			<PageHeader
+				title="Citations"
+				subtitle="See which sources LLMs cite when responding to your prompts."
+				infoContent={infoContent}
+			>
+				<div className="space-y-6">
+					<DiagnosisRunBanner
+						activeRunId={activeBaseline.activeRunId}
+						runsList={activeBaseline.runsList}
+						runData={activeBaseline.runData}
+						metricsData={activeBaseline.metricsData}
+						onSelectRun={activeBaseline.selectRun}
+						brandId={brandId}
+						isRequestedRunMissing={true}
+					/>
+					<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+						<CardContent className="py-10 px-6 text-center space-y-4">
+							<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+								<IconAlertCircle size={24} />
+							</div>
+							<div className="space-y-1.5 max-w-md mx-auto">
+								<h3 className="text-base font-semibold text-foreground">
+									{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+								</h3>
+								<p className="text-sm text-muted-foreground leading-relaxed">
+									{isZh
+										? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+										: `The requested task was not found or access is denied.`}
+								</p>
+							</div>
+							{activeBaseline.runsList.length > 0 && (
+								<div className="pt-2">
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+									>
+										{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+									</Button>
+								</div>
+							)}
+						</CardContent>
+					</Card>
+				</div>
+			</PageHeader>
+		);
+	}
+
+	if (isUnsupportedBaselineModel(filters.model)) {
+		return (
+			<PageHeader
+				title="Citations"
+				subtitle="See which sources LLMs cite when responding to your prompts."
+				infoContent={infoContent}
+			>
+				<div className="space-y-6">
+					{activeBaseline.hasBaselineRuns && (
+						<DiagnosisRunBanner
+							activeRunId={activeBaseline.activeRunId}
+							runsList={activeBaseline.runsList}
+							runData={activeBaseline.runData}
+							metricsData={activeBaseline.metricsData}
+							onSelectRun={activeBaseline.selectRun}
+							brandId={brandId}
+							isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+						/>
+					)}
+					<FilterBar
+						availableTags={effectiveTags}
+						availableModels={effectiveModels}
+						showSearch={false}
+						showModelSelector={true}
+					/>
+					<UnsupportedModelNotice />
+				</div>
+			</PageHeader>
+		);
+	}
+
+	const isFilteredOut =
+		filters.tags.length > 0 ||
+		(activeBaseline.hasBaselineRuns &&
+			!isRunWithinLookback(
+				activeBaseline.runData?.completed_at || activeBaseline.runData?.created_at,
+				filters.lookback,
+			));
 
 	return (
 		<PageHeader
@@ -300,7 +429,7 @@ function CitationsPage() {
 							</CardContent>
 						</Card>
 					}
-					isError={Boolean(effectiveError) || !effectiveCitationData}
+					isError={Boolean(effectiveError)}
 					errorState={
 						<Card>
 							<CardContent className="pt-6">
@@ -311,7 +440,13 @@ function CitationsPage() {
 						</Card>
 					}
 					totalCount={effectiveCitationData?.totalCitations}
-					noMatchesTitle={isZh ? "当前筛选条件下未找到信源引用" : "No citations found for the selected filters."}
+					noMatchesTitle={
+						isZh
+							? isFilteredOut
+								? "当前筛选无结果"
+								: "当前筛选条件下未找到信源引用"
+							: "No citations found for the selected filters."
+					}
 					noMatchesDescription={isZh ? "请尝试调整筛选标签或时间范围。" : "Try adjusting your filters or time period."}
 					emptyState={
 						<Card>

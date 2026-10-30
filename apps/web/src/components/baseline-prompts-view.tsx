@@ -15,10 +15,14 @@ import {
 import { useLanguage } from "@/lib/language-context";
 import { VisibilityBar, VisibilityBarEmpty } from "@/components/visibility-bar";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
+import { FilterBar, ALL_MODELS_VALUE } from "@/components/filter-bar";
 import { FilteredListShell } from "@/components/filtered-list-shell";
-import { ALL_MODELS_VALUE } from "@/components/filter-bar";
 import type { useListFilters } from "@/hooks/use-list-filters";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
+import { isUnsupportedBaselineModel, isRunWithinLookback, getAvailableModels } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { IconAlertCircle } from "@tabler/icons-react";
+import { useBrand } from "@/hooks/use-brands";
 
 interface BaselinePromptsViewProps {
 	brandId: string | undefined;
@@ -94,14 +98,21 @@ export function BaselinePromptsView({
 		return Array.from(tagSet);
 	}, [questions]);
 
+	const { brand } = useBrand(brandId);
 	const availableModels = useMemo(() => {
-		const m = runData?.model_name || "doubao-pro-32k";
-		return [m];
-	}, [runData?.model_name]);
+		const runModel = runData?.model_name || "doubao-pro-32k";
+		const brandModels = brand?.effectiveModels || [];
+		const combined = Array.from(new Set([runModel, ...brandModels]));
+		return getAvailableModels(combined);
+	}, [runData?.model_name, brand?.effectiveModels]);
 
-	// Filter questions by selected search and tags
+	// Filter questions by selected search, tags, lookback, and model
 	const filteredQuestions = useMemo(() => {
 		return questions.filter((q) => {
+			// Lookback filter
+			if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
+				return false;
+			}
 			// Tag filter
 			if (tags.length > 0 && !tags.includes(q.dimension_name)) {
 				return false;
@@ -119,7 +130,7 @@ export function BaselinePromptsView({
 			}
 			return true;
 		});
-	}, [questions, tags, search, model, runData?.model_name]);
+	}, [questions, tags, search, model, lookback, runData?.model_name, runData?.completed_at, runData?.created_at]);
 
 	const p0Summary = metricsData?.p0_summary;
 	const domainMetrics = metricsData?.domain_metrics;
@@ -137,13 +148,30 @@ export function BaselinePromptsView({
 	const sampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
 
 	const visibilityBarElement = useMemo(() => {
+		// F05: Suppress visibility bar on error or missing metrics data
+		if (isError || !metricsData) {
+			return null;
+		}
+
+		if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
+			return (
+				<VisibilityBarEmpty
+					message={
+						isZh
+							? "当前筛选无结果"
+							: "No prompts match your selected filters."
+					}
+				/>
+			);
+		}
+
 		if (filters.isFiltered) {
 			if (filteredQuestions.length === 0) {
 				return (
 					<VisibilityBarEmpty
 						message={
 							isZh
-								? "当前筛选条件下暂无问题与可见度数据"
+								? "当前筛选无结果"
 								: "No prompts or visibility data match your selected filters."
 						}
 					/>
@@ -191,6 +219,8 @@ export function BaselinePromptsView({
 			/>
 		);
 	}, [
+		isError,
+		metricsData,
 		filters.isFiltered,
 		filteredQuestions,
 		validQuestions,
@@ -199,6 +229,8 @@ export function BaselinePromptsView({
 		sampleDate,
 		lookback,
 		isZh,
+		runData?.completed_at,
+		runData?.created_at,
 	]);
 
 	if (isLoading && !runData && !metricsData) {
@@ -214,6 +246,82 @@ export function BaselinePromptsView({
 			</div>
 		);
 	}
+
+	if (activeBaseline.isRequestedRunMissing) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={true}
+				/>
+				<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+					<CardContent className="py-10 px-6 text-center space-y-4">
+						<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+							<IconAlertCircle size={24} />
+						</div>
+						<div className="space-y-1.5 max-w-md mx-auto">
+							<h3 className="text-base font-semibold text-foreground">
+								{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+							</h3>
+							<p className="text-sm text-muted-foreground leading-relaxed">
+								{isZh
+									? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+									: `The requested task was not found or access is denied.`}
+							</p>
+						</div>
+						{activeBaseline.runsList.length > 0 && (
+							<div className="pt-2">
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+								>
+									{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+								</Button>
+							</div>
+						)}
+					</CardContent>
+				</Card>
+			</div>
+		);
+	}
+
+	if (isUnsupportedBaselineModel(model)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<FilterBar
+					availableTags={availableTags}
+					availableModels={availableModels}
+					showSearch
+					showModelSelector
+				/>
+				<UnsupportedModelNotice />
+			</div>
+		);
+	}
+
+	const isFilteredOut =
+		tags.length > 0 ||
+		Boolean(search) ||
+		(activeBaseline.hasBaselineRuns &&
+			!isRunWithinLookback(
+				activeBaseline.runData?.completed_at || activeBaseline.runData?.created_at,
+				lookback,
+			));
 
 	return (
 		<div className="space-y-6">
@@ -237,7 +345,13 @@ export function BaselinePromptsView({
 				filterSectionExtras={visibilityBarElement}
 				totalCount={questions.length}
 				filteredCount={filteredQuestions.length}
-				noMatchesTitle={isZh ? "未找到符合筛选条件的问题" : "No prompts match your filters."}
+				noMatchesTitle={
+					isZh
+						? isFilteredOut
+							? "当前筛选无结果"
+							: "未找到符合筛选条件的问题"
+						: "No prompts match your filters."
+				}
 				noMatchesDescription={
 					isZh
 						? "请尝试放宽标签或搜索关键词筛选。"

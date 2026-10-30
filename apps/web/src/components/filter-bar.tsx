@@ -150,16 +150,21 @@ export function ModelDropdown({ availableModels }: { availableModels: string[] }
 		: (availableModels[0] ?? ALL_MODELS_VALUE);
 	const urlModel = useSearch({ strict: false, select: (s) => s.model });
 	const setFilters = useFilterNavigate();
-	// If the URL has a model that isn't valid for this brand (e.g. stale deep
-	// link after a deployment change), fall back to the default rather than
-	// showing a trigger with an unknown value.
-	const selected = urlModel && availableModels.includes(urlModel) ? urlModel : defaultModel;
+
+	const effectiveAvailableModels = useMemo(() => {
+		if (urlModel && !availableModels.includes(urlModel)) {
+			return [...availableModels, urlModel];
+		}
+		return availableModels;
+	}, [availableModels, urlModel]);
+
+	const selected = urlModel && effectiveAvailableModels.includes(urlModel) ? urlModel : defaultModel;
 
 	const handleChange = (next: string) => {
 		setFilters({ model: next === defaultModel ? undefined : next });
 	};
 
-	if (availableModels.length <= 1) return null;
+	if (effectiveAvailableModels.length <= 1) return null;
 	const isFiltered = selected !== ALL_MODELS_VALUE;
 	return (
 		<DropdownMenu>
@@ -168,7 +173,7 @@ export function ModelDropdown({ availableModels }: { availableModels: string[] }
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="w-48">
 				<DropdownMenuRadioGroup value={selected} onValueChange={handleChange}>
-					{availableModels.map((model) => (
+					{effectiveAvailableModels.map((model) => (
 						<DropdownMenuRadioItem key={model} value={model} className="cursor-pointer gap-2">
 							{iconForModel(model)}
 							{labelForModel(model)}

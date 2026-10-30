@@ -34,6 +34,10 @@ import { promptKeywords, type PromptFanoutStat, type TopQueryStat, type QueryPro
 import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
+import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { IconAlertCircle } from "@tabler/icons-react";
+import { Button } from "@workspace/ui/components/button";
 
 /** The active tab lives in `?tab=` so each tab is directly linkable. */
 const FANOUT_TABS = ["fanout", "top-queries", "words"] as const;
@@ -97,6 +101,27 @@ function QueryFanoutPage() {
 
 		// Model filter check
 		if (model && model !== ALL_MODELS_VALUE && model !== modelName) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				model: modelName,
+				totalRuns: 0,
+				totalQueries: 0,
+				uniqueQueries: 0,
+				fanoutRuns: 0,
+				avgPerExecution: 0,
+				coverageRate: 0,
+				byPrompt: [],
+				topQueries: [],
+				topByPrompts: [],
+				topByRuns: [],
+				terms: [],
+				wordChanges: { added: [], dropped: [], preserved: [] },
+				byModel: [],
+			};
+		}
+
+		// Lookback filter check
+		if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
 			return {
 				brandName: brand?.name || "Target Brand",
 				model: modelName,
@@ -211,7 +236,7 @@ function QueryFanoutPage() {
 				},
 			],
 		};
-	}, [activeBaseline, brand?.name, tags, model]);
+	}, [activeBaseline, brand?.name, tags, model, lookback]);
 
 	const baselineTags = useMemo(() => {
 		const rawFormal = activeBaseline.evidenceData?.formal_questions;
@@ -224,8 +249,11 @@ function QueryFanoutPage() {
 	}, [activeBaseline.evidenceData?.formal_questions, activeBaseline.metricsData?.questions]);
 
 	const baselineModels = useMemo(() => {
-		return [activeBaseline.runData?.model_name || "doubao-pro-32k"];
-	}, [activeBaseline.runData?.model_name]);
+		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
+		const brandModels = brand?.effectiveModels || [];
+		const combined = Array.from(new Set([runModel, ...brandModels]));
+		return getAvailableModels(combined);
+	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
 
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
@@ -233,6 +261,7 @@ function QueryFanoutPage() {
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
 		: isLoading && !data);
+	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : isError;
 
 	const infoContent = (
 		<p>
@@ -242,11 +271,70 @@ function QueryFanoutPage() {
 		</p>
 	);
 
+	const isFilteredOut =
+		tags.length > 0 ||
+		(activeBaseline.hasBaselineRuns &&
+			!isRunWithinLookback(
+				activeBaseline.runData?.completed_at || activeBaseline.runData?.created_at,
+				lookback,
+			));
+
 	let content: React.ReactNode;
-	if (effectiveLoading) {
+	if (activeBaseline.isRequestedRunMissing) {
+		content = (
+			<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+				<CardContent className="py-10 px-6 text-center space-y-4">
+					<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+						<IconAlertCircle size={24} />
+					</div>
+					<div className="space-y-1.5 max-w-md mx-auto">
+						<h3 className="text-base font-semibold text-foreground">
+							{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+						</h3>
+						<p className="text-sm text-muted-foreground leading-relaxed">
+							{isZh
+								? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+								: `The requested task was not found or access is denied.`}
+						</p>
+					</div>
+					{activeBaseline.runsList.length > 0 && (
+						<div className="pt-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+							>
+								{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+							</Button>
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		);
+	} else if (isUnsupportedBaselineModel(model)) {
+		content = <UnsupportedModelNotice />;
+	} else if (effectiveLoading) {
 		content = <LoadingState />;
-	} else if (isError && !effectiveData) {
-		content = <EmptyState message={isZh ? "无法加载检索发散数据，请刷新页面重试。" : "Couldn't load query fan-out right now. Reload the page to try again."} />;
+	} else if (effectiveError && !effectiveData) {
+		content = (
+			<EmptyState
+				message={
+					isZh
+						? "无法加载检索发散数据，请刷新页面重试。"
+						: "Couldn't load query fan-out right now. Reload the page to try again."
+				}
+			/>
+		);
+	} else if (isFilteredOut && (!effectiveData || effectiveData.totalRuns === 0)) {
+		content = (
+			<EmptyState
+				message={
+					isZh
+						? "当前筛选无结果"
+						: "No results for the selected filters."
+				}
+			/>
+		);
 	} else if (!effectiveData || effectiveData.totalRuns === 0) {
 		content = (
 			<EmptyState

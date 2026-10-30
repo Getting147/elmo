@@ -27,6 +27,10 @@ import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { computeShareOfVoice } from "@/lib/visibility-stats";
 import { useMemo } from "react";
+import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { IconAlertCircle } from "@tabler/icons-react";
+import { Button } from "@workspace/ui/components/button";
 
 export const Route = createFileRoute("/_authed/app/$brand/share-of-voice")({
 	head: ({ matches, match }) => {
@@ -82,6 +86,18 @@ function ShareOfVoicePage() {
 
 		// Model filter check
 		if (model && model !== ALL_MODELS_VALUE && model !== runData?.model_name) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				totalRuns: 0,
+				totalMentions: 0,
+				entries: [],
+				brandShare: null,
+				shareTimeSeries: [],
+			};
+		}
+
+		// Lookback filter check
+		if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
 			return {
 				brandName: brand?.name || "Target Brand",
 				totalRuns: 0,
@@ -151,7 +167,7 @@ function ShareOfVoicePage() {
 				? [{ date: sampleDate, share: sovResult.brandShare !== null ? Math.round(sovResult.brandShare * 100) : null }]
 				: [],
 		};
-	}, [activeBaseline, brand?.name, tags, model]);
+	}, [activeBaseline, brand?.name, tags, model, lookback]);
 
 	const baselineTags = useMemo(() => {
 		const rawQuestions: any[] = activeBaseline.metricsData?.questions || [];
@@ -164,8 +180,11 @@ function ShareOfVoicePage() {
 	}, [activeBaseline.metricsData?.questions]);
 
 	const baselineModels = useMemo(() => {
-		return [activeBaseline.runData?.model_name || "doubao-pro-32k"];
-	}, [activeBaseline.runData?.model_name]);
+		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
+		const brandModels = brand?.effectiveModels || [];
+		const combined = Array.from(new Set([runModel, ...brandModels]));
+		return getAvailableModels(combined);
+	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
 
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
@@ -173,6 +192,7 @@ function ShareOfVoicePage() {
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
 		: isLoading && !data);
+	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : false;
 
 	const infoContent = (
 		<>
@@ -187,8 +207,49 @@ function ShareOfVoicePage() {
 	const maxMentions = effectiveData?.entries.reduce((m, e) => Math.max(m, e.mentions), 0) ?? 0;
 	const barColors = shareOfVoiceColorMap(effectiveData?.entries ?? []);
 
+	const isFilteredOut =
+		tags.length > 0 ||
+		(activeBaseline.hasBaselineRuns &&
+			!isRunWithinLookback(
+				activeBaseline.runData?.completed_at || activeBaseline.runData?.created_at,
+				lookback,
+			));
+
 	let content: React.ReactNode;
-	if (effectiveLoading) {
+	if (activeBaseline.isRequestedRunMissing) {
+		content = (
+			<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+				<CardContent className="py-10 px-6 text-center space-y-4">
+					<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+						<IconAlertCircle size={24} />
+					</div>
+					<div className="space-y-1.5 max-w-md mx-auto">
+						<h3 className="text-base font-semibold text-foreground">
+							{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+						</h3>
+						<p className="text-sm text-muted-foreground leading-relaxed">
+							{isZh
+								? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+								: `The requested task was not found or access is denied.`}
+						</p>
+					</div>
+					{activeBaseline.runsList.length > 0 && (
+						<div className="pt-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+							>
+								{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+							</Button>
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		);
+	} else if (isUnsupportedBaselineModel(model)) {
+		content = <UnsupportedModelNotice />;
+	} else if (effectiveLoading) {
 		content = (
 			<Card>
 				<CardHeader>
@@ -198,6 +259,28 @@ function ShareOfVoicePage() {
 					<Skeleton className="h-4 w-3/4" />
 					<Skeleton className="h-4 w-2/3" />
 					<Skeleton className="h-4 w-1/2" />
+				</CardContent>
+			</Card>
+		);
+	} else if (effectiveError) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-destructive text-center py-8">
+						{isZh ? "无法加载声量分析数据，请刷新重试。" : "Failed to load share of voice data. Please try again."}
+					</div>
+				</CardContent>
+			</Card>
+		);
+	} else if (isFilteredOut && (!effectiveData || effectiveData.totalRuns === 0)) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-muted-foreground text-center py-8">
+						{isZh
+							? "当前筛选无结果"
+							: "No results for the selected filters."}
+					</div>
 				</CardContent>
 			</Card>
 		);

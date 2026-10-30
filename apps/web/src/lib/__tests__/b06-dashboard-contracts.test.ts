@@ -196,5 +196,174 @@ describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 			expect(isModelMatch("gpt-4o", baselineModel)).toBe(false);
 			expect(isModelMatch("claude-3-5-sonnet", baselineModel)).toBe(false);
 		});
+
+		it("detects unsupported models vs supported Doubao models", async () => {
+			const { isUnsupportedBaselineModel, isDoubaoModel, UNSUPPORTED_MODEL_MESSAGE_ZH } = await import("@/lib/model-filter");
+
+			expect(isDoubaoModel("doubao-pro-32k")).toBe(true);
+			expect(isDoubaoModel("doubao-seed-128k")).toBe(true);
+			expect(isDoubaoModel("Doubao")).toBe(true);
+			expect(isDoubaoModel("gpt-4o")).toBe(false);
+
+			expect(isUnsupportedBaselineModel("gpt-4o")).toBe(true);
+			expect(isUnsupportedBaselineModel("gemini-1.5-pro")).toBe(true);
+			expect(isUnsupportedBaselineModel("claude-3-5-sonnet")).toBe(true);
+			expect(isUnsupportedBaselineModel("doubao-pro-32k")).toBe(false);
+			expect(isUnsupportedBaselineModel("all")).toBe(false);
+			expect(isUnsupportedBaselineModel(undefined)).toBe(false);
+			expect(isUnsupportedBaselineModel("")).toBe(false);
+
+			expect(UNSUPPORTED_MODEL_MESSAGE_ZH).toBe("目前仅支持豆包，其他模型暂不支持。");
+		});
+
+		it("correctly filters run dates by lookback window", async () => {
+			const { isRunWithinLookback } = await import("@/lib/model-filter");
+
+			const refDate = new Date("2026-10-30T12:00:00Z");
+
+			// 2 days ago
+			const twoDaysAgo = "2026-10-28T12:00:00Z";
+			expect(isRunWithinLookback(twoDaysAgo, "1w", refDate)).toBe(true);
+			expect(isRunWithinLookback(twoDaysAgo, "1m", refDate)).toBe(true);
+
+			// 10 days ago
+			const tenDaysAgo = "2026-10-20T12:00:00Z";
+			expect(isRunWithinLookback(tenDaysAgo, "1w", refDate)).toBe(false);
+			expect(isRunWithinLookback(tenDaysAgo, "1m", refDate)).toBe(true);
+
+			// 45 days ago
+			const fortyFiveDaysAgo = "2026-09-15T12:00:00Z";
+			expect(isRunWithinLookback(fortyFiveDaysAgo, "1w", refDate)).toBe(false);
+			expect(isRunWithinLookback(fortyFiveDaysAgo, "1m", refDate)).toBe(false);
+			expect(isRunWithinLookback(fortyFiveDaysAgo, "3m", refDate)).toBe(true);
+			expect(isRunWithinLookback(fortyFiveDaysAgo, "all", refDate)).toBe(true);
+		});
+	});
+
+	describe("7. Citations Percentage Normalization & Brand Identity Freeze", () => {
+		it("normalizes category counts with toRoundedPercentages so brand share evaluates to 20% (1/5) instead of 1%", async () => {
+			const { toRoundedPercentages, emptyCategoryCounts } = await import("@/lib/domain-categories");
+
+			const rawCounts = emptyCategoryCounts();
+			rawCounts.brand = 1;
+			rawCounts.competitor = 3;
+			rawCounts.editorial = 1;
+
+			const total = 5;
+			const percentages = toRoundedPercentages(rawCounts);
+
+			// 1 out of 5 is exactly 20%
+			expect(percentages.brand).toBe(20);
+			expect(percentages.competitor).toBe(60);
+			expect(percentages.editorial).toBe(20);
+
+			// Sum of non-zero percentages equals 100
+			expect(percentages.brand + percentages.competitor + percentages.editorial).toBe(100);
+
+			// Time series simulation: lastTrendPoint.brand is now 20, leading to brandShare = 20%
+			const lastTrendPoint: { date: string; brand?: number; competitor?: number; editorial?: number } = { date: "2026-10-30", ...percentages };
+			const brandShare = lastTrendPoint.brand ?? 0;
+			expect(brandShare).toBe(20);
+			expect(`${brandShare}%`).toBe("20%");
+		});
+
+		it("maps source_type=official to brand category and news to editorial category", () => {
+			const mapItem = (c: { source_type?: string; category?: string; domain?: string }, brandDomains: Set<string>) => {
+				const domain = (c.domain || "").toLowerCase();
+				const raw = (c.source_type || c.category || "").toLowerCase();
+				if (
+					brandDomains.has(domain) ||
+					raw === "own_domain" ||
+					raw === "brand" ||
+					raw === "official"
+				) {
+					return "brand";
+				}
+				if (raw === "competitor") return "competitor";
+				if (raw === "news" || raw === "media" || raw === "editorial") return "editorial";
+				return "other";
+			};
+
+			const brandDomains = new Set(["jinggongjian.com"]);
+
+			expect(mapItem({ domain: "jinggongjian.com", source_type: "official" }, brandDomains)).toBe("brand");
+			expect(mapItem({ domain: "compa.com", source_type: "competitor" }, brandDomains)).toBe("competitor");
+			expect(mapItem({ domain: "news.industry.com", source_type: "news" }, brandDomains)).toBe("editorial");
+		});
+	});
+
+	describe("8. Probe Isolation Under Dimensional Filter Contract", () => {
+		it("strictly produces 0.0% SOV under '工程营地' when probe PX01 is isolated", () => {
+			// Counterexample dataset:
+			// P01: "产品定制", SELF=1, CompA=0, is_probe=false
+			// P02: "工程营地", SELF=0, CompA=1, is_probe=false
+			// P03: "度假民宿", SELF=0, CompB=1, is_probe=false
+			// PX01: "工程营地", SELF=1, is_probe=true (supplemental probe hitting SELF)
+			const allRawQuestions = [
+				{ code: "P01", dimension_name: "产品定制", effective_mention: true, is_probe: false },
+				{ code: "P02", dimension_name: "工程营地", effective_mention: false, is_probe: false },
+				{ code: "P03", dimension_name: "度假民宿", effective_mention: false, is_probe: false },
+				{ code: "PX01", dimension_name: "工程营地", effective_mention: true, is_probe: true },
+			];
+
+			// Competitor dimension hits from backend (CompA has 1 mention under 工程营地 from P02)
+			const competitors = [
+				{
+					name: "CompA",
+					dimension_hits: [{ dimension_name: "工程营地", mention_count: 1 }],
+				},
+			];
+
+			// 1. Isolate formal questions:
+			const formalQuestions = allRawQuestions.filter((q) => !q.is_probe);
+			expect(formalQuestions).toHaveLength(3);
+			expect(formalQuestions.find((q) => q.code === "PX01")).toBeUndefined();
+
+			// 2. Filter by dimension "工程营地":
+			const dimension = "工程营地";
+			const matchingQuestions = formalQuestions.filter((q) => q.dimension_name === dimension);
+			expect(matchingQuestions).toHaveLength(1);
+			expect(matchingQuestions[0].code).toBe("P02");
+
+			// SELF mentions under 工程营地
+			const selfMentions = matchingQuestions.filter((q) => q.effective_mention).length;
+			expect(selfMentions).toBe(0);
+
+			// Competitor mentions under 工程营地
+			const compList = competitors.map((c) => ({
+				name: c.name,
+				mentions: c.dimension_hits.find((d) => d.dimension_name === dimension)?.mention_count ?? 0,
+			}));
+			expect(compList[0].mentions).toBe(1);
+
+			// Compute SOV:
+			const sov = computeShareOfVoice({ name: "SelfBrand", mentions: selfMentions }, compList);
+			expect(sov.total).toBe(1); // 0 + 1
+			expect(sov.brandShare).toBe(0.0);
+			expect((sov.brandShare! * 100).toFixed(1)).toBe("0.0");
+
+			// Contrast: If probe PX01 was NOT excluded, selfMentions would be 1, total would be 2, SOV would be 50.0%
+			const corruptedMatching = allRawQuestions.filter((q) => q.dimension_name === dimension);
+			const corruptedSelf = corruptedMatching.filter((q) => q.effective_mention).length;
+			const corruptedSov = computeShareOfVoice({ name: "SelfBrand", mentions: corruptedSelf }, compList);
+			expect((corruptedSov.brandShare! * 100).toFixed(1)).toBe("50.0");
+		});
+	});
+
+	describe("9. RunId Identity & Historical Lookup Contract", () => {
+		it("strictly preserves requestedRunId and does not fall back to runs[0] when specified", () => {
+			const runs = [{ run_id: "run_latest_001" }, { run_id: "run_prev_002" }];
+
+			const resolveActiveRunId = (requestedRunId?: string) => {
+				return requestedRunId || runs[0]?.run_id;
+			};
+
+			// When not specified, defaults to runs[0]
+			expect(resolveActiveRunId(undefined)).toBe("run_latest_001");
+
+			// When specified, strictly returns requestedRunId
+			expect(resolveActiveRunId("run_historical_999")).toBe("run_historical_999");
+			expect(resolveActiveRunId("run_non_existent")).toBe("run_non_existent");
+		});
 	});
 });

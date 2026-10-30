@@ -14,6 +14,7 @@ export interface ActiveBaselineRunResult {
 	hasBaselineRuns: boolean;
 	isLoadingRunsList: boolean;
 	isRequestedRunMissing: boolean;
+	requestedRunId?: string;
 	activeRunId: string | undefined;
 	activeRunSummary: any | null;
 	runsList: any[];
@@ -24,6 +25,10 @@ export interface ActiveBaselineRunResult {
 	analysisData: any | undefined;
 	isLoading: boolean;
 	isError: boolean;
+	isLoadingAnalysis: boolean;
+	isAnalysisError: boolean;
+	analysisError: unknown;
+	refetchAnalysis: () => void;
 	errors: {
 		runsListError: unknown;
 		runError: unknown;
@@ -39,6 +44,8 @@ export interface ActiveBaselineRunResult {
  * Hook to manage active baseline diagnostic run state across the 5 dashboards.
  * - Reads `runId` from URL search params.
  * - If `runId` is not explicitly provided, defaults to the latest explicitly initiated task.
+ * - When `runId` is explicitly provided, maintains strict task identity: queries the run directly,
+ *   supports historical runs beyond the top-30 list, and does NOT fall back to runs[0] on 404/403.
  * - If brand has no baseline runs, `hasBaselineRuns` is false (enables seamless fallback to V2 views).
  * - Read-only queries with org & brand validation, no hidden sampling/analysis triggers.
  */
@@ -61,24 +68,12 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	});
 
 	const runs = runsListData?.items || [];
-	const isRequestedRunMissing = Boolean(
-		requestedRunId && !isLoadingRunsList && runs.length > 0 && !runs.some((r: any) => r.run_id === requestedRunId),
-	);
 
-	// 2. Resolve active run summary
-	const activeRunSummary = useMemo(() => {
-		if (runs.length === 0) return null;
-		if (requestedRunId) {
-			const found = runs.find((r: any) => r.run_id === requestedRunId);
-			if (found) return found;
-		}
-		// Default to latest explicitly initiated task (runs[0])
-		return runs[0] || null;
-	}, [runs, requestedRunId]);
+	// Determine activeRunId: strictly preserve requestedRunId when specified,
+	// only falling back to runs[0] when no runId was explicitly requested.
+	const activeRunId = requestedRunId || runs[0]?.run_id;
 
-	const activeRunId = activeRunSummary?.run_id;
-
-	// 3. Query run details
+	// 2. Query run details directly (authenticates existence and org/brand ownership)
 	const {
 		data: runData,
 		isLoading: isLoadingRun,
@@ -89,7 +84,67 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 		queryFn: () => getBaselineRunFn({ data: { brandId: brandId!, runId: activeRunId! } }),
 		enabled: !!brandId && !!activeRunId,
 		staleTime: 30_000,
+		retry: false,
 	});
+
+	const isRunNotFound = Boolean(
+		runError &&
+			((runError as any)?.status === 404 ||
+				(runError as any)?.status === 403 ||
+				String((runError as any)?.message || "").includes("404") ||
+				String((runError as any)?.message || "").includes("403") ||
+				String((runError as any)?.message || "").includes("not_found") ||
+				String((runError as any)?.message || "").includes("denied")),
+	);
+
+	const isRequestedRunMissing = Boolean(
+		requestedRunId &&
+			(isRunNotFound ||
+				(!isLoadingRunsList && !isLoadingRun && !runData && runs.length > 0 && !runs.some((r: any) => r.run_id === requestedRunId))),
+	);
+
+	// 3. Resolve active run summary
+	const activeRunSummary = useMemo(() => {
+		if (isRequestedRunMissing) return null;
+		if (requestedRunId) {
+			const found = runs.find((r: any) => r.run_id === requestedRunId);
+			if (found) return found;
+			if (runData && runData.run_id === requestedRunId) {
+				return {
+					run_id: runData.run_id,
+					brand_id: runData.brand_id,
+					status: runData.status,
+					model_name: runData.model_name,
+					created_at: runData.created_at,
+					completed_at: runData.completed_at,
+					task_count: runData.task_count ?? 0,
+					success_count: runData.success_count ?? 0,
+					failed_count: runData.failed_count ?? 0,
+				};
+			}
+			return null;
+		}
+		// Default to latest explicitly initiated task (runs[0])
+		return runs[0] || null;
+	}, [runs, requestedRunId, runData, isRequestedRunMissing]);
+
+	// Inject active run into runs list if it was a historical run not in the top-30 list
+	const effectiveRunsList = useMemo(() => {
+		if (runData && runData.run_id && !runs.some((r: any) => r.run_id === runData.run_id)) {
+			return [
+				{
+					run_id: runData.run_id,
+					brand_id: runData.brand_id,
+					status: runData.status,
+					model_name: runData.model_name,
+					created_at: runData.created_at,
+					completed_at: runData.completed_at,
+				},
+				...runs,
+			];
+		}
+		return runs;
+	}, [runs, runData]);
 
 	// 4. Query metrics
 	const {
@@ -100,7 +155,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-metrics", brandId, activeRunId],
 		queryFn: () => getBaselineMetricsFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId,
+		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
 		staleTime: 30_000,
 	});
 
@@ -113,7 +168,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId,
+		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
 		staleTime: 30_000,
 	});
 
@@ -126,8 +181,9 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	} = useQuery({
 		queryKey: ["baseline-analysis", brandId, activeRunId],
 		queryFn: () => getBaselineAnalysisFn({ data: { brandId: brandId!, runId: activeRunId! } }),
-		enabled: !!brandId && !!activeRunId,
+		enabled: !!brandId && !!activeRunId && !isRequestedRunMissing,
 		staleTime: 30_000,
+		retry: false,
 	});
 
 	const setFilters = useFilterNavigate();
@@ -141,21 +197,28 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 	);
 
 	return {
-		hasBaselineRuns: Boolean(runsListData && runs.length > 0),
+		hasBaselineRuns: Boolean((runsListData && runs.length > 0) || runData),
 		isLoadingRunsList,
 		isRequestedRunMissing,
-		activeRunId,
+		requestedRunId,
+		activeRunId: isRequestedRunMissing ? requestedRunId : activeRunId,
 		activeRunSummary,
-		runsList: runs,
-		totalRunsCount: runsListData?.total ?? runs.length,
+		runsList: effectiveRunsList,
+		totalRunsCount: runsListData?.total ?? effectiveRunsList.length,
 		runData,
 		metricsData,
 		evidenceData,
 		analysisData,
 		isLoading:
 			isLoadingRunsList ||
-			(Boolean(activeRunId) && (isLoadingRun || isLoadingMetrics || isLoadingEvidence)),
+			(Boolean(activeRunId) && !isRequestedRunMissing && (isLoadingRun || isLoadingMetrics || isLoadingEvidence)),
 		isError: isRunsListError || Boolean(runError) || Boolean(metricsError) || Boolean(evidenceError),
+		isLoadingAnalysis,
+		isAnalysisError: Boolean(analysisError),
+		analysisError,
+		refetchAnalysis: () => {
+			refetchAnalysis();
+		},
 		errors: {
 			runsListError,
 			runError,
@@ -166,7 +229,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 		selectRun,
 		refetchAll: () => {
 			refetchRunsList();
-			if (activeRunId) {
+			if (activeRunId && !isRequestedRunMissing) {
 				refetchRun();
 				refetchMetrics();
 				refetchEvidence();

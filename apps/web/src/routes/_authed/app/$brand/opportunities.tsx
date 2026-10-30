@@ -17,9 +17,9 @@ import { PageHeader } from "@/components/page-header";
 import { useOpportunities } from "@/hooks/use-opportunities";
 import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { BaselineOpportunitiesView } from "@/components/baseline-opportunities-view";
-import { buildTitle, getAppName, getBrandName } from "@/lib/route-head";
-
+import { useListFilters } from "@/hooks/use-list-filters";
 import { useLanguage } from "@/lib/language-context";
+import { buildTitle, getAppName, getBrandName } from "@/lib/route-head";
 
 export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
 	head: ({ matches, match }) => {
@@ -37,6 +37,7 @@ export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
 
 function OpportunitiesPage() {
 	const { brand: brandId } = Route.useParams();
+	const { model, lookback } = useListFilters();
 	const activeBaseline = useActiveBaselineRun(brandId);
 	const { data, isLoading, isError } = useOpportunities(brandId);
 	const { language } = useLanguage();
@@ -63,7 +64,12 @@ function OpportunitiesPage() {
 				subtitle="What to create, pitch, and seed to earn more AI citations — generated from your tracked answer data."
 				infoContent={infoContent}
 			>
-				<BaselineOpportunitiesView brandId={brandId} activeBaseline={activeBaseline} />
+				<BaselineOpportunitiesView
+					brandId={brandId}
+					activeBaseline={activeBaseline}
+					model={model}
+					lookback={lookback}
+				/>
 			</PageHeader>
 		);
 	}

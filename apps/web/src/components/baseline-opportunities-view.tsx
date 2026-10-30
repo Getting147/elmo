@@ -14,24 +14,41 @@ import {
 	IconArrowRight,
 	IconTarget,
 	IconLayersSubtract,
+	IconAlertCircle,
+	IconRefresh,
 } from "@tabler/icons-react";
 import { useLanguage } from "@/lib/language-context";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
+import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
 
 interface BaselineOpportunitiesViewProps {
 	brandId: string;
 	activeBaseline: ActiveBaselineRunResult;
+	model?: string;
+	lookback?: string;
 }
 
 export function BaselineOpportunitiesView({
 	brandId,
 	activeBaseline,
+	model,
+	lookback,
 }: BaselineOpportunitiesViewProps) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 
-	const { runData, metricsData, analysisData, isLoading, isError } = activeBaseline;
+	const {
+		runData,
+		metricsData,
+		analysisData,
+		isLoading,
+		isError,
+		isLoadingAnalysis,
+		isAnalysisError,
+		isRequestedRunMissing,
+	} = activeBaseline;
 
 	const hasAnalysis = Boolean(analysisData && (analysisData.payload || analysisData.analysis_id));
 	const payload = analysisData?.payload;
@@ -73,6 +90,90 @@ export function BaselineOpportunitiesView({
 		);
 	}
 
+	if (isRequestedRunMissing) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={true}
+				/>
+				<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+					<CardContent className="py-10 px-6 text-center space-y-4">
+						<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+							<IconAlertCircle size={24} />
+						</div>
+						<div className="space-y-1.5 max-w-md mx-auto">
+							<h3 className="text-base font-semibold text-foreground">
+								{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+							</h3>
+							<p className="text-sm text-muted-foreground leading-relaxed">
+								{isZh
+									? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+									: `The requested task was not found or access is denied.`}
+							</p>
+						</div>
+						{activeBaseline.runsList.length > 0 && (
+							<div className="pt-2">
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+								>
+									{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+								</Button>
+							</div>
+						)}
+					</CardContent>
+				</Card>
+			</div>
+		);
+	}
+
+	if (isUnsupportedBaselineModel(model)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<UnsupportedModelNotice />
+			</div>
+		);
+	}
+
+	if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<Card>
+					<CardContent className="pt-6">
+						<div className="text-muted-foreground text-center py-8">
+							{isZh ? "当前筛选无结果" : "No results for the selected filters."}
+						</div>
+					</CardContent>
+				</Card>
+			</div>
+		);
+	}
+
 	return (
 		<div className="space-y-6">
 			<DiagnosisRunBanner
@@ -85,7 +186,46 @@ export function BaselineOpportunitiesView({
 				isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 			/>
 
-			{!hasAnalysis ? (
+			{/* F05: Four distinct states: Loading -> Fetch Error (503) -> Authentic Missing (404) -> Populated */}
+			{isLoadingAnalysis && !hasAnalysis ? (
+				<Card className="border border-border/80 shadow-sm">
+					<CardContent className="p-6 space-y-4">
+						<Skeleton className="h-6 w-48" />
+						<Skeleton className="h-4 w-full" />
+						<Skeleton className="h-4 w-3/4" />
+						<Skeleton className="h-32 w-full" />
+					</CardContent>
+				</Card>
+			) : isAnalysisError && !hasAnalysis ? (
+				<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+					<CardContent className="py-10 px-6 text-center space-y-4">
+						<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+							<IconAlertTriangle size={24} />
+						</div>
+						<div className="space-y-1.5 max-w-md mx-auto">
+							<h3 className="text-base font-semibold text-foreground">
+								{isZh ? "加载机会分析建议失败" : "Failed to Load Opportunities Analysis"}
+							</h3>
+							<p className="text-sm text-muted-foreground leading-relaxed">
+								{isZh
+									? "读取分析报告时服务器响应异常（如 503 服务暂不可用或网络超时）。请点击下方重试读取，此操作仅重新拉取已有数据，不会触发重新生成或额外扣费。"
+									: "An error occurred while fetching analysis report (e.g. 503 service unavailable). Click below to retry reading."}
+							</p>
+						</div>
+						<div className="pt-2 flex justify-center gap-3">
+							<Button
+								variant="outline"
+								size="sm"
+								className="gap-1.5"
+								onClick={() => activeBaseline.refetchAnalysis()}
+							>
+								<IconRefresh size={15} />
+								<span>{isZh ? "重试读取" : "Retry"}</span>
+							</Button>
+						</div>
+					</CardContent>
+				</Card>
+			) : !hasAnalysis ? (
 				<Card className="border border-border/80 shadow-sm">
 					<CardContent className="py-12 px-6 text-center space-y-4">
 						<div className="size-12 mx-auto rounded-full bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center text-blue-600 dark:text-blue-400">

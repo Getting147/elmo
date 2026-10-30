@@ -43,8 +43,8 @@ export function DiagnosisRunBanner({
 	const status = runData?.status || "unknown";
 	const isCompleted = status === "completed";
 	const isPartial = status === "partial";
-	const isRunning = status === "running" || status === "created" || status === "started";
-	const isFailed = status === "failed" || status === "cancelled";
+	const isRunning = status === "running" || status === "created" || status === "started" || status === "queued";
+	const isFailed = status === "failed" || status === "cancelled" || status === "interrupted";
 
 	const platformName = runData?.model_name || "doubao-pro-32k";
 	const webSearchEnabled = runData?.web_search ?? true;
@@ -171,12 +171,12 @@ export function DiagnosisRunBanner({
 			</div>
 
 			{isRequestedRunMissing && (
-				<div className="bg-amber-100/70 dark:bg-amber-950/40 rounded-lg p-2.5 flex items-center gap-2 text-amber-900 dark:text-amber-200 text-xs">
-					<IconAlertTriangle size={14} className="shrink-0" />
+				<div className="bg-rose-100/80 dark:bg-rose-950/40 rounded-lg p-2.5 flex items-center gap-2 text-rose-900 dark:text-rose-200 text-xs">
+					<IconAlertCircle size={14} className="shrink-0" />
 					<span>
 						{isZh
-							? "URL 指定的任务编号未在当前品牌记录中找到，已自动呈现该品牌最近一次诊断任务。"
-							: "The requested task was not found for this brand. Displaying the most recent diagnostic run."}
+							? "指定的诊断任务不存在或无权访问，已严格阻断静默替换任务。"
+							: "The requested diagnostic run was not found or access denied. Silent fallback is blocked."}
 					</span>
 				</div>
 			)}
