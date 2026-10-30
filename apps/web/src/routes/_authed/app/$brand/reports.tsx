@@ -62,6 +62,8 @@ function ReportsError(props: ErrorComponentProps) {
 	</section>;
 }
 
+class FrozenDimensionInputError extends Error {}
+
 function BrandReportsPage() {
 	const { brand } = Route.useParams();
 	return <BrandReportsWorkspace key={brand} />;
@@ -124,10 +126,10 @@ function BrandReportsWorkspace() {
 	const [dimensionComposing, setDimensionComposing] = useState(false);
 	const saveDimension = (id: string, value: string) => {
 		const write = transact((current) => {
-			if (current.snapshot || current.runId) throw new Error("输入已在本页或其他标签页冻结，请显式重新准备后编辑。");
+			if (current.snapshot || current.runId) throw new FrozenDimensionInputError("输入已在本页或其他标签页冻结，请显式重新准备后编辑。");
 			return { ...current, dimensions: { ...current.dimensions, [id]: value } };
 		}).then(() => { dimensionSaveError.current = null; }, (err: Error) => {
-			dimensionSaveError.current = err;
+			if (!(err instanceof FrozenDimensionInputError)) dimensionSaveError.current = err;
 			setActionError(err.message);
 			throw err;
 		});
@@ -340,7 +342,10 @@ function BrandReportsWorkspace() {
 	// Mutations
 	const freezeMutation = useMutation({
 		mutationFn: async () => {
-			await Promise.all([...pendingDimensionWrites.current]);
+			await Promise.all([...pendingDimensionWrites.current].map((write) => write.catch((err: Error) => {
+				// A rejected frozen edit never changed the draft; genuine persistence failures still block.
+				if (!(err instanceof FrozenDimensionInputError)) throw err;
+			})));
 			if (dimensionSaveError.current) throw dimensionSaveError.current;
 			return transact(async (current) => {
 			if (current.runId) {

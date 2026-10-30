@@ -38,11 +38,12 @@ export function DiagnosisDimensionInput({ value, onCommit, onComposing, disabled
 				void commit(event.currentTarget.value);
 			}}
 			onBlur={(event) => {
+				const unfinishedComposition = composing.current;
 				composing.current = false;
+				editing.current = false;
 				onComposing(false);
-				void commit(event.currentTarget.value).then(() => {
-					editing.current = false;
-				});
+				// Ordinary changes already save; disabling a focused input is not another edit.
+				if (unfinishedComposition && !disabled) void commit(event.currentTarget.value);
 			}}
 		/>
 	);
