@@ -71,3 +71,75 @@ export function diagnosisStatusText(run: BaselineRunStatus | null): { title: str
 		description: `${diagnosisCountText(run)}。请进入诊断流程查看已有结果，分析及报告以本轮保存的产物为准。`,
 	};
 }
+
+export type QuestionExecutionState = "effective" | "failed" | "unattempted";
+
+export function resolveQuestionExecutionStatus(
+	q: {
+		code?: string;
+		status?: string | null;
+		attempts_history?: Array<{ status?: string; is_effective?: boolean; error_message?: string | null }>;
+		effective_status?: string | null;
+		attempts_count?: number;
+		error_message?: string | null;
+	},
+	zeroEffectiveCodes?: string[],
+): QuestionExecutionState {
+	const code = q.code;
+
+	// 1. 优先核对后端 sample_summary.zero_effective_questions 权威名单
+	if (code && Array.isArray(zeroEffectiveCodes) && zeroEffectiveCodes.includes(code)) {
+		const rawStatus = (q.status || "").toLowerCase();
+		if (rawStatus === "未尝试" || rawStatus === "unattempted") {
+			return "unattempted";
+		}
+		const hasAttempts =
+			(Array.isArray(q.attempts_history) && q.attempts_history.length > 0) ||
+			(typeof q.attempts_count === "number" && q.attempts_count > 0);
+		if (!hasAttempts && !q.error_message && rawStatus !== "http_error" && rawStatus !== "failed") {
+			return "unattempted";
+		}
+		return "failed";
+	}
+
+	// 2. 检查显式成功状态
+	const rawStatus = (q.status || "").toLowerCase();
+	if (rawStatus === "成功" || rawStatus === "success" || q.effective_status === "effective") {
+		return "effective";
+	}
+
+	// 3. 检查 attempts_history 中是否有任意成功的有效尝试
+	if (Array.isArray(q.attempts_history) && q.attempts_history.length > 0) {
+		const hasEffective = q.attempts_history.some(
+			(att) => att.is_effective === true || att.status === "success",
+		);
+		if (hasEffective) {
+			return "effective";
+		}
+		return "failed";
+	}
+
+	// 4. 未尝试显式标识
+	if (rawStatus === "未尝试" || rawStatus === "unattempted") {
+		return "unattempted";
+	}
+
+	// 5. 失败显式标识
+	if (
+		rawStatus === "http_error" ||
+		rawStatus === "failed" ||
+		rawStatus === "error" ||
+		rawStatus === "timeout" ||
+		q.effective_status === "ineffective" ||
+		Boolean(q.error_message)
+	) {
+		return "failed";
+	}
+
+	// 6. 若显式尝试次数为 0 且无报错，则为未尝试
+	if (q.attempts_count === 0) {
+		return "unattempted";
+	}
+
+	return "unattempted";
+}

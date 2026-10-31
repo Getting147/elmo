@@ -8,7 +8,7 @@ import { usePromptsSummary } from "@/hooks/use-prompts-summary";
 import { useBatchChartData } from "@/hooks/use-batch-chart-data";
 import { useBrand } from "@/hooks/use-brands";
 import { useListFilters } from "@/hooks/use-list-filters";
-import { Link, useSearch } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { VirtualizedPromptList } from "@/components/virtualized-prompt-list";
 import { ChartDataProvider } from "@/contexts/chart-data-context";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -18,6 +18,8 @@ import { FilteredListShell } from "@/components/filtered-list-shell";
 import { PromptOrderDropdown } from "@/components/prompt-order-dropdown";
 import { VisibilityBarSection } from "@/components/visibility-bar-section";
 import { coercePromptOrder, orderPrompts } from "@/lib/prompt-order";
+import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
+import { BaselinePromptsView } from "@/components/baseline-prompts-view";
 import type { LookbackPeriod } from "@/lib/chart-utils";
 import type { Brand, Competitor } from "@workspace/lib/db/schema";
 
@@ -33,10 +35,12 @@ interface PromptsDisplayProps {
  *  filter state itself — each section reads the URL keys it cares about
  *  so a filter change only re-renders the sections that depend on it. */
 export function PromptsDisplay({ pageTitle, pageDescription, pageInfoContent, editLink }: PromptsDisplayProps) {
-	const { brand } = useBrand();
+	const params = useParams({ strict: false }) as { brand?: string };
+	const { brand } = useBrand(params.brand);
+	const resolvedBrandId = brand?.id || params.brand;
 	return (
 		<PageHeader title={pageTitle} subtitle={pageDescription} infoContent={pageInfoContent}>
-			<PromptsContent brandId={brand?.id} editLink={editLink} />
+			<PromptsContent brandId={resolvedBrandId} editLink={editLink} />
 		</PageHeader>
 	);
 }
@@ -50,6 +54,8 @@ export function PromptsDisplay({ pageTitle, pageDescription, pageInfoContent, ed
 function PromptsContent({ brandId, editLink }: { brandId: string | undefined; editLink: string }) {
 	const { brand } = useBrand(brandId);
 	const filters = useListFilters();
+	const activeBaseline = useActiveBaselineRun(brandId);
+
 	const { model, lookback, tags, search } = filters;
 	// `order` is this route's own search key (not a narrowing filter), so it
 	// rides outside `useListFilters` / `isFiltered`.
@@ -71,7 +77,7 @@ function PromptsContent({ brandId, editLink }: { brandId: string | undefined; ed
 		promptsSummary,
 		isLoading: isLoadingSummary,
 		isError: summaryError,
-	} = usePromptsSummary(brandId, {
+	} = usePromptsSummary(activeBaseline.hasBaselineRuns ? undefined : brandId, {
 		lookback,
 		model: modelParam,
 		tags: tags.length > 0 ? tags : undefined,
@@ -91,6 +97,20 @@ function PromptsContent({ brandId, editLink }: { brandId: string | undefined; ed
 			: allPrompts;
 		return orderPrompts(filtered, order);
 	}, [promptsSummary, search, order]);
+
+	if (activeBaseline.isLoadingRunsList) {
+		return <ContentLoadingSkeleton />;
+	}
+
+	if (activeBaseline.hasBaselineRuns) {
+		return (
+			<BaselinePromptsView
+				brandId={brandId}
+				activeBaseline={activeBaseline}
+				filters={filters}
+			/>
+		);
+	}
 
 	const isInitialLoad = isLoadingSummary && !promptsSummary;
 

@@ -153,7 +153,10 @@ export async function callBaselineBackend<T = any>(args: {
 			const text = await resp.text();
 			if (text) errMsg = text;
 		}
-		throw new Error(errMsg);
+		const err: any = new Error(errMsg);
+		err.status = resp.status;
+		err.statusCode = resp.status;
+		throw err;
 	}
 
 	return resp.json();

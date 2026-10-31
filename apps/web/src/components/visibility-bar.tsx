@@ -151,10 +151,12 @@ export function VisibilityBarSkeleton() {
 	);
 }
 
-export function VisibilityBarEmpty() {
+export function VisibilityBarEmpty({ message }: { message?: string }) {
 	return (
 		<div className="flex items-center min-h-10 px-3 py-2 rounded-lg border border-border/60 bg-muted/20">
-			<span className="text-sm text-muted-foreground">No visibility data for the selected time range and filters.</span>
+			<span className="text-sm text-muted-foreground">
+				{message || "当前时间范围与筛选条件下暂无可见度数据 / No visibility data for the selected time range and filters."}
+			</span>
 		</div>
 	);
 }

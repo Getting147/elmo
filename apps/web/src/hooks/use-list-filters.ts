@@ -14,6 +14,7 @@ export type BrandFilterSearch = {
 	lookback?: string;
 	tags?: string;
 	q?: string;
+	runId?: string;
 };
 
 // The router's default search parser JSON-parses each value, so `?q=123`
@@ -25,12 +26,22 @@ function asString(value: unknown): string | undefined {
 	return undefined;
 }
 
+function safeRunId(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	if (value === null) return "null";
+	if (typeof value === "object") return "__invalid_run__";
+	const str = asString(value);
+	if (!str) return undefined;
+	return /^[a-zA-Z0-9_-]+$/.test(str) ? str : "__invalid_run__";
+}
+
 export function validateBrandFilterSearch(search: Record<string, unknown>): BrandFilterSearch {
 	return {
 		model: asString(search.model),
 		lookback: asString(search.lookback),
 		tags: Array.isArray(search.tags) ? search.tags.map(String).join(",") : asString(search.tags),
 		q: asString(search.q),
+		runId: safeRunId(search.runId),
 	};
 }
 
@@ -89,11 +100,14 @@ export function useListFilters() {
 		lookback: coerceLookback(urlFilters.lookback, defaultLookback),
 		tags,
 		search,
+		runId: urlFilters.runId,
+		setRunId: (nextRunId?: string) => setFilters({ runId: nextRunId }),
 		/** True when any narrowing filter is active (lookback never narrows to
 		 *  zero on its own, so it doesn't count). Gates which empty state a
 		 *  page shows: "no data" vs "no matches for your filters". */
 		isFiltered: Boolean(search) || tags.length > 0 || model !== ALL_MODELS_VALUE,
 		clearFilters: () => setFilters({ q: undefined, tags: undefined, model: undefined }),
+		setFilters,
 	};
 }
 

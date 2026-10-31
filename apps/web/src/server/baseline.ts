@@ -837,7 +837,14 @@ export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
 				callerId: session.user.id,
 			});
 		} catch (err: any) {
-			if (err.message?.includes("404") || err.message?.includes("analysis_not_found")) {
+			if (
+				err.status === 404 ||
+				err.statusCode === 404 ||
+				err.message?.includes("404") ||
+				err.message?.includes("analysis_not_found") ||
+				err.message?.includes("尚未录入人工分析版本") ||
+				err.message?.includes("archive_not_found")
+			) {
 				return null;
 			}
 			throw err;

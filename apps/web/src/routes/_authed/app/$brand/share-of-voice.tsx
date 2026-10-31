@@ -23,6 +23,15 @@ import { ColHead } from "@/components/col-head";
 import { ShareOfVoiceDonut } from "@/components/share-of-voice-donut";
 import { TrendChart } from "@/components/trend-chart";
 import { useLanguage } from "@/lib/language-context";
+import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
+import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
+import { computeShareOfVoice } from "@/lib/visibility-stats";
+import { useMemo } from "react";
+import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
+import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
+import { IconAlertCircle } from "@tabler/icons-react";
+import { Button } from "@workspace/ui/components/button";
 
 export const Route = createFileRoute("/_authed/app/$brand/share-of-voice")({
 	head: ({ matches, match }) => {
@@ -62,6 +71,7 @@ function ShareOfVoicePage() {
 	const isZh = language === "zh";
 
 	const { brand } = useBrand(brandId);
+	const activeBaseline = useActiveBaselineRun(brandId);
 	const availableModels = getAvailableModels(brand?.effectiveModels ?? []);
 	const modelParam = model === ALL_MODELS_VALUE ? undefined : model;
 
@@ -69,6 +79,135 @@ function ShareOfVoicePage() {
 	const availableTags = promptsSummary?.availableTags ?? [];
 
 	const { data, isLoading } = useShareOfVoice(brandId, { lookback, model: modelParam, tags });
+
+	// Compute baseline SOV data when baseline runs exist
+	const baselineData = useMemo(() => {
+		if (!activeBaseline.hasBaselineRuns) return null;
+		const { runData, metricsData } = activeBaseline;
+
+		// Model filter check
+		if (!isModelMatch(model, runData?.model_name)) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				totalRuns: 0,
+				totalMentions: 0,
+				entries: [],
+				brandShare: null,
+				shareTimeSeries: [],
+			};
+		}
+
+		// Lookback filter check
+		if (!isRunWithinLookback(runData?.completed_at || runData?.created_at, lookback)) {
+			return {
+				brandName: brand?.name || "Target Brand",
+				totalRuns: 0,
+				totalMentions: 0,
+				entries: [],
+				brandShare: null,
+				shareTimeSeries: [],
+			};
+		}
+
+		const p0Summary = metricsData?.p0_summary;
+		const validQuestions =
+			p0Summary?.effective_sample_count ??
+			p0Summary?.planned_questions ??
+			runData?.valid_questions ??
+			0;
+		const rawSampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
+		const sampleDate = /^\d{4}-\d{2}-\d{2}$/.test(rawSampleDate) ? rawSampleDate : "";
+		const brandName = brand?.name || "Target Brand";
+
+		// Strictly isolate formal questions only (!is_probe)
+		const rawQuestions: any[] = metricsData?.questions || [];
+		const allQuestions = rawQuestions.filter((q: any) => !q.is_probe);
+		const matchingQuestions = tags.length > 0
+			? allQuestions.filter((q) => tags.includes(q.dimension_name))
+			: allQuestions;
+
+		const zeroEffectiveCodes = metricsData?.sample_summary?.zero_effective_questions;
+		const matchingEffectiveQuestions = matchingQuestions.filter((q) => {
+			const status = resolveQuestionExecutionStatus(
+				{
+					code: q.code,
+					status: q.status,
+					attempts_history: q.attempts_history,
+					error_message: q.error_message,
+				},
+				zeroEffectiveCodes,
+			);
+			return status === "effective";
+		});
+
+		let brandMentions =
+			p0Summary?.broad_mention_count ??
+			p0Summary?.effective_mention_count ??
+			0;
+		const rawCompetitors: any[] = metricsData?.competitors || [];
+
+		if (tags.length > 0) {
+			brandMentions = matchingEffectiveQuestions.filter((q) => q.effective_mention).length;
+		}
+
+		const competitorList = rawCompetitors.map((c: any) => {
+			let mentions = c.p0_mention_count ?? c.overall_mention_count ?? 0;
+			if (tags.length > 0 && Array.isArray(c.dimension_hits)) {
+				mentions = c.dimension_hits
+					.filter((d: any) => tags.includes(d.dimension_name || d.name))
+					.reduce((sum: number, d: any) => sum + (d.mention_count || d.count || 0), 0);
+			}
+			return { name: c.name, mentions };
+		});
+
+		const sovResult = computeShareOfVoice(
+			{ name: brandName, mentions: brandMentions },
+			competitorList,
+		);
+
+		const entries = sovResult.entries.map((e) => ({
+			...e,
+			prompts: e.mentions,
+		}));
+
+		const totalRuns = tags.length > 0 ? matchingEffectiveQuestions.length : validQuestions;
+
+		return {
+			brandName,
+			totalRuns,
+			totalMentions: sovResult.total,
+			entries,
+			brandShare: sovResult.brandShare,
+			shareTimeSeries: sampleDate
+				? [{ date: sampleDate, share: sovResult.brandShare !== null ? Math.round(sovResult.brandShare * 100) : null }]
+				: [],
+		};
+	}, [activeBaseline, brand?.name, tags, model, lookback]);
+
+	const baselineTags = useMemo(() => {
+		const rawQuestions: any[] = activeBaseline.metricsData?.questions || [];
+		const questions = rawQuestions.filter((q: any) => !q.is_probe);
+		const set = new Set<string>();
+		for (const q of questions) {
+			if (q.dimension_name) set.add(q.dimension_name);
+		}
+		return Array.from(set);
+	}, [activeBaseline.metricsData?.questions]);
+
+	const baselineModels = useMemo(() => {
+		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
+		const brandModels = brand?.effectiveModels || [];
+		const combined = Array.from(new Set([runModel, ...brandModels]));
+		return getAvailableModels(combined);
+	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
+
+	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
+	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
+	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
+		? activeBaseline.isLoading && !activeBaseline.runData
+		: isLoading && !data);
+	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : false;
 
 	const infoContent = (
 		<>
@@ -80,11 +219,52 @@ function ShareOfVoicePage() {
 		</>
 	);
 
-	const maxMentions = data?.entries.reduce((m, e) => Math.max(m, e.mentions), 0) ?? 0;
-	const barColors = shareOfVoiceColorMap(data?.entries ?? []);
+	const maxMentions = effectiveData?.entries.reduce((m, e) => Math.max(m, e.mentions), 0) ?? 0;
+	const barColors = shareOfVoiceColorMap(effectiveData?.entries ?? []);
+
+	const isFilteredOut =
+		tags.length > 0 ||
+		(activeBaseline.hasBaselineRuns &&
+			!isRunWithinLookback(
+				activeBaseline.runData?.completed_at || activeBaseline.runData?.created_at,
+				lookback,
+			));
 
 	let content: React.ReactNode;
-	if (isLoading && !data) {
+	if (activeBaseline.isRequestedRunMissing) {
+		content = (
+			<Card className="border border-destructive/40 shadow-sm bg-rose-50/20 dark:bg-rose-950/20">
+				<CardContent className="py-10 px-6 text-center space-y-4">
+					<div className="size-12 mx-auto rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+						<IconAlertCircle size={24} />
+					</div>
+					<div className="space-y-1.5 max-w-md mx-auto">
+						<h3 className="text-base font-semibold text-foreground">
+							{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+						</h3>
+						<p className="text-sm text-muted-foreground leading-relaxed">
+							{isZh
+								? `URL 指定的任务编号 (${activeBaseline.requestedRunId || activeBaseline.activeRunId}) 未在当前品牌记录中找到，系统已严格阻断任务替换。`
+								: `The requested task was not found or access is denied.`}
+						</p>
+					</div>
+					{activeBaseline.runsList.length > 0 && (
+						<div className="pt-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => activeBaseline.selectRun(activeBaseline.runsList[0].run_id)}
+							>
+								{isZh ? "切换至最近一次诊断任务" : "Switch to Latest Run"}
+							</Button>
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		);
+	} else if (isUnsupportedBaselineModel(model)) {
+		content = <UnsupportedModelNotice />;
+	} else if (effectiveLoading) {
 		content = (
 			<Card>
 				<CardHeader>
@@ -97,20 +277,56 @@ function ShareOfVoicePage() {
 				</CardContent>
 			</Card>
 		);
-	} else if (!data || data.totalRuns === 0 || data.entries.length === 0) {
+	} else if (effectiveError) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-destructive text-center py-8">
+						{isZh ? "无法加载声量分析数据，请刷新重试。" : "Failed to load share of voice data. Please try again."}
+					</div>
+				</CardContent>
+			</Card>
+		);
+	} else if (isFilteredOut && (!effectiveData || effectiveData.totalRuns === 0)) {
 		content = (
 			<Card>
 				<CardContent className="pt-6">
 					<div className="text-muted-foreground text-center py-8">
-						No mention data yet for the selected filters. Mentions appear once your prompts have been run.
+						{isZh
+							? "当前筛选无结果"
+							: "No results for the selected filters."}
+					</div>
+				</CardContent>
+			</Card>
+		);
+	} else if (!effectiveData || effectiveData.totalRuns === 0 || effectiveData.entries.length === 0) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-muted-foreground text-center py-8">
+						{isZh
+							? "当前筛选条件下暂无评测数据。发起诊断任务后将在此展现。"
+							: "No mention data yet for the selected filters. Mentions appear once your prompts have been run."}
+					</div>
+				</CardContent>
+			</Card>
+		);
+	} else if (maxMentions === 0 || effectiveData.entries.every((e) => e.mentions === 0)) {
+		content = (
+			<Card>
+				<CardContent className="pt-6">
+					<div className="text-muted-foreground text-center py-8">
+						{isZh
+							? "本轮未产生品牌或竞品有效提及，声量份额不可计算（总提及数为 0）。"
+							: "No brand or competitor mentions recorded in this diagnostic run. Share of voice cannot be computed."}
 					</div>
 				</CardContent>
 			</Card>
 		);
 	} else {
 		// Whole-window cumulative raw SOV to strictly align with reports (e.g. 70.6%)
-		const cumulativeShare = data.brandShare !== null && data.brandShare !== undefined
-			? (data.brandShare * 100).toFixed(1)
+		const cumulativeShare = effectiveData.brandShare !== null && effectiveData.brandShare !== undefined
+			? (effectiveData.brandShare * 100).toFixed(1)
 			: null;
 		content = (
 			<TooltipProvider delayDuration={150}>
@@ -120,7 +336,13 @@ function ShareOfVoicePage() {
 							<div className="flex items-center justify-between">
 								<CardTitle>Share of Voice</CardTitle>
 								<Badge variant="secondary" className="text-xs font-normal">
-									{isZh ? "近 30 天累计" : "Last 30 days cumulative"}
+									{isZh
+										? activeBaseline.hasBaselineRuns
+											? "当前诊断任务"
+											: "近 30 天累计"
+										: activeBaseline.hasBaselineRuns
+											? "Current diagnostic run"
+											: "Last 30 days cumulative"}
 								</Badge>
 							</div>
 						</CardHeader>
@@ -130,11 +352,16 @@ function ShareOfVoicePage() {
 									{cumulativeShare !== null ? `${cumulativeShare}%` : "—"}
 								</div>
 								<p className="text-sm text-muted-foreground mt-1 max-w-[18rem]">
-									{data.brandName} across {data.totalRuns.toLocaleString()} runs
-									{data.entries.length > 1 ? ` and ${data.entries.length - 1} competitors` : ""}.
+									{effectiveData.brandName} across {effectiveData.totalRuns.toLocaleString()}{" "}
+									{isZh ? "道评测题" : "runs"}
+									{effectiveData.entries.length > 1
+										? isZh
+											? ` 及 ${effectiveData.entries.length - 1} 家对比竞品`
+											: ` and ${effectiveData.entries.length - 1} competitors`
+										: ""}.
 								</p>
 							</div>
-							<ShareOfVoiceDonut entries={data.entries} />
+							<ShareOfVoiceDonut entries={effectiveData.entries} />
 						</CardContent>
 					</Card>
 
@@ -143,13 +370,19 @@ function ShareOfVoicePage() {
 							<div className="flex items-center justify-between">
 								<CardTitle>Share of Voice Trends</CardTitle>
 								<Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-									{isZh ? "逐日截面趋势 (LVCF)" : "Daily snapshot trend (LVCF)"}
+									{isZh
+										? activeBaseline.hasBaselineRuns
+											? "单点截面"
+											: "逐日截面趋势 (LVCF)"
+										: activeBaseline.hasBaselineRuns
+											? "Single snapshot"
+											: "Daily snapshot trend (LVCF)"}
 								</Badge>
 							</div>
 						</CardHeader>
 						<CardContent>
 							<TrendChart
-								data={data.shareTimeSeries.map((p) => ({ date: p.date, value: p.share }))}
+								data={effectiveData.shareTimeSeries.map((p) => ({ date: p.date, value: p.share }))}
 								label="Share of Voice"
 								color="#2563eb"
 								className="aspect-auto h-[180px] w-full"
@@ -180,7 +413,7 @@ function ShareOfVoicePage() {
 								</TableRow>
 							</TableHeader>
 							<TableBody>
-								{data.entries.map((e, i) => (
+								{effectiveData.entries.map((e, i) => (
 									<TableRow key={e.name} className={e.isBrand ? "bg-muted/40" : undefined}>
 										<TableCell className="text-muted-foreground tabular-nums">{i + 1}</TableCell>
 										<TableCell className="font-medium">
@@ -227,15 +460,28 @@ function ShareOfVoicePage() {
 			subtitle="How often AI engines mention you versus your competitors."
 			infoContent={infoContent}
 		>
-			<FilterSection>
-				<FilterBar
-					availableTags={availableTags}
-					availableModels={availableModels}
-					showSearch={false}
-					showModelSelector
-				/>
-			</FilterSection>
-			<div className="space-y-6">{content}</div>
+			<div className="space-y-6">
+				{activeBaseline.hasBaselineRuns && (
+					<DiagnosisRunBanner
+						activeRunId={activeBaseline.activeRunId}
+						runsList={activeBaseline.runsList}
+						runData={activeBaseline.runData}
+						metricsData={activeBaseline.metricsData}
+						onSelectRun={activeBaseline.selectRun}
+						brandId={brandId}
+						isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+					/>
+				)}
+				<FilterSection>
+					<FilterBar
+						availableTags={effectiveTags}
+						availableModels={effectiveModels}
+						showSearch={false}
+						showModelSelector
+					/>
+				</FilterSection>
+				<div className="space-y-6">{content}</div>
+			</div>
 		</PageHeader>
 	);
 }
