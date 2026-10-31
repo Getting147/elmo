@@ -168,7 +168,6 @@ export function BaselinePromptsView({
 	}, [questions, tags, search, model, lookback, runData?.model_name, runData?.completed_at, runData?.created_at]);
 
 	const p0Summary = metricsData?.p0_summary;
-	const domainMetrics = metricsData?.domain_metrics;
 	const validQuestions =
 		p0Summary?.effective_sample_count ??
 		p0Summary?.planned_questions ??
@@ -200,6 +199,8 @@ export function BaselinePromptsView({
 			);
 		}
 
+		const filteredCitations = filteredQuestions.reduce((sum, q) => sum + (q.citation_count || 0), 0);
+
 		if (filters.isFiltered) {
 			if (filteredQuestions.length === 0) {
 				return (
@@ -218,7 +219,6 @@ export function BaselinePromptsView({
 			const effectiveCount = filteredEffectiveQuestions.length;
 			const effectiveMentions = filteredEffectiveQuestions.filter((q) => q.effective_mention).length;
 			const effectiveRate = effectiveCount > 0 ? effectiveMentions / effectiveCount : 0;
-			const filteredCitations = filteredQuestions.reduce((sum, q) => sum + (q.citation_count || 0), 0);
 
 			if (effectiveCount === 0) {
 				return (
@@ -262,7 +262,7 @@ export function BaselinePromptsView({
 				currentVisibility={Math.round(mentionRate * 100)}
 				totalRuns={validQuestions}
 				totalPrompts={validQuestions}
-				totalCitations={domainMetrics?.total_citations ?? 0}
+				totalCitations={filteredCitations}
 				visibilityTimeSeries={
 					sampleDate ? [{ date: sampleDate, visibility: Math.round(mentionRate * 100) }] : []
 				}
@@ -276,7 +276,6 @@ export function BaselinePromptsView({
 		filteredQuestions,
 		validQuestions,
 		mentionRate,
-		domainMetrics?.total_citations,
 		sampleDate,
 		lookback,
 		isZh,
