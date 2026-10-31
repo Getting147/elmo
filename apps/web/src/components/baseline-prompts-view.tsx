@@ -11,6 +11,8 @@ import {
 	IconWorld,
 	IconExternalLink,
 	IconSearch,
+	IconAlertCircle,
+	IconClock,
 } from "@tabler/icons-react";
 import { useLanguage } from "@/lib/language-context";
 import { VisibilityBar, VisibilityBarEmpty } from "@/components/visibility-bar";
@@ -21,7 +23,7 @@ import type { useListFilters } from "@/hooks/use-list-filters";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
 import { isUnsupportedBaselineModel, isRunWithinLookback, getAvailableModels } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
 import { useBrand } from "@/hooks/use-brands";
 
 interface BaselinePromptsViewProps {
@@ -41,6 +43,8 @@ export function BaselinePromptsView({
 
 	const { runData, metricsData, evidenceData, isLoading, isError } = activeBaseline;
 
+	const zeroEffectiveCodes = metricsData?.sample_summary?.zero_effective_questions;
+
 	// Questions list: merge formal questions from metrics and evidence
 	// Strictly exclude probe questions (!is_probe) to prevent polluting formal question denominator (Task 4.3 & 5.2)
 	const questions = useMemo(() => {
@@ -59,6 +63,17 @@ export function BaselinePromptsView({
 			return metricsQuestions.map((mq: any) => {
 				const key = mq.code || mq.question_id || mq.text || mq.question_text;
 				const ev = evidenceMap.get(key) || {};
+				const executionStatus = resolveQuestionExecutionStatus(
+					{
+						code: mq.code || ev.question_code,
+						status: mq.status,
+						attempts_history: mq.attempts_history,
+						effective_status: ev.effective_status,
+						attempts_count: mq.attempts_history?.length ?? ev.attempts_count,
+						error_message: mq.error_message || ev.error_message,
+					},
+					zeroEffectiveCodes,
+				);
 				return {
 					id: mq.code || mq.question_id || mq.text,
 					code: mq.code || ev.question_code || "Q",
@@ -70,24 +85,44 @@ export function BaselinePromptsView({
 					search_queries: ev.search_queries || [],
 					answer_excerpt: mq.answer_excerpt || ev.answer_text?.slice(0, 200) || "",
 					full_answer_text: mq.full_answer_text || ev.answer_text || "",
+					status: mq.status || ev.status || null,
+					error_message: mq.error_message || ev.error_message || null,
+					execution_status: executionStatus,
+					is_effective: executionStatus === "effective",
 				};
 			});
 		}
 
 		// Fallback to evidence questions if metrics questions are not yet populated
-		return evidenceQuestions.map((eq: any, index: number) => ({
-			id: eq.question_code || eq.question_id || `q-${index}`,
-			code: eq.question_code || `Q${index + 1}`,
-			text: eq.question_text || "",
-			dimension_name: eq.dimension_name || "综合",
-			effective_mention: eq.effective_mention ?? false,
-			citation_count: eq.citations?.length ?? 0,
-			citations: eq.citations || [],
-			search_queries: eq.search_queries || [],
-			answer_excerpt: eq.answer_text?.slice(0, 200) || "",
-			full_answer_text: eq.answer_text || "",
-		}));
-	}, [metricsData?.questions, evidenceData?.formal_questions]);
+		return evidenceQuestions.map((eq: any, index: number) => {
+			const executionStatus = resolveQuestionExecutionStatus(
+				{
+					code: eq.question_code,
+					status: eq.status,
+					effective_status: eq.effective_status,
+					attempts_count: eq.attempts_count,
+					error_message: eq.error_message,
+				},
+				zeroEffectiveCodes,
+			);
+			return {
+				id: eq.question_code || eq.question_id || `q-${index}`,
+				code: eq.question_code || `Q${index + 1}`,
+				text: eq.question_text || "",
+				dimension_name: eq.dimension_name || "综合",
+				effective_mention: eq.effective_mention ?? false,
+				citation_count: eq.citations?.length ?? 0,
+				citations: eq.citations || [],
+				search_queries: eq.search_queries || [],
+				answer_excerpt: eq.answer_text?.slice(0, 200) || "",
+				full_answer_text: eq.answer_text || "",
+				status: eq.status || null,
+				error_message: eq.error_message || null,
+				execution_status: executionStatus,
+				is_effective: executionStatus === "effective",
+			};
+		});
+	}, [metricsData?.questions, evidenceData?.formal_questions, zeroEffectiveCodes]);
 
 	// Extract available dimensions as tags
 	const availableTags = useMemo(() => {
@@ -177,18 +212,34 @@ export function BaselinePromptsView({
 					/>
 				);
 			}
-			const filteredCount = filteredQuestions.length;
-			const filteredMentions = filteredQuestions.filter((q) => q.effective_mention).length;
-			const filteredRate = filteredCount > 0 ? filteredMentions / filteredCount : 0;
+
+			// 仅以筛选范围内产生有效回答的正式题作为分母
+			const filteredEffectiveQuestions = filteredQuestions.filter((q) => q.is_effective);
+			const effectiveCount = filteredEffectiveQuestions.length;
+			const effectiveMentions = filteredEffectiveQuestions.filter((q) => q.effective_mention).length;
+			const effectiveRate = effectiveCount > 0 ? effectiveMentions / effectiveCount : 0;
 			const filteredCitations = filteredQuestions.reduce((sum, q) => sum + (q.citation_count || 0), 0);
+
+			if (effectiveCount === 0) {
+				return (
+					<VisibilityBarEmpty
+						message={
+							isZh
+								? "当前筛选维度无有效正式题样本，可见度不可计算"
+								: "No valid formal questions in selected filters. Visibility is not computable."
+						}
+					/>
+				);
+			}
+
 			return (
 				<VisibilityBar
-					currentVisibility={Math.round(filteredRate * 100)}
-					totalRuns={filteredCount}
-					totalPrompts={filteredCount}
+					currentVisibility={Math.round(effectiveRate * 100)}
+					totalRuns={effectiveCount}
+					totalPrompts={effectiveCount}
 					totalCitations={filteredCitations}
 					visibilityTimeSeries={
-						sampleDate ? [{ date: sampleDate, visibility: Math.round(filteredRate * 100) }] : []
+						sampleDate ? [{ date: sampleDate, visibility: Math.round(effectiveRate * 100) }] : []
 					}
 					lookback={lookback}
 				/>
@@ -418,21 +469,47 @@ function QuestionCard({
 					</div>
 
 					<div>
-						{question.effective_mention ? (
+						{question.is_effective ? (
+							question.effective_mention ? (
+								<Badge
+									variant="secondary"
+									className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 gap-1 text-xs"
+								>
+									<IconCheck size={13} />
+									<span>{isZh ? "100% 可见度 · 品牌已提及" : "100% Visibility · Mentioned"}</span>
+								</Badge>
+							) : (
+								<Badge
+									variant="outline"
+									className="text-muted-foreground gap-1 text-xs"
+								>
+									<IconX size={13} />
+									<span>{isZh ? "0% 可见度 · 品牌未提及" : "0% Visibility · Not Mentioned"}</span>
+								</Badge>
+							)
+						) : question.execution_status === "failed" ? (
 							<Badge
 								variant="secondary"
-								className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 gap-1 text-xs"
+								className="bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-400 gap-1 text-xs"
 							>
-								<IconCheck size={13} />
-								<span>{isZh ? "100% 可见度 · 品牌已提及" : "100% Visibility · Mentioned"}</span>
+								<IconAlertCircle size={13} />
+								<span>
+									{isZh
+										? question.error_message
+											? `采样失败 · ${question.error_message}`
+											: "采样失败 · 未获有效回答"
+										: question.error_message
+											? `Sampling Failed · ${question.error_message}`
+											: "Sampling Failed · No Valid Response"}
+								</span>
 							</Badge>
 						) : (
 							<Badge
 								variant="outline"
-								className="text-muted-foreground gap-1 text-xs"
+								className="bg-muted/50 text-muted-foreground gap-1 text-xs border-dashed"
 							>
-								<IconX size={13} />
-								<span>{isZh ? "0% 可见度 · 品牌未提及" : "0% Visibility · Not Mentioned"}</span>
+								<IconClock size={13} />
+								<span>{isZh ? "未尝试" : "Unattempted"}</span>
 							</Badge>
 						)}
 					</div>

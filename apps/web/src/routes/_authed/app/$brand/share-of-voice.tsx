@@ -27,8 +27,9 @@ import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { computeShareOfVoice } from "@/lib/visibility-stats";
 import { useMemo } from "react";
-import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
 
@@ -85,7 +86,7 @@ function ShareOfVoicePage() {
 		const { runData, metricsData } = activeBaseline;
 
 		// Model filter check
-		if (model && model !== ALL_MODELS_VALUE && model !== runData?.model_name) {
+		if (!isModelMatch(model, runData?.model_name)) {
 			return {
 				brandName: brand?.name || "Target Brand",
 				totalRuns: 0,
@@ -125,6 +126,20 @@ function ShareOfVoicePage() {
 			? allQuestions.filter((q) => tags.includes(q.dimension_name))
 			: allQuestions;
 
+		const zeroEffectiveCodes = metricsData?.sample_summary?.zero_effective_questions;
+		const matchingEffectiveQuestions = matchingQuestions.filter((q) => {
+			const status = resolveQuestionExecutionStatus(
+				{
+					code: q.code,
+					status: q.status,
+					attempts_history: q.attempts_history,
+					error_message: q.error_message,
+				},
+				zeroEffectiveCodes,
+			);
+			return status === "effective";
+		});
+
 		let brandMentions =
 			p0Summary?.broad_mention_count ??
 			p0Summary?.effective_mention_count ??
@@ -132,7 +147,7 @@ function ShareOfVoicePage() {
 		const rawCompetitors: any[] = metricsData?.competitors || [];
 
 		if (tags.length > 0) {
-			brandMentions = matchingQuestions.filter((q) => q.effective_mention).length;
+			brandMentions = matchingEffectiveQuestions.filter((q) => q.effective_mention).length;
 		}
 
 		const competitorList = rawCompetitors.map((c: any) => {
@@ -155,7 +170,7 @@ function ShareOfVoicePage() {
 			prompts: e.mentions,
 		}));
 
-		const totalRuns = tags.length > 0 ? matchingQuestions.length : validQuestions;
+		const totalRuns = tags.length > 0 ? matchingEffectiveQuestions.length : validQuestions;
 
 		return {
 			brandName,

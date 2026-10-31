@@ -20,7 +20,7 @@ import {
 import { useLanguage } from "@/lib/language-context";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
-import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
 
 interface BaselineOpportunitiesViewProps {
@@ -147,6 +147,29 @@ export function BaselineOpportunitiesView({
 					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 				/>
 				<UnsupportedModelNotice />
+			</div>
+		);
+	}
+
+	if (!isModelMatch(model, runData?.model_name)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<Card>
+					<CardContent className="pt-6">
+						<div className="text-muted-foreground text-center py-8">
+							{isZh ? "当前筛选无结果" : "No results for the selected filters."}
+						</div>
+					</CardContent>
+				</Card>
 			</div>
 		);
 	}

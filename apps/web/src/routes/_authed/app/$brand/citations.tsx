@@ -23,7 +23,7 @@ import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
 import { type CitationCategory, emptyCategoryCounts, toRoundedPercentages } from "@/lib/domain-categories";
 import type { CitationData } from "@/components/citations/types";
-import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
 import { Button } from "@workspace/ui/components/button";
 import { IconAlertCircle } from "@tabler/icons-react";
@@ -76,7 +76,7 @@ function CitationsPage() {
 		const { runData, metricsData, evidenceData } = activeBaseline;
 
 		// Model filter check
-		if (modelParam && modelParam !== runData?.model_name) {
+		if (!isModelMatch(modelParam, runData?.model_name)) {
 			return {
 				totalCitations: 0,
 				uniqueDomains: 0,
@@ -119,9 +119,8 @@ function CitationsPage() {
 			}
 		}
 
-		const totalCitations = filters.tags.length > 0
-			? allCitations.length
-			: (metricsData?.domain_metrics?.total_citations ?? allCitations.length);
+		// Derive total citations strictly from the matching formal citation dataset
+		const totalCitations = allCitations.length;
 
 		const domainCounts = new Map<string, { count: number; category: CitationCategory; exampleTitle?: string }>();
 		const urlCounts = new Map<string, { url: string; domain: string; title?: string; count: number; category: CitationCategory; pageType: any; promptCount: number }>();
@@ -241,9 +240,8 @@ function CitationsPage() {
 
 		const specificUrls = Array.from(urlCounts.values()).sort((a, b) => b.count - a.count);
 
-		const uniqueDomains = filters.tags.length > 0
-			? domainCounts.size
-			: (metricsData?.domain_metrics?.unique_domains ?? domainCounts.size);
+		// Derive unique domains strictly from the matching formal citation domain counts
+		const uniqueDomains = domainCounts.size;
 
 		const rawSampleDate = (runData?.completed_at || runData?.created_at || "").slice(0, 10);
 		const sampleDate = /^\d{4}-\d{2}-\d{2}$/.test(rawSampleDate) ? rawSampleDate : "";
@@ -274,6 +272,11 @@ function CitationsPage() {
 		const combined = Array.from(new Set([runModel, ...brandModels]));
 		return getAvailableModels(combined);
 	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
+
+	const probeCitationsCount = useMemo(() => {
+		const probeQuestions: any[] = activeBaseline.evidenceData?.probe_questions || [];
+		return probeQuestions.reduce((acc: number, q: any) => acc + (Array.isArray(q.citations) ? q.citations.length : 0), 0);
+	}, [activeBaseline.evidenceData?.probe_questions]);
 
 	const effectiveCitationData = activeBaseline.hasBaselineRuns ? baselineCitationData : citationData;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : citationData?.availableTags || [];
@@ -407,6 +410,23 @@ function CitationsPage() {
 						brandId={brandId}
 						isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 					/>
+				)}
+
+				{activeBaseline.hasBaselineRuns && (
+					<div className="text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2 px-1">
+						<span>
+							{isZh
+								? `当前信源统计基于核心正式题（共 ${effectiveCitationData?.totalCitations ?? 0} 条引用 / ${effectiveCitationData?.uniqueDomains ?? 0} 个独立域名，品牌份额 ${effectiveCitationData?.totalCitations ? Math.round(((effectiveCitationData.categoryCounts?.brand ?? 0) / effectiveCitationData.totalCitations) * 100) : 0}%）。`
+								: `Statistics derived from core formal prompts (${effectiveCitationData?.totalCitations ?? 0} citations / ${effectiveCitationData?.uniqueDomains ?? 0} domains).`}
+						</span>
+						{probeCitationsCount > 0 && (
+							<span className="text-muted-foreground/80">
+								{isZh
+									? `* 补充探针引用 ${probeCitationsCount} 条已按口径独立隔离。`
+									: `* Supplemental probe citations (${probeCitationsCount}) are isolated.`}
+							</span>
+						)}
+					</div>
 				)}
 
 				<FilteredListShell

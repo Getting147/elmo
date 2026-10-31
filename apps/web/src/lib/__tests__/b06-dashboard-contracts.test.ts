@@ -5,6 +5,8 @@ import {
 	computeIsRequestedRunMissing,
 	isInvalidBaselineRunId,
 } from "@/hooks/use-active-baseline-run";
+import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
+import { isDoubaoModel, isUnsupportedBaselineModel, isModelMatch } from "@/lib/model-filter";
 
 describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 	describe("1. SOV (Share of Voice) Calculation Contract", () => {
@@ -504,6 +506,186 @@ describe("BUG-001 / B06: Dashboard Data Contracts and Computations", () => {
 
 				expect(isMissing).toBe(true);
 			});
+		});
+	});
+
+	describe("10. Unified Citation Scope Contract (F02)", () => {
+		const standardCitationEvidence = {
+			formal_questions: [
+				{
+					question_code: "P01",
+					dimension_name: "轻钢别墅",
+					citations: [
+						{ url: "https://jinggongjian.com/villa", source_type: "official", domain: "jinggongjian.com" },
+						{ url: "https://compa.com/steel", source_type: "competitor", domain: "compa.com" },
+					],
+				},
+				{
+					question_code: "P02",
+					dimension_name: "工程营地",
+					citations: [
+						{ url: "https://compa.com/camps", source_type: "competitor", domain: "compa.com" },
+						{ url: "https://news.industry.com/article123", source_type: "news", domain: "news.industry.com" },
+					],
+				},
+				{
+					question_code: "P03",
+					dimension_name: "度假民宿",
+					citations: [
+						{ url: "https://compb.com/modular-house", source_type: "competitor", domain: "compb.com" },
+					],
+				},
+			],
+			probe_questions: [
+				{
+					question_code: "PX01",
+					dimension_name: "工程营地",
+					citations: [
+						{ url: "https://jinggongjian.com/standard", source_type: "official", domain: "jinggongjian.com" },
+						{ url: "https://compa.com/standard", source_type: "competitor", domain: "compa.com" },
+					],
+				},
+			],
+		};
+
+		it("unifies totalCitations (5), uniqueDomains (4), and brandShare (20%) from formal questions", () => {
+			const formalCitations: any[] = [];
+			for (const q of standardCitationEvidence.formal_questions) {
+				for (const c of q.citations) {
+					formalCitations.push(c);
+				}
+			}
+			expect(formalCitations).toHaveLength(5);
+
+			const uniqueDomains = new Set(formalCitations.map((c) => c.domain));
+			expect(uniqueDomains.size).toBe(4);
+
+			const brandCitations = formalCitations.filter((c) => c.source_type === "official" || c.domain === "jinggongjian.com");
+			expect(brandCitations).toHaveLength(1);
+
+			const brandShare = brandCitations.length / formalCitations.length;
+			expect(brandShare).toBe(0.2);
+			expect(`${Math.round(brandShare * 100)}%`).toBe("20%");
+		});
+
+		it("preserves probe isolation count of 2 without leaking into formal citations", () => {
+			const probeCitations: any[] = [];
+			for (const q of standardCitationEvidence.probe_questions) {
+				for (const c of q.citations) {
+					probeCitations.push(c);
+				}
+			}
+			expect(probeCitations).toHaveLength(2);
+		});
+	});
+
+	describe("11. Valid Sample Denominator & Question Status Contracts (F04)", () => {
+		const validityDataset = {
+			zero_effective_questions: ["P02", "P03"],
+			questions: [
+				{
+					code: "P01",
+					dimension_name: "产品定制",
+					status: "成功",
+					effective_mention: true,
+					is_probe: false,
+					attempts_history: [{ attempt_no: 1, status: "success", is_effective: true }],
+				},
+				{
+					code: "P02",
+					dimension_name: "工程营地",
+					status: "http_error",
+					error_message: "Synthetic 503",
+					effective_mention: false,
+					is_probe: false,
+					attempts_history: [{ attempt_no: 1, status: "http_error", is_effective: false }],
+				},
+				{
+					code: "P03",
+					dimension_name: "文旅度假",
+					status: "未尝试",
+					error_message: null,
+					effective_mention: false,
+					is_probe: false,
+					attempts_history: [],
+				},
+			],
+		};
+
+		it("correctly identifies question execution status (effective, failed, unattempted)", () => {
+			const p01Status = resolveQuestionExecutionStatus(
+				validityDataset.questions[0],
+				validityDataset.zero_effective_questions,
+			);
+			expect(p01Status).toBe("effective");
+
+			const p02Status = resolveQuestionExecutionStatus(
+				validityDataset.questions[1],
+				validityDataset.zero_effective_questions,
+			);
+			expect(p02Status).toBe("failed");
+
+			const p03Status = resolveQuestionExecutionStatus(
+				validityDataset.questions[2],
+				validityDataset.zero_effective_questions,
+			);
+			expect(p03Status).toBe("unattempted");
+		});
+
+		it("strictly preserves 100% visibility and 1-sample denominator when selecting all existing tags", () => {
+			const selectedTags = ["产品定制", "工程营地", "文旅度假"];
+			const matchingQuestions = validityDataset.questions.filter(
+				(q) => !q.is_probe && selectedTags.includes(q.dimension_name),
+			);
+			expect(matchingQuestions).toHaveLength(3); // List renders all 3 questions
+
+			const filteredEffective = matchingQuestions.filter(
+				(q) => resolveQuestionExecutionStatus(q, validityDataset.zero_effective_questions) === "effective",
+			);
+			expect(filteredEffective).toHaveLength(1); // Denominator is strictly 1!
+
+			const filteredMentions = filteredEffective.filter((q) => q.effective_mention).length;
+			const filteredRate = filteredMentions / filteredEffective.length;
+			expect(filteredRate).toBe(1.0); // 100%, never 33%!
+		});
+
+		it("marks visibility as non-computable (0 effective samples) when filtering solely by failed tag", () => {
+			const selectedTags = ["工程营地"];
+			const matchingQuestions = validityDataset.questions.filter(
+				(q) => !q.is_probe && selectedTags.includes(q.dimension_name),
+			);
+			const filteredEffective = matchingQuestions.filter(
+				(q) => resolveQuestionExecutionStatus(q, validityDataset.zero_effective_questions) === "effective",
+			);
+			expect(filteredEffective).toHaveLength(0);
+		});
+
+		it("ensures same-question retries do not inflate question count or denominator", () => {
+			const retryQuestion = {
+				code: "P01",
+				dimension_name: "产品定制",
+				status: "成功",
+				effective_mention: true,
+				is_probe: false,
+				attempts_history: [
+					{ attempt_no: 1, status: "timeout", is_effective: false },
+					{ attempt_no: 2, status: "success", is_effective: true },
+				],
+			};
+			const status = resolveQuestionExecutionStatus(retryQuestion);
+			expect(status).toBe("effective");
+		});
+	});
+
+	describe("12. Model Match Contract (F03)", () => {
+		it("matches exact Doubao model and prefix variants while rejecting spark substring", () => {
+			expect(isDoubaoModel("doubao-pro-32k")).toBe(true);
+			expect(isDoubaoModel("ark-doubao-pro")).toBe(true);
+			expect(isDoubaoModel("spark")).toBe(false);
+			expect(isUnsupportedBaselineModel("spark")).toBe(true);
+			expect(isModelMatch("spark", "doubao-pro-32k")).toBe(false);
+			expect(isModelMatch("doubao", "doubao-pro-32k")).toBe(true);
+			expect(isModelMatch("all", "doubao-pro-32k")).toBe(true);
 		});
 	});
 });

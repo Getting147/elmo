@@ -34,8 +34,9 @@ import { promptKeywords, type PromptFanoutStat, type TopQueryStat, type QueryPro
 import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
-import { isUnsupportedBaselineModel, isRunWithinLookback } from "@/lib/model-filter";
+import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
 
@@ -100,7 +101,7 @@ function QueryFanoutPage() {
 		const modelName = runData?.model_name || "doubao-pro-32k";
 
 		// Model filter check
-		if (model && model !== ALL_MODELS_VALUE && model !== modelName) {
+		if (!isModelMatch(model, modelName)) {
 			return {
 				brandName: brand?.name || "Target Brand",
 				model: modelName,
@@ -202,7 +203,22 @@ function QueryFanoutPage() {
 			promptRefs: Array.from(item.promptRefs.values()).sort((a, b) => b.runs - a.runs),
 		})).sort((a, b) => b.runs - a.runs);
 
-		const effectiveRunsCount = tags.length > 0 ? matchingQuestions.length : validQuestions;
+		const zeroEffectiveCodes = metricsData?.sample_summary?.zero_effective_questions;
+		const matchingEffectiveQuestions = matchingQuestions.filter((q) => {
+			const status = resolveQuestionExecutionStatus(
+				{
+					code: q.question_code,
+					status: q.status,
+					effective_status: q.effective_status,
+					attempts_count: q.attempts_count,
+					error_message: q.error_message,
+				},
+				zeroEffectiveCodes,
+			);
+			return status === "effective";
+		});
+
+		const effectiveRunsCount = tags.length > 0 ? matchingEffectiveQuestions.length : validQuestions;
 		const fanoutRuns = byPrompt.filter((p) => p.totalQueries > 0).length;
 		const uniqueQueries = queryMap.size;
 		const avgPerExecution = fanoutRuns > 0 ? +(totalQueries / fanoutRuns).toFixed(1) : 0;
