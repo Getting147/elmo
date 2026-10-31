@@ -87,13 +87,28 @@ export const Route = createFileRoute("/api/baseline/download")({
 						});
 					}
 
-					const blob = await pyResp.arrayBuffer();
 					const contentType =
 						format === "pdf"
 							? "application/pdf"
 							: format === "html"
 								? "text/html; charset=utf-8"
 								: "application/json; charset=utf-8";
+					const expectedType = contentType.split(";")[0];
+					const upstreamType = pyResp.headers.get("content-type")?.toLowerCase() || "";
+					if (!upstreamType.includes(expectedType)) {
+						return new Response(
+							JSON.stringify({ error: "invalid_artifact_response", message: "报告服务返回了错误的产物格式，已中止下载" }),
+							{ status: 502, headers: { "Content-Type": "application/json" } },
+						);
+					}
+
+					const blob = await pyResp.arrayBuffer();
+					if (blob.byteLength === 0) {
+						return new Response(
+							JSON.stringify({ error: "empty_artifact", message: "报告服务返回了空产物，已中止下载" }),
+							{ status: 502, headers: { "Content-Type": "application/json" } },
+						);
+					}
 
 					const headers = new Headers();
 					headers.set("Content-Type", contentType);

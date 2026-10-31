@@ -86,6 +86,7 @@ function BrandReportsWorkspace() {
 	const [revisionInput, setRevisionInput] = useState<string>("rev_01");
 	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
+	const [downloadError, setDownloadError] = useState<string | null>(null);
 
 	// 题库分类人工补齐状态 (E-R04)
 
@@ -288,6 +289,10 @@ function BrandReportsWorkspace() {
 			setRevisionInput(`rev_${nextNum < 10 ? `0${nextNum}` : nextNum}`);
 		}
 	}, [reportData, activeRunId]);
+
+	useEffect(() => {
+		setDownloadError(null);
+	}, [activeRunId, activeRevisionId]);
 
 	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
 	useEffect(() => {
@@ -571,6 +576,70 @@ function BrandReportsWorkspace() {
 			setActionError(`门禁审核拦截 (安全防线): ${err.message}`);
 		},
 	});
+
+	const downloadMutation = useMutation({
+		mutationFn: async (format: "pdf" | "html" | "json") => {
+			const response = await fetch(
+				`/api/baseline/download?reportId=rpt_${activeRunId}&revisionId=${activeRevisionId}&brandId=${encodeURIComponent(brandId!)}&format=${format}`,
+				{ credentials: "same-origin" },
+			);
+			if (!response.ok) {
+				let message = `下载请求失败 (HTTP ${response.status})`;
+				try {
+					const payload = await response.json();
+					message = payload.message || payload.detail?.message || (typeof payload.detail === "string" ? payload.detail : message);
+				} catch {
+					// 保留 HTTP 状态反馈，不将非 JSON 错误响应保存为产物。
+				}
+				if (response.status === 401) message = "登录状态已失效，请重新登录后重试";
+				if (response.status === 403) message = "无权下载该报告，请核对当前品牌与账号权限";
+				if (response.status === 404) message = "报告产物不存在或尚未就绪，请刷新修订状态";
+				throw new Error(message);
+			}
+
+			const expectedType = { pdf: "application/pdf", html: "text/html", json: "application/json" }[format];
+			const actualType = response.headers.get("Content-Type")?.toLowerCase() || "";
+			if (!actualType.includes(expectedType)) {
+				throw new Error("下载响应格式不正确，未保存文件");
+			}
+			const blob = await response.blob();
+			if (blob.size === 0) throw new Error("下载产物为空，未保存文件");
+
+			const fallbackFilename = `${brandId}_${activeRevisionId}.${format}`;
+			const disposition = response.headers.get("Content-Disposition") || "";
+			const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+			const quotedFilename = disposition.match(/filename="([^"]+)"/i)?.[1];
+			let filename = fallbackFilename;
+			if (encodedFilename) {
+				try {
+					filename = decodeURIComponent(encodedFilename);
+				} catch {
+					filename = fallbackFilename;
+				}
+			} else if (quotedFilename) {
+				filename = quotedFilename;
+			}
+			filename = filename.split(/[\\/]/).pop() || fallbackFilename;
+			return { blob, filename };
+		},
+		onMutate: () => setDownloadError(null),
+		onSuccess: ({ blob, filename }) => {
+			const objectUrl = URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = objectUrl;
+			link.download = filename;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+		},
+		onError: (err: Error) => setDownloadError(`下载失败：${err.message}`),
+	});
+
+	const activeRevision = reportData?.revisions?.find(
+		(rev: { revision_id: string; status: string }) => rev.revision_id === activeRevisionId,
+	);
+	const downloadsReady = activeRevision?.status === "ready";
 
 	return (
 		<div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto w-full min-h-screen bg-background text-foreground">
@@ -1570,28 +1639,44 @@ function BrandReportsWorkspace() {
 										<span className="text-xs font-bold text-muted-foreground uppercase">
 											受控安全下载通道（elmo 服务端鉴权代理 · 防路径穿越）
 										</span>
+										{!downloadsReady && (
+											<div role="status" className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+												{activeRevision
+													? `当前修订 ${activeRevisionId} 状态为 ${activeRevision.status}，产物未就绪，暂不可下载。`
+													: `当前修订 ${activeRevisionId} 尚未生成产物，暂不可下载。`}
+											</div>
+										)}
+										{downloadError && (
+											<div role="alert" className="text-xs text-red-700 dark:text-red-300 bg-red-50/70 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+												<span>{downloadError}</span>
+												<button type="button" onClick={() => setDownloadError(null)} className="shrink-0 hover:underline">关闭</button>
+											</div>
+										)}
 										<div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-											<a
-												href={`/api/baseline/download?reportId=rpt_${activeRunId}&revisionId=${activeRevisionId}&brandId=${brandId}&format=pdf`}
-												download
-												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-blue-50/50 dark:bg-blue-950/20 hover:bg-blue-100/60 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-semibold text-xs transition-colors"
+											<button
+												type="button"
+												onClick={() => downloadMutation.mutate("pdf")}
+												disabled={!downloadsReady || downloadMutation.isPending}
+												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-blue-50/50 dark:bg-blue-950/20 hover:bg-blue-100/60 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-semibold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 											>
-												<IconDownload size={16} /> 下载受控 PDF 报告
-											</a>
-											<a
-												href={`/api/baseline/download?reportId=rpt_${activeRunId}&revisionId=${activeRevisionId}&brandId=${brandId}&format=html`}
-												download
-												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors"
+												<IconDownload size={16} /> {downloadMutation.isPending && downloadMutation.variables === "pdf" ? "PDF 下载中..." : "下载受控 PDF 报告"}
+											</button>
+											<button
+												type="button"
+												onClick={() => downloadMutation.mutate("html")}
+												disabled={!downloadsReady || downloadMutation.isPending}
+												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 											>
-												<IconDownload size={16} /> 下载受控 HTML 报告
-											</a>
-											<a
-												href={`/api/baseline/download?reportId=rpt_${activeRunId}&revisionId=${activeRevisionId}&brandId=${brandId}&format=json`}
-												download
-												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-purple-50/50 dark:bg-purple-950/20 hover:bg-purple-100/60 dark:hover:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-semibold text-xs transition-colors"
+												<IconDownload size={16} /> {downloadMutation.isPending && downloadMutation.variables === "html" ? "HTML 下载中..." : "下载受控 HTML 报告"}
+											</button>
+											<button
+												type="button"
+												onClick={() => downloadMutation.mutate("json")}
+												disabled={!downloadsReady || downloadMutation.isPending}
+												className="flex items-center justify-center gap-2 p-3 rounded-lg border bg-purple-50/50 dark:bg-purple-950/20 hover:bg-purple-100/60 dark:hover:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-semibold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 											>
-												<IconDownload size={16} /> 下载受控 JSON 契约
-											</a>
+												<IconDownload size={16} /> {downloadMutation.isPending && downloadMutation.variables === "json" ? "JSON 下载中..." : "下载受控 JSON 契约"}
+											</button>
 										</div>
 									</div>
 								</div>
