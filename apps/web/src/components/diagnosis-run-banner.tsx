@@ -52,7 +52,14 @@ export function DiagnosisRunBanner({
 	const isRunning = status === "running" || status === "created" || status === "started" || status === "queued";
 	const isFailed = status === "failed" || status === "cancelled" || status === "interrupted";
 
-	const platformName = runData?.model_name || "doubao-pro-32k";
+	const platformName = runData?.model_name?.trim();
+	const modelLabel = platformName
+		? platformName
+		: runData
+			? isZh
+				? "模型信息未知"
+				: "Model unknown"
+			: "";
 	const webSearchEnabled = runData?.web_search ?? true;
 
 	const rawDate = runData?.completed_at || runData?.created_at;
@@ -156,7 +163,8 @@ export function DiagnosisRunBanner({
 						{isZh ? "评测平台与渠道:" : "Platform & Channel:"}
 					</span>
 					<span>
-						豆包 (Doubao) · {platformName} ·{" "}
+						豆包 (Doubao)
+						{modelLabel ? ` · ${modelLabel}` : ""} ·{" "}
 						{webSearchEnabled
 							? isZh
 								? "网页版 / 联网检索开启"

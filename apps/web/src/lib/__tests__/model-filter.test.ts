@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
 	getAvailableModels,
+	getBaselineModelAliases,
+	getBaselineModelOptions,
+	isBaselineModelMismatch,
+	isModelFilterSpecified,
 	ALL_MODELS_VALUE,
 	isDoubaoModel,
 	isUnsupportedBaselineModel,
@@ -83,5 +87,58 @@ describe("isDoubaoModel and isUnsupportedBaselineModel (F03)", () => {
 		expect(isModelMatch("spark", "doubao-pro-32k")).toBe(false);
 		expect(isModelMatch("gpt-4o", "doubao-pro-32k")).toBe(false);
 		expect(isModelMatch("doubao-lite", "doubao-pro-32k")).toBe(false);
+	});
+});
+
+describe("baseline model identity", () => {
+	it("only exposes the model the active run actually executed", () => {
+		expect(getBaselineModelOptions("doubao-seed-2-1-pro-260628")).toEqual([
+			"doubao-seed-2-1-pro-260628",
+		]);
+		expect(getBaselineModelOptions("  doubao-seed-2-1-pro-260628  ")).toEqual([
+			"doubao-seed-2-1-pro-260628",
+		]);
+	});
+
+	it("does not invent an option when the run identity is missing", () => {
+		expect(getBaselineModelOptions(undefined)).toEqual([]);
+		expect(getBaselineModelOptions(null)).toEqual([]);
+		expect(getBaselineModelOptions("")).toEqual([]);
+		expect(getBaselineModelOptions("   ")).toEqual([]);
+	});
+
+	it("maps only the confirmed legacy doubao alias to a concrete run model", () => {
+		expect(getBaselineModelAliases("doubao-seed-2-1-pro-260628")).toEqual({
+			doubao: "doubao-seed-2-1-pro-260628",
+		});
+		expect(getBaselineModelAliases("ark-doubao-pro")).toEqual({ doubao: "ark-doubao-pro" });
+		expect(getBaselineModelAliases("doubao")).toEqual({ doubao: "doubao" });
+		expect(getBaselineModelAliases("gpt-4o")).toEqual({});
+		expect(getBaselineModelAliases(undefined)).toEqual({});
+	});
+
+	it("keeps different concrete versions distinct", () => {
+		expect(isModelMatch("doubao-seed-1-6-flash", "doubao-seed-2-1-pro-260628")).toBe(false);
+		expect(isModelMatch("doubao-seed-2-1-pro-260628", "doubao-seed-1-6-flash")).toBe(false);
+		expect(isModelMatch("doubao", "doubao-seed-2-1-pro-260628")).toBe(true);
+	});
+
+	it("flags concrete filters that cannot apply to the run identity", () => {
+		expect(isModelFilterSpecified(ALL_MODELS_VALUE)).toBe(false);
+		expect(isModelFilterSpecified(undefined)).toBe(false);
+		expect(isModelFilterSpecified("")).toBe(false);
+		expect(isModelFilterSpecified("doubao")).toBe(true);
+
+		expect(isBaselineModelMismatch(ALL_MODELS_VALUE, "doubao-seed-2-1-pro-260628")).toBe(false);
+		expect(isBaselineModelMismatch(undefined, "doubao-seed-2-1-pro-260628")).toBe(false);
+		expect(isBaselineModelMismatch("doubao", "doubao-seed-2-1-pro-260628")).toBe(false);
+		expect(
+			isBaselineModelMismatch("doubao-seed-2-1-pro-260628", "doubao-seed-2-1-pro-260628"),
+		).toBe(false);
+		expect(isBaselineModelMismatch("doubao-seed-1-6-flash", "doubao-seed-2-1-pro-260628")).toBe(
+			true,
+		);
+		expect(isBaselineModelMismatch("doubao", null)).toBe(true);
+		expect(isBaselineModelMismatch("doubao", undefined)).toBe(true);
 	});
 });

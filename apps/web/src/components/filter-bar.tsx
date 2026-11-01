@@ -144,21 +144,37 @@ export function FilterTriggerButton({
 // Model dropdown — subscribes to only the "model" URL key.
 // ------------------------------------------------------------------
 
-export function ModelDropdown({ availableModels }: { availableModels: string[] }) {
+export function ModelDropdown({
+	availableModels,
+	modelAliases,
+}: {
+	availableModels: string[];
+	/** Confirmed equivalent URL values, e.g. the legacy generic `doubao` for
+	 *  the one concrete Doubao model a baseline run executed. Only mapping
+	 *  targets that are actually available are applied; the URL itself stays
+	 *  untouched. */
+	modelAliases?: Readonly<Record<string, string>>;
+}) {
 	const defaultModel = availableModels.includes(ALL_MODELS_VALUE)
 		? ALL_MODELS_VALUE
 		: (availableModels[0] ?? ALL_MODELS_VALUE);
 	const urlModel = useSearch({ strict: false, select: (s) => s.model });
 	const setFilters = useFilterNavigate();
 
+	const resolvedUrlModel = useMemo(() => {
+		if (!urlModel || availableModels.includes(urlModel)) return urlModel;
+		const aliasTarget = modelAliases?.[urlModel.trim().toLowerCase()];
+		return aliasTarget && availableModels.includes(aliasTarget) ? aliasTarget : urlModel;
+	}, [availableModels, urlModel, modelAliases]);
+
 	const effectiveAvailableModels = useMemo(() => {
-		if (urlModel && !availableModels.includes(urlModel)) {
-			return [...availableModels, urlModel];
+		if (resolvedUrlModel && !availableModels.includes(resolvedUrlModel)) {
+			return [...availableModels, resolvedUrlModel];
 		}
 		return availableModels;
-	}, [availableModels, urlModel]);
+	}, [availableModels, resolvedUrlModel]);
 
-	const selected = urlModel && effectiveAvailableModels.includes(urlModel) ? urlModel : defaultModel;
+	const selected = resolvedUrlModel && effectiveAvailableModels.includes(resolvedUrlModel) ? resolvedUrlModel : defaultModel;
 
 	const handleChange = (next: string) => {
 		setFilters({ model: next === defaultModel ? undefined : next });
@@ -404,6 +420,7 @@ export function ResultCount({ count, total }: { count: number | undefined; total
 export function FilterBar({
 	availableTags,
 	availableModels,
+	modelAliases,
 	showSearch,
 	showModelSelector,
 	resultCount,
@@ -412,6 +429,7 @@ export function FilterBar({
 }: {
 	availableTags: readonly string[];
 	availableModels: string[];
+	modelAliases?: Readonly<Record<string, string>>;
 	showSearch: boolean;
 	showModelSelector: boolean;
 	/** Only passed by pages that filter a list; omit on pages with a single aggregate view (e.g. Citations). */
@@ -425,7 +443,9 @@ export function FilterBar({
 	return (
 		<div className="flex flex-wrap items-center justify-between gap-2">
 			<div className="flex flex-wrap items-center gap-1.5">
-				{showModelSelector && <ModelDropdown availableModels={availableModels} />}
+				{showModelSelector && (
+					<ModelDropdown availableModels={availableModels} modelAliases={modelAliases} />
+				)}
 				<TagsDropdown availableTags={availableTags} />
 				<LookbackDropdown />
 				{extraControls}
