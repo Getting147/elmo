@@ -87,7 +87,7 @@ export function diagnosisStages(
 								: "尚无本轮分析草稿",
 		},
 		{
-			title: "4. 星河国际参考报告",
+			title: "4. 官方诊断报告",
 			state: reportFailed
 				? "failed"
 				: step === "rendering_report" && !stopped

@@ -84,10 +84,12 @@ describe("task stages and counts", () => {
 			states(diagnosisStages(run, other, other, { ...other, revisions: [{ ...other, status: "ready" }] })),
 		).toEqual(["success", "pending", "pending", "pending"]);
 	});
-	it("uses the product analysis name in fixed stage copy", () => {
+	it("uses the product analysis and report names in fixed stage copy", () => {
 		const titles = diagnosisStages(run).map((stage) => stage.title);
 		expect(titles[2]).toContain("Negency-Agent");
+		expect(titles[3]).toBe("4. 官方诊断报告");
 		expect(titles.join(" ")).not.toContain("DeepSeek");
+		expect(titles.join(" ")).not.toContain("星河国际");
 	});
 	it("analysis and rendering in progress are distinguished from saved results", () => {
 		expect(diagnosisStages({ ...run, current_step: "analyzing" }, artifact)[2].state).toBe("running");

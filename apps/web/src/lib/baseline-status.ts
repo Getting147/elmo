@@ -11,6 +11,9 @@ export const baselineRunStatusSchema = z.object({
 	mode: z.enum(["synthetic", "real"]),
 	error_message: z.string().nullable().optional(),
 	error_category: z.string().nullable().optional(),
+	// Display-only timestamps: a malformed value degrades to "unknown" instead of failing the whole status read.
+	created_at: z.string().nullish().catch(null),
+	completed_at: z.string().nullish().catch(null),
 });
 
 export type BaselineRunStatus = z.infer<typeof baselineRunStatusSchema>;
