@@ -75,4 +75,39 @@ describe("baseline-task-name formatting", () => {
 		});
 		expect(en).toBe("Brand | 2026-11-01 16:00 (UTC+8) | Batch abcdef12");
 	});
+
+	it("disambiguates conflicting short IDs when multiple runs share identical 8-char prefix", () => {
+		const runA = "run_608dd03e-aaaa-1111-2222-333333333333";
+		const runB = "run_608dd03e-bbbb-1111-2222-333333333333";
+		const runC = "run_99887766-cccc-1111-2222-333333333333";
+		const allRuns = [runA, runB, runC];
+
+		// Run C has no conflict: stays 8 characters
+		expect(getShortRunId(runC, allRuns)).toBe("99887766");
+
+		// Run A and Run B conflict on '608dd03e': extended to 13 chars
+		const shortA = getShortRunId(runA, allRuns);
+		const shortB = getShortRunId(runB, allRuns);
+		expect(shortA).toBe("608dd03e-aaaa");
+		expect(shortB).toBe("608dd03e-bbbb");
+		expect(shortA).not.toBe(shortB);
+
+		const nameA = formatDiagnosticTaskName({
+			brandName: "美的",
+			runId: runA,
+			createdAt: "2026-11-01T08:00:00.000Z",
+			isZh: true,
+			conflictingRunIds: allRuns,
+		});
+		const nameB = formatDiagnosticTaskName({
+			brandName: "美的",
+			runId: runB,
+			createdAt: "2026-11-01T08:00:00.000Z",
+			isZh: true,
+			conflictingRunIds: allRuns,
+		});
+		expect(nameA).toContain("批次608dd03e-aaaa");
+		expect(nameB).toContain("批次608dd03e-bbbb");
+		expect(nameA).not.toBe(nameB);
+	});
 });

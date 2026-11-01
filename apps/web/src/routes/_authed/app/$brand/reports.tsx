@@ -934,21 +934,25 @@ function BrandReportsWorkspace() {
 									className="border rounded-md px-2 py-1.5 bg-background font-mono text-xs max-w-xs"
 								>
 									<option value="" disabled>-- 选择已有任务查看/处理 --</option>
-									{runsListData.items.map((r: any) => {
-										const taskLabel = formatDiagnosticTaskName({
-											brandName,
-											runId: r.run_id,
-											createdAt: r.created_at || r.completed_at,
-											isZh: true,
+									{(() => {
+										const allRunIds = runsListData.items.map((r: any) => r.run_id);
+										return runsListData.items.map((r: any) => {
+											const taskLabel = formatDiagnosticTaskName({
+												brandName,
+												runId: r.run_id,
+												createdAt: r.created_at || r.completed_at,
+												isZh: true,
+												conflictingRunIds: allRunIds,
+											});
+											const modeLabel = r.mode === "real" ? "真实执行" : r.mode === "synthetic" ? "合成演示" : r.mode;
+											const statusTitle = diagnosisStatusText(r).title;
+											return (
+												<option key={r.run_id} value={r.run_id} title={r.run_id}>
+													{taskLabel} ({modeLabel} · {statusTitle})
+												</option>
+											);
 										});
-										const modeLabel = r.mode === "real" ? "真实执行" : r.mode === "synthetic" ? "合成演示" : r.mode;
-										const statusTitle = diagnosisStatusText(r).title;
-										return (
-											<option key={r.run_id} value={r.run_id} title={r.run_id}>
-												{taskLabel} ({modeLabel} · {statusTitle})
-											</option>
-										);
-									})}
+									})()}
 								</select>
 							</div>
 							<div className="text-muted-foreground">

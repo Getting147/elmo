@@ -4,16 +4,36 @@ export interface FormatDiagnosticTaskOptions {
 	createdAt?: string | Date | null;
 	completedAt?: string | Date | null;
 	isZh?: boolean;
+	conflictingRunIds?: (string | null | undefined)[];
 }
 
 /**
  * Extracts a stable short identifier from a run_id by stripping the optional 'run_' prefix
  * and taking up to 8 characters.
+ * If conflictingRunIds is provided and another run shares the same 8-character prefix,
+ * extends the short identifier (up to 13 chars) to disambiguate the conflict.
  */
-export function getShortRunId(runId?: string | null): string {
+export function getShortRunId(
+	runId?: string | null,
+	conflictingRunIds?: (string | null | undefined)[],
+): string {
 	if (!runId) return "";
 	const cleaned = runId.startsWith("run_") ? runId.slice(4) : runId;
-	return cleaned.slice(0, 8);
+	const defaultShort = cleaned.slice(0, 8);
+	if (!conflictingRunIds || conflictingRunIds.length === 0) {
+		return defaultShort;
+	}
+
+	const hasCollision = conflictingRunIds.some((other) => {
+		if (!other || other === runId) return false;
+		const otherCleaned = other.startsWith("run_") ? other.slice(4) : other;
+		return otherCleaned.slice(0, 8) === defaultShort;
+	});
+
+	if (!hasCollision) return defaultShort;
+
+	// When collision exists among the provided runs, extend up to 13 chars to disambiguate
+	return cleaned.length > 8 ? cleaned.slice(0, 13) : defaultShort;
 }
 
 /**
@@ -62,11 +82,12 @@ export function formatDiagnosticTaskName({
 	createdAt,
 	completedAt,
 	isZh = true,
+	conflictingRunIds,
 }: FormatDiagnosticTaskOptions): string {
 	const brand = (brandName || "").trim() || (isZh ? "未命名品牌" : "Brand");
 	const rawDate = createdAt || completedAt;
 	const timeStr = formatBeijingTime(rawDate, isZh);
-	const shortId = getShortRunId(runId);
+	const shortId = getShortRunId(runId, conflictingRunIds);
 	const unknownTimeStr = isZh ? "时间未知" : "Time unknown";
 
 	if (isZh) {
