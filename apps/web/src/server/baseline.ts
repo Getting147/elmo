@@ -738,17 +738,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 					}),
 				)
 				.default([]),
-			channelGaps: z
-				.array(
-					z.object({
-						channel_type: z.string(),
-						citation_count: z.number().int().optional(),
-						citation_share_text: z.string().optional(),
-						actionability: z.string().optional(),
-						strategic_note: z.string().optional(),
-					}),
-				)
-				.default([]),
+			channelGaps: z.array(z.record(z.string(), z.any())).default([]),
 			contentGaps: z.union([z.string(), z.array(z.string())]).default("待人工补充内容资产缺口"),
 			actionPlan: z
 				.array(

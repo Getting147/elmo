@@ -64,7 +64,7 @@ export function diagnosisStages(
 			description: hasMetrics ? "本轮归档统计可查看" : noResults ? "前置执行已停止，尚无本轮统计" : "尚无本轮统计结果",
 		},
 		{
-			title: "3. DeepSeek 归因诊断",
+			title: "3. Negency-Agent 归因诊断",
 			state:
 				step === "analysis_failed"
 					? "failed"

@@ -6,7 +6,7 @@ import { DefaultErrorComponent } from "@/router-default-components";
 import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
 import { DiagnosisStages } from "@/components/diagnosis-stages";
 import { diagnosisStages } from "@/lib/baseline-stages";
-import { diagnosisCountText, diagnosisStatusText, isDiagnosisInProgress } from "@/lib/baseline-status";
+import { diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
@@ -64,6 +64,20 @@ function ReportsError(props: ErrorComponentProps) {
 
 class FrozenDimensionInputError extends Error {}
 
+type ReviewFeedback = { tone: "success" | "error"; revisionId: string; message: string };
+type GenerateRevisionArgs = {
+	revisionId: string;
+	analysisId?: string;
+	origin: "auto" | "manual" | "retry";
+};
+
+function revisionStatusLabel(status: string | undefined): string {
+	if (status === "ready") return "已就绪";
+	if (status === "rendering") return "生成中";
+	if (status === "failed") return "失败";
+	return status || "未知";
+}
+
 function BrandReportsPage() {
 	const { brand } = Route.useParams();
 	return <BrandReportsWorkspace key={brand} />;
@@ -85,8 +99,17 @@ function BrandReportsWorkspace() {
 	const [activeRevisionId, setActiveRevisionId] = useState<string>("rev_01");
 	const [revisionInput, setRevisionInput] = useState<string>("rev_01");
 	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+	const [reviewFeedback, setReviewFeedback] = useState<ReviewFeedback | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [downloadError, setDownloadError] = useState<string | null>(null);
+	const [saveWorkflowPhase, setSaveWorkflowPhase] = useState<"idle" | "saving" | "assembling">("idle");
+	const saveWorkflowRef = useRef(false);
+	const analysisDirtyRef = useRef(false);
+	const loadedAnalysisIdentityRef = useRef("");
+	const progressPanelRef = useRef<HTMLDivElement | null>(null);
+	const progressScrollTimerRef = useRef<number | null>(null);
+	const launchRequestRef = useRef(false);
+	const activeRevisionIdRef = useRef(activeRevisionId);
 
 	// 题库分类人工补齐状态 (E-R04)
 
@@ -104,6 +127,9 @@ function BrandReportsWorkspace() {
 	const [rawActionPlan, setRawActionPlan] = useState<any[]>([]);
 
 	const brandName = brand?.name || brandId || "";
+	const markAnalysisDirty = () => {
+		analysisDirtyRef.current = true;
+	};
 
 	// 1. 获取品牌档案与题集配置
 	const {
@@ -165,6 +191,15 @@ function BrandReportsWorkspace() {
 		refetchInterval: (query) => query.state.data && isDiagnosisInProgress(query.state.data) ? 2000 : false,
 	});
 
+	// 3.1. 当前准备任务的独立状态，用于“查看本次任务”的准确禁用与恢复 (B08-06)
+	const { data: preparedRunData } = useQuery({
+		queryKey: ["baseline-run", brandId, draft.runId],
+		queryFn: () => getBaselineRunFn({ data: { brandId: brandId!, runId: draft.runId! } }),
+		enabled: !!brandId && !!draft.runId && draft.runId !== activeRunId,
+		refetchInterval: (query) =>
+			query.state.data && isBaselineRunActive(query.state.data) ? 2000 : false,
+	});
+
 	// 4. 查询当前 run 的逐题证据
 	const { data: evidenceData, error: evidenceError, refetch: refetchEvidence } = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
@@ -197,6 +232,7 @@ function BrandReportsWorkspace() {
 	const {
 		data: analysisData,
 		error: analysisQueryError,
+		isLoading: analysisQueryLoading,
 		refetch: refetchAnalysis,
 	} = useQuery({
 		queryKey: ["baseline-analysis", brandId, activeRunId],
@@ -226,52 +262,59 @@ function BrandReportsWorkspace() {
 		enabled: !!brandId && activeTab === "legacy",
 	});
 
-	// 恢复服务端持久化的人工分析 (E2-R04)
+	// 恢复服务端持久化的人工分析；轮询不得覆盖当前页面尚未保存的人工修改 (E2-R04 / B08-08)
 	useEffect(() => {
-		if (analysisData?.run_id === activeRunId) {
-			setActiveAnalysisId(analysisData.analysis_id || "");
-			setAnalystName(analysisData.analyst_name || "");
-			setExecutiveConclusion(analysisData.payload?.executive_conclusion || "");
-			setKeyFindings(
-				Array.isArray(analysisData.payload?.key_findings)
-					? analysisData.payload.key_findings.join("\n")
-					: analysisData.payload?.key_findings || "",
-			);
-			const audit = analysisData.payload?.brand_identity_audit;
-			if (typeof audit === "object" && audit !== null) {
-				setRawBrandIdentityAudit(audit);
-				setBrandIdentityAudit(audit.analysis || audit.summary || "");
-			} else {
-				setRawBrandIdentityAudit(null);
-				setBrandIdentityAudit(typeof audit === "string" ? audit : "");
-			}
-			setContentGapsInput(
-				Array.isArray(analysisData.payload?.content_gaps)
-					? analysisData.payload.content_gaps.join("\n")
-					: analysisData.payload?.content_gaps || "",
-			);
-			if (Array.isArray(analysisData.payload?.action_plan)) {
-				setRawActionPlan(analysisData.payload.action_plan);
-				setActionPlanInput(
-					analysisData.payload.action_plan
-						.map((ap: any) => {
-							const promptCode =
-								Array.isArray(ap.evidence_refs) && ap.evidence_refs.length > 0
-									? ap.evidence_refs.join(", ")
-									: typeof ap.evidence_refs === "string"
-										? ap.evidence_refs
-										: "";
-							const action = ap.action || "";
-							const priority = ap.priority || "P2";
-							const rationale = ap.priority_rationale || "";
-							const deliverable = ap.deliverable || "";
-							const verification = ap.verification_method || "";
-							return `${promptCode} | ${action} | ${priority} | ${rationale} | ${deliverable} | ${verification}`;
-						})
-						.join("\n"),
-				);
-			}
+		if (!activeRunId || analysisData?.run_id !== activeRunId || analysisDirtyRef.current) return;
+		const identity = `${analysisData.analysis_id}:${analysisData.version ?? ""}`;
+		if (loadedAnalysisIdentityRef.current === identity) return;
+		setActiveAnalysisId(analysisData.analysis_id || "");
+		const analyst = analysisData.analyst_name;
+		setAnalystName(
+			analyst === "DeepSeek 自动分析 (待人工审核)"
+				? "Negency-Agent 自动分析（待人工审核）"
+				: analyst || "",
+		);
+		setExecutiveConclusion(analysisData.payload?.executive_conclusion || "");
+		setKeyFindings(
+			Array.isArray(analysisData.payload?.key_findings)
+				? analysisData.payload.key_findings.join("\n")
+				: analysisData.payload?.key_findings || "",
+		);
+		const audit = analysisData.payload?.brand_identity_audit;
+		if (typeof audit === "object" && audit !== null) {
+			setRawBrandIdentityAudit(audit);
+			setBrandIdentityAudit(audit.analysis || audit.summary || "");
+		} else {
+			setRawBrandIdentityAudit(null);
+			setBrandIdentityAudit(typeof audit === "string" ? audit : "");
 		}
+		setContentGapsInput(
+			Array.isArray(analysisData.payload?.content_gaps)
+				? analysisData.payload.content_gaps.join("\n")
+				: analysisData.payload?.content_gaps || "",
+		);
+		if (Array.isArray(analysisData.payload?.action_plan)) {
+			setRawActionPlan(analysisData.payload.action_plan);
+			setActionPlanInput(
+				analysisData.payload.action_plan
+					.map((ap: any) => {
+						const promptCode =
+							Array.isArray(ap.evidence_refs) && ap.evidence_refs.length > 0
+								? ap.evidence_refs.join(", ")
+								: typeof ap.evidence_refs === "string"
+									? ap.evidence_refs
+									: "";
+						const action = ap.action || "";
+						const priority = ap.priority || "P2";
+						const rationale = ap.priority_rationale || "";
+						const deliverable = ap.deliverable || "";
+						const verification = ap.verification_method || "";
+						return `${promptCode} | ${action} | ${priority} | ${rationale} | ${deliverable} | ${verification}`;
+					})
+					.join("\n"),
+			);
+		}
+		loadedAnalysisIdentityRef.current = identity;
 	}, [analysisData, activeRunId]);
 
 	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04 / E3-R04: 避免旧 reportData effect 覆盖刚生成或明确选择的新修订)
@@ -294,6 +337,19 @@ function BrandReportsWorkspace() {
 		setDownloadError(null);
 	}, [activeRunId, activeRevisionId]);
 
+	useEffect(() => {
+		activeRevisionIdRef.current = activeRevisionId;
+		setReviewFeedback(null);
+		setReviewNotice(null);
+	}, [activeRevisionId]);
+
+	// 仅在显式启动成功并选中当前 run 后定位一次进度看板；轮询与刷新不触发 (B08-05)
+	useEffect(() => () => {
+		if (progressScrollTimerRef.current !== null) {
+			window.clearTimeout(progressScrollTimerRef.current);
+		}
+	}, []);
+
 	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
 	useEffect(() => {
 		if (
@@ -310,6 +366,8 @@ function BrandReportsWorkspace() {
 
 	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
 	const handleSelectRun = (runId: string) => {
+		// 路由与选择器可能在同一轮渲染中重复选中同一 run；保留已恢复的分析与未保存修改。
+		if (runId === activeRunId) return;
 		setActiveRunId(runId);
 		// 切换 run 时清空所有表单项，防止旧任务数据串入新任务
 		setActiveAnalysisId("");
@@ -323,8 +381,11 @@ function BrandReportsWorkspace() {
 		setRawActionPlan([]);
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
+		analysisDirtyRef.current = false;
+		loadedAnalysisIdentityRef.current = "";
 		setActionError(null);
 		setReviewNotice(null);
+		setReviewFeedback(null);
 	};
 
 	// Restore the persisted task when returning from overview or reloading; never create work on mount.
@@ -404,10 +465,40 @@ function BrandReportsWorkspace() {
 			} });
 			return { ...prepared, runId: result.run_id, submitted: true };
 		}),
-		onSuccess: (current) => { if (current.runId) { handleSelectRun(current.runId); void navigate({ search: { runId: current.runId }, replace: true }); } refetchRunsList(); },
-		onError: (err: Error) => setActionError(`本次任务未确认启动：${err.message}。请查看本次任务；重复提交仍使用同一任务身份。`),
+		onSuccess: (current) => {
+			const shouldFocusProgress = launchRequestRef.current;
+			launchRequestRef.current = false;
+			if (current.runId) {
+				if (shouldFocusProgress) {
+					if (progressScrollTimerRef.current !== null) {
+						window.clearTimeout(progressScrollTimerRef.current);
+					}
+					// 延迟到路由搜索参数与当前任务渲染完成后再定位，避免被导航滚动复位覆盖。
+					progressScrollTimerRef.current = window.setTimeout(() => {
+						progressScrollTimerRef.current = null;
+						progressPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+					}, 200);
+				}
+				handleSelectRun(current.runId);
+				void navigate({ search: { runId: current.runId }, replace: true });
+			}
+			refetchRunsList();
+		},
+		onError: (err: Error) => {
+			launchRequestRef.current = false;
+			setActionError(
+				draft.submitted && draft.runId
+					? `本次任务状态查询未完成：${err.message}。已保留原任务身份，不会重新启动或重复计费。`
+					: `本次任务未确认启动：${err.message}。请查看本次任务；重复提交仍使用同一任务身份。`,
+			);
+		},
 	});
 	const preparationBusy = freezeMutation.isPending || authorizeMutation.isPending || createRunMutation.isPending;
+	const handleStartDiagnosis = () => {
+		if (preparationBusy) return;
+		launchRequestRef.current = !draft.submitted;
+		createRunMutation.mutate();
+	};
 
 	const retryAnalysisMutation = useMutation({
 		mutationFn: () =>
@@ -520,19 +611,30 @@ function BrandReportsWorkspace() {
 		onSuccess: async (res) => {
 			setActiveAnalysisId(res.analysis_id);
 			setActionError(null);
+			analysisDirtyRef.current = false;
+			loadedAnalysisIdentityRef.current = "";
+			setSaveWorkflowPhase("assembling");
 			await refetchAnalysis();
 			// 自动装配对应的新报告修订并选中 (F-R05)
 			const nextNum = (reportData?.revisions?.length || 0) + 1;
 			const targetRev = `rev_${String(nextNum).padStart(2, "0")}`;
-			generateRevisionMutation.mutate({ revisionId: targetRev, analysisId: res.analysis_id });
+			generateRevisionMutation.mutate({
+				revisionId: targetRev,
+				analysisId: res.analysis_id,
+				origin: "auto",
+			});
 		},
-		onError: (err: any) => setActionError(`保存人工分析失败: ${err.message}`),
+		onError: (err: any) => {
+			saveWorkflowRef.current = false;
+			setSaveWorkflowPhase("idle");
+			setActionError(`保存人工分析失败: ${err.message}`);
+		},
 	});
 
 	const generateRevisionMutation = useMutation({
-		mutationFn: (args: string | { revisionId: string; analysisId?: string }) => {
-			const revId = typeof args === "string" ? args : args.revisionId;
-			const anlId = typeof args === "string" ? activeAnalysisId : (args.analysisId || activeAnalysisId);
+		mutationFn: (args: GenerateRevisionArgs) => {
+			const revId = args.revisionId;
+			const anlId = args.analysisId || activeAnalysisId;
 			return generateBaselineReportRevisionFn({
 				data: {
 					brandId: brandId!,
@@ -543,37 +645,71 @@ function BrandReportsWorkspace() {
 				},
 			});
 		},
-		onSuccess: (res) => {
+		onSuccess: (res, args) => {
 			setActiveRevisionId(res.revision_id);
 			// 自动预推下一个 revision 编号供继续修改 (E-R06)
 			const currentNum = parseInt(res.revision_id.replace(/^rev_/, ""), 10) || 1;
 			setRevisionInput(`rev_${String(currentNum + 1).padStart(2, "0")}`);
 			setActionError(null);
+			if (args.origin === "auto") {
+				saveWorkflowRef.current = false;
+				setSaveWorkflowPhase("idle");
+			}
 			refetchReport();
 		},
-		onError: (err: any) => setActionError(`生成报告修订失败: ${err.message}`),
+		onError: (err: any, args) => {
+			setActionError(`生成报告修订失败: ${err.message}`);
+			if (args.origin === "auto") {
+				saveWorkflowRef.current = false;
+				setSaveWorkflowPhase("idle");
+			}
+		},
 	});
+	const handleSaveAnalysis = () => {
+		if (saveWorkflowRef.current) return;
+		saveWorkflowRef.current = true;
+		setSaveWorkflowPhase("saving");
+		saveAnalysisMutation.mutate();
+	};
 
 	const reviewMutation = useMutation({
-		mutationFn: (args: { action: "approve" | "reject"; reason: string }) =>
+		mutationFn: (args: { action: "approve" | "reject"; reason: string; revisionId: string }) =>
 			reviewBaselineReportRevisionFn({
 				data: {
 					brandId: brandId!,
 					reportId: `rpt_${activeRunId}`,
-					revisionId: activeRevisionId || "rev_01",
+					revisionId: args.revisionId || "rev_01",
 					action: args.action,
 					reason: args.reason,
 				},
 			}),
-		onSuccess: (res) => {
-			setReviewNotice(`审核操作完成：状态已更新为 ${res.review_status}（审核主体: ${res.reviewer}）`);
+		onMutate: (args) => {
+			if (args.revisionId === activeRevisionIdRef.current) {
+				setReviewFeedback(null);
+				setReviewNotice(null);
+			}
+		},
+		onSuccess: (res, args) => {
+			const statusText =
+				res.review_status === "approved" ? "已批准" : res.review_status === "rejected" ? "已退回" : res.review_status;
+			const message = `${args.revisionId} 审核完成：${statusText}（审核主体: ${res.reviewer}）`;
+			if (args.revisionId === activeRevisionIdRef.current) {
+				setReviewFeedback({ tone: "success", revisionId: args.revisionId, message });
+				setReviewNotice(message);
+			}
 			setActionError(null);
 			refetchReport();
 		},
-		onError: (err: any) => {
+		onError: (err: any, args) => {
 			// 合成数据批准被拒绝是预期内的严格机器门禁行为 (D-R06 / D-R07)
 			setReviewNotice(null);
-			setActionError(`门禁审核拦截 (安全防线): ${err.message}`);
+			if (args.revisionId === activeRevisionIdRef.current) {
+				setReviewFeedback({
+					tone: "error",
+					revisionId: args.revisionId,
+					message: `审核未完成：${err.message}`,
+				});
+			}
 		},
 	});
 
@@ -640,6 +776,75 @@ function BrandReportsWorkspace() {
 		(rev: { revision_id: string; status: string }) => rev.revision_id === activeRevisionId,
 	);
 	const downloadsReady = activeRevision?.status === "ready";
+	const hasCurrentAnalysis = analysisData?.run_id === activeRunId;
+	const analysisForm = diagnosisAnalysisFormStatus(runData, {
+		hasAnalysis: hasCurrentAnalysis,
+		analysisLoading: analysisQueryLoading,
+		analysisQueryFailed: Boolean(analysisQueryError),
+		runQueryFailed: Boolean(runError),
+	});
+	const analysisLocked = !analysisForm.editable || saveWorkflowPhase !== "idle";
+	const reviewBlockedReason = !activeRevision
+		? `当前修订 ${activeRevisionId || "—"} 尚未生成，暂不可审核。`
+		: activeRevision.status !== "ready"
+			? `当前修订 ${activeRevisionId} 状态为 ${revisionStatusLabel(activeRevision.status)}，未就绪，审核门禁不可用。`
+			: null;
+	const preparedRun = draft.runId
+		? activeRunId === draft.runId
+			? (runData ?? preparedRunData ?? runsListData?.items?.find((r: any) => r.run_id === draft.runId))
+			: (preparedRunData ?? runsListData?.items?.find((r: any) => r.run_id === draft.runId))
+		: null;
+	const preparedRunActive = preparedRun ? isBaselineRunActive(preparedRun) : false;
+	const startButtonDisabled =
+		!frozenSnapshot ||
+		preparationBusy ||
+		(!draft.submitted && !draft.runId && executionMode === "real" && !activeAuthData?.authorization) ||
+		(draft.submitted && preparedRunActive);
+	const startButtonLabel = createRunMutation.isPending
+		? "正在确认本次任务..."
+		: !draft.submitted
+			? draft.runId
+				? "查询或重放本次启动"
+				: "启动本次诊断任务"
+			: preparedRunActive
+				? "本次任务进行中（请查看进度）"
+				: !preparedRun
+					? "查询本次任务状态"
+					: preparedRun.status === "failed" || preparedRun.status === "interrupted"
+						? "查看本次任务（已中止）"
+						: preparedRun.status === "partial"
+							? "查看本次任务（部分完成）"
+							: preparedRun.current_step === "analysis_failed"
+								? "查看本次任务（分析失败）"
+								: preparedRun.current_step === "report_render_failed"
+									? "查看本次任务（报告失败）"
+									: preparedRun.current_step === "ready_for_review"
+										? "查看本次任务（待审核）"
+										: "查看本次任务（已结束）";
+	const analysisStatusTitle =
+		analysisForm.phase === "ready"
+			? "分析已就绪，可人工修改"
+			: analysisForm.phase === "generating"
+				? "Negency-Agent 正在生成分析"
+				: analysisForm.phase === "waiting"
+					? "分析尚未开始"
+					: analysisForm.phase === "failed"
+						? "分析不可用"
+						: analysisForm.phase === "unreadable"
+							? "分析结果读取失败"
+							: analysisForm.phase === "missing"
+								? "暂无可用分析"
+								: "分析状态待确认";
+	const analysisStatusClass =
+		analysisForm.phase === "ready"
+			? "border-green-300 bg-green-50/70 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200"
+			: analysisForm.phase === "generating"
+				? "border-blue-300 bg-blue-50/70 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200"
+				: analysisForm.phase === "waiting"
+					? "border-blue-200 bg-blue-50/50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-200"
+					: analysisForm.phase === "failed" || analysisForm.phase === "unreadable"
+						? "border-red-300 bg-red-50/70 text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200"
+						: "border-amber-300 bg-amber-50/70 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200";
 
 	return (
 		<div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto w-full min-h-screen bg-background text-foreground">
@@ -662,7 +867,7 @@ function BrandReportsWorkspace() {
 							{brandName} · 诊断闭环与报告工作台
 						</h1>
 						<p className="text-muted-foreground text-sm mt-0.5">
-							统一诊断操作门户（内部操作员专用 · 手动单次监测模式 · 封禁自动续采）
+							统一诊断操作门户（手动单次监测 · 不自动续采）
 						</p>
 					</div>
 				</div>
@@ -690,42 +895,6 @@ function BrandReportsWorkspace() {
 						历史归档报告
 					</button>
 				</div>
-			</div>
-
-			{/* 运行模式与环境门禁提示横幅 (REPORT-001F / F-R01) */}
-			<div
-				className={`border px-4 py-2.5 rounded-lg text-xs flex items-center justify-between gap-3 ${
-					executionMode === "real"
-						? "bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-800 text-red-800 dark:text-red-200"
-						: "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
-				}`}
-			>
-				<div className="flex items-center gap-2">
-					<IconShieldCheck
-						className={executionMode === "real" ? "text-red-600 shrink-0" : "text-amber-600 shrink-0"}
-						size={16}
-					/>
-					<span>
-						{executionMode === "real" ? (
-							<>
-								<strong>【受控真实执行模式】</strong>将调用真实豆包方舟与 DeepSeek 外部 API。必须服务端具备有效授权与凭据，未授权将触发拦截守卫，禁止自动伪造完成。
-							</>
-						) : (
-							<>
-								<strong>【测试与预览环境】</strong>当前处于离线测试模式 (Offline Mock)。所有外部模型交互（Ark 采样与 DeepSeek 分析）均通过安全 Mock 通道运行，不调用真实付费 API，不产生实际账单。
-							</>
-						)}
-					</span>
-				</div>
-				<span
-					className={`font-mono text-[11px] px-2 py-0.5 rounded shrink-0 ${
-						executionMode === "real"
-							? "bg-red-100 dark:bg-red-900/60 text-red-900 dark:text-red-200 font-bold"
-							: "bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200"
-					}`}
-				>
-					{executionMode === "real" ? "REAL MODE · BUDGET GATED" : "MOCK ONLY · ZERO BILLED"}
-				</span>
 			</div>
 
 			{/* 错误与状态提示 */}
@@ -779,7 +948,7 @@ function BrandReportsWorkspace() {
 									<option value="" disabled>-- 选择已有任务查看/处理 --</option>
 									{runsListData.items.map((r: any) => (
 										<option key={r.run_id} value={r.run_id}>
-											{r.run_id} ({r.mode} · {r.status} · {r.created_at?.slice(0, 16)})
+											{r.run_id} ({r.mode === "real" ? "真实执行" : r.mode === "synthetic" ? "合成演示" : r.mode} · {diagnosisStatusText(r).title} · {r.created_at?.slice(0, 16)})
 										</option>
 									))}
 								</select>
@@ -894,9 +1063,9 @@ function BrandReportsWorkspace() {
 
 						{/* 核对并冻结本轮输入 */}
 						<div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-3 border-t">
-							<div className="text-xs text-muted-foreground">
+							<div className="text-sm font-semibold text-foreground">
 								{frozenSnapshot ? (
-									<span className="text-green-600 dark:text-green-400 font-medium inline-flex items-center gap-1">
+									<span className="text-green-700 dark:text-green-300 inline-flex items-center gap-1">
 										<IconCheck size={14} /> 已锁定输入快照: {frozenSnapshot.snapshot_id} (题目数: {frozenSnapshot.question_count})
 									</span>
 								) : (
@@ -911,7 +1080,11 @@ function BrandReportsWorkspace() {
 										!profileData ||
 										profileData.summary.totalPrompts === 0
 									}
-									className="text-xs border px-3 py-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors disabled:opacity-50"
+									className={`text-xs border px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
+										frozenSnapshot
+											? "bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-800 text-green-800 dark:text-green-200 hover:bg-green-100/70"
+											: "bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 hover:bg-red-100/70"
+									}`}
 								>
 									<IconLock size={14} className="inline mr-1" />
 									{freezeMutation.isPending ? "冻结中..." : draft.runId ? "准备下一轮诊断" : frozenSnapshot ? "重新核对分类" : "核对并冻结输入"}
@@ -930,16 +1103,16 @@ function BrandReportsWorkspace() {
 								执行本次监测（手动单次 · 费用边界确认）
 							</div>
 							<div className="flex items-center gap-2 text-xs">
-								<span className="text-muted-foreground">执行模式:</span>
+								<span className="text-muted-foreground">下一轮准备模式:</span>
 								<select
-									aria-label="执行模式"
+									aria-label="下一轮准备模式"
 									value={executionMode}
 									disabled={preparationBusy || Boolean(draft.runId)}
 									onChange={(e) => { const mode = e.target.value as "real" | "synthetic"; void transact((current) => ({ ...current, mode })).catch((err: Error) => setActionError(err.message)); }}
 									className="border rounded px-2 py-1 bg-background text-xs font-semibold"
 								>
-									<option value="synthetic">离线合成模式 (Synthetic · Mock)</option>
-									<option value="real">真实执行受控分支 (Real · 需服务端授权)</option>
+									<option value="real">真实执行（需本轮费用授权）</option>
+									<option value="synthetic">离线合成测试（0 费用 · 不调用真实模型）</option>
 								</select>
 							</div>
 						</div>
@@ -953,27 +1126,32 @@ function BrandReportsWorkspace() {
 							<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mt-1">
 								<div>
 									<span className="text-muted-foreground">采集调用：</span>
-									<span className="font-semibold ml-1">豆包方舟 (Ark 联网检索)</span>
+									<span className="font-semibold ml-1">豆包</span>
 								</div>
 								<div>
 									<span className="text-muted-foreground">分析调用：</span>
-									<span className="font-semibold ml-1">DeepSeek (V2 七章并发)</span>
+									<span className="font-semibold ml-1">Negency-Agent</span>
 								</div>
 								<div>
-									<span className="text-muted-foreground">运行模式：</span>
-									<span className="font-semibold ml-1 uppercase">{executionMode}</span>
+									<span className="text-muted-foreground">下一轮准备模式：</span>
+									<span className="font-semibold ml-1">
+										{executionMode === "real" ? "真实执行" : "离线合成测试"}
+									</span>
 								</div>
 								<div>
 									<span className="text-muted-foreground">费用与限制：</span>
 									<span className="font-semibold ml-1 text-amber-700 dark:text-amber-300">
 										{executionMode === "real"
 											? activeAuthData?.authorization
-												? `硬上限: 采${activeAuthData.authorization.request_limit}次·析7次`
-												: "待服务端授权 (未授权禁止外发)"
-											: "离线测试 0 费用 (Ark≤30次·析7次)"}
+												? `采集上限 ${activeAuthData.authorization.request_limit} 次 · 重试 ${activeAuthData.authorization.retry_limit} 次 · 分析 1 轮`
+												: "待完成本轮费用授权（未授权不会发起采集）"
+											: "0 费用 · 不调用真实模型"}
 									</span>
 								</div>
 							</div>
+							<p className="text-xs text-muted-foreground">
+								模式选择本身不会发起授权、采集或模型调用；真实执行仍需本章节费用确认后手动启动。
+							</p>
 							{executionMode === "real" && (
 								<div className="mt-1 p-2.5 rounded-lg border bg-muted/40 text-xs">
 									<div className="flex items-center gap-1.5 font-semibold">
@@ -989,20 +1167,17 @@ function BrandReportsWorkspace() {
 											</span>
 										) : (
 											<span className="text-amber-700 dark:text-amber-300">
-												待服务端登记授权（未授权将触发拦截守卫）
+												待完成本轮费用授权（未授权不会发起采集）
 											</span>
 										)}
 									</div>
 									{activeAuthData?.authorization && (
 										<div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[11px]">
 											<div>
-												模型: {activeAuthData.authorization.model_name} · 联网:{" "}
-												{activeAuthData.authorization.web_search ? "开启" : "关闭"}
-											</div>
-											<div>
-												预算: {activeAuthData.authorization.request_limit} 次 · 重试:{" "}
+												采集上限: {activeAuthData.authorization.request_limit} 次 · 重试:{" "}
 												{activeAuthData.authorization.retry_limit} 次
 											</div>
+											<div>联网检索: {activeAuthData.authorization.web_search ? "开启" : "关闭"}</div>
 										</div>
 									)}
 								</div>
@@ -1011,13 +1186,13 @@ function BrandReportsWorkspace() {
 								<div className="space-y-2">
 									<p className="text-xs">本次仅授权这 {frozenSnapshot.question_count} 道题，采集上限 {frozenSnapshot.question_count} 次、重试 0 次，分析沿用本页所示范围。需要组织管理员或 owner 确认。</p>
 									<button type="button" disabled={preparationBusy || draft.submitted} className="border rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => {
-										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，另含本页所示 DeepSeek 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
+										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，另含本页所示的 Negency-Agent 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
 									}}>确认本次费用范围并授权</button>
 								</div>
 							)}
 
 							<p className="text-xs text-muted-foreground mt-1">
-								⚠️ 安全声明：本轮仅执行一次有限诊断，任务完成后绝不自动创建下一轮；真实模式需服务端开关显式开启且配置有效凭据，未授权将触发拦截守卫。
+								本轮仅执行一次诊断，完成后不会自动创建下一轮；真实执行需先完成本轮费用授权，未授权不会发起采集。
 							</p>
 						</div>
 
@@ -1033,19 +1208,24 @@ function BrandReportsWorkspace() {
 								)}
 							</div>
 							<button
-								onClick={() => createRunMutation.mutate()}
-								disabled={!frozenSnapshot || preparationBusy || (!draft.submitted && !draft.runId && executionMode === "real" && !activeAuthData?.authorization)}
+								onClick={handleStartDiagnosis}
+								disabled={startButtonDisabled}
 								className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-green-700 transition-colors disabled:opacity-50"
 							>
 								<IconPlayerPlay size={15} />
-								{createRunMutation.isPending ? "正在确认本次任务..." : draft.submitted ? "查看本次任务（已发起）" : draft.runId ? "查询或重放本次启动" : "启动本次诊断任务"}
+								{startButtonLabel}
 							</button>
 						</div>
+						{draft.submitted && preparedRunActive && (
+							<p role="status" className="text-xs text-blue-700 dark:text-blue-300">
+								本次任务仍在排队、采集、分析或生成报告中，启动入口已锁定；请在步骤 3 查看进度或只读刷新，不会重复发起任务。
+							</p>
+						)}
 					</div>
 
 					{/* 步骤 3: 诊断任务状态与客观指标看板 */}
 					{activeRunId && (
-						<div data-no-i18n="true" className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+						<div ref={progressPanelRef} data-no-i18n="true" className="scroll-mt-6 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1067,6 +1247,16 @@ function BrandReportsWorkspace() {
 									<IconRefresh size={14} /> 刷新结果
 								</button>
 							</div>
+
+							{runData?.mode === "synthetic" && (
+								<div
+									role="status"
+									className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50/70 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+								>
+									<IconAlertTriangle size={15} className="shrink-0" />
+									当前查看的是合成演示数据，非真实采集结果。
+								</div>
+							)}
 
 							{/* 任务状态卡片 */}
 							<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1098,9 +1288,15 @@ function BrandReportsWorkspace() {
 									</div>
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
-									<span className="text-xs text-muted-foreground">数据来源模式</span>
-									<div className="text-sm font-bold mt-0.5 uppercase text-muted-foreground">
-										{runData?.mode || "synthetic"}
+									<span className="text-xs text-muted-foreground">当前任务来源</span>
+									<div className="text-sm font-bold mt-0.5 text-muted-foreground">
+										{runData
+											? runData.mode === "real"
+												? "真实执行"
+												: runData.mode === "synthetic"
+													? "合成演示"
+													: runData.mode
+											: "读取中..."}
 									</div>
 								</div>
 							</div>
@@ -1117,13 +1313,13 @@ function BrandReportsWorkspace() {
 									<div>
 										<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
 											<IconAlertTriangle size={16} />
-											<span>AI 自动分析执行异常</span>
+											<span>Negency-Agent 自动分析执行异常</span>
 										</div>
 										<div className="text-red-600 dark:text-red-400 mt-0.5">
 											{runData.error_message || "分析执行失败"}
 										</div>
 										<div className="text-muted-foreground mt-0.5">
-											💡 采集数据已完整归档，无需重新采样。点击右侧按钮可直接重试 DeepSeek 自动分析。
+											💡 采集数据已完整归档，无需重新采样。点击右侧按钮可直接重试 Negency-Agent 自动分析。
 										</div>
 									</div>
 									<button
@@ -1148,15 +1344,17 @@ function BrandReportsWorkspace() {
 											{runData.error_message || "渲染失败"}
 										</div>
 										<div className="text-muted-foreground mt-0.5">
-											💡 AI 分析已持久化入库，点击右侧按钮直接重新渲染 PDF/HTML，不重复调用 LLM。
+											💡 已保存的分析会直接复用；点击右侧按钮重新生成 PDF/HTML，不重复调用模型。
 										</div>
 									</div>
 									<button
-										onClick={() => generateRevisionMutation.mutate("rev_01")}
-										disabled={generateRevisionMutation.isPending}
+										onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry" })}
+										disabled={generateRevisionMutation.isPending || saveWorkflowPhase !== "idle"}
 										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors shrink-0 disabled:opacity-50"
 									>
-										{generateRevisionMutation.isPending ? "渲染中..." : "重试报告草稿生成"}
+										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin === "retry"
+											? "渲染中..."
+											: "重试报告草稿生成"}
 									</button>
 								</div>
 							)}
@@ -1416,26 +1614,55 @@ function BrandReportsWorkspace() {
 					)}
 
 					{/* 步骤 4: 录入人工成因诊断与优先行动清单 (E-R05: 全部真实输入，严禁预填伪造内容) */}
-					{activeRunId && (runData?.status === "completed" || runData?.status === "partial") && (
+					{activeRunId && (
 						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
 										4
 									</span>
-									诊断分析草稿与优先行动建议（AI 自动生成 · 支持人工复核与修改）
+									诊断分析草稿与优先行动建议（Negency-Agent 自动生成 · 支持人工复核与修改）
 								</div>
 								<div className="text-xs text-muted-foreground">
-									{activeAnalysisId ? (
+									{hasCurrentAnalysis && activeAnalysisId ? (
 										<span className="text-green-600 dark:text-green-400 font-medium inline-flex items-center gap-1">
 											<IconCheck size={14} /> 当前分析版本: {activeAnalysisId}
 										</span>
+									) : analysisForm.phase === "generating" ? (
+										"生成完成后可编辑"
 									) : (
 										"严格绑定本轮运行，递增版本留痕"
 									)}
 								</div>
 							</div>
 
+							<div
+								role={analysisForm.phase === "failed" || analysisForm.phase === "unreadable" ? "alert" : "status"}
+								aria-live="polite"
+								className={`border rounded-lg px-3 py-2 text-xs ${analysisStatusClass}`}
+							>
+								<div className="flex items-center gap-1.5 font-semibold">
+									{analysisForm.phase === "generating" ? (
+										<IconRefresh size={15} className="animate-spin" />
+									) : analysisForm.phase === "ready" ? (
+										<IconCheck size={15} />
+									) : analysisForm.phase === "failed" || analysisForm.phase === "unreadable" ? (
+										<IconAlertTriangle size={15} />
+									) : (
+										<IconFileText size={15} />
+									)}
+									<span>{analysisStatusTitle}</span>
+								</div>
+								<p className="mt-1 leading-relaxed">{analysisForm.message}</p>
+								{analysisForm.warning && <p className="mt-1 font-medium">{analysisForm.warning}</p>}
+								{analysisForm.phase === "unreadable" && (
+									<button type="button" onClick={() => refetchAnalysis()} className="mt-2 underline">
+										刷新分析结果（只读查询）
+									</button>
+								)}
+							</div>
+
+							<fieldset disabled={analysisLocked} className="m-0 min-w-0 border-0 p-0 flex flex-col gap-4">
 							<div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
 								<div className="flex flex-col gap-1.5">
 									<label className="font-semibold">分析师姓名 *</label>
@@ -1443,8 +1670,8 @@ function BrandReportsWorkspace() {
 										type="text"
 										placeholder="如: 张分析师"
 										value={analystName}
-										onChange={(e) => setAnalystName(e.target.value)}
-										className="border rounded-md px-3 py-1.5 bg-background"
+										onChange={(e) => { markAnalysisDirty(); setAnalystName(e.target.value); }}
+										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
@@ -1453,8 +1680,8 @@ function BrandReportsWorkspace() {
 										type="text"
 										placeholder="输入本轮诊断总体结论..."
 										value={executiveConclusion}
-										onChange={(e) => setExecutiveConclusion(e.target.value)}
-										className="border rounded-md px-3 py-1.5 bg-background"
+										onChange={(e) => { markAnalysisDirty(); setExecutiveConclusion(e.target.value); }}
+										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
@@ -1463,8 +1690,8 @@ function BrandReportsWorkspace() {
 										rows={3}
 										placeholder="例如:&#10;核心业务板块提及率偏低&#10;主体探针可准确识别&#10;竞品占位显著"
 										value={keyFindings}
-										onChange={(e) => setKeyFindings(e.target.value)}
-										className="border rounded-md p-2 bg-background font-mono"
+										onChange={(e) => { markAnalysisDirty(); setKeyFindings(e.target.value); }}
+										className="border rounded-md p-2 bg-background font-mono disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
@@ -1473,8 +1700,8 @@ function BrandReportsWorkspace() {
 										type="text"
 										placeholder="主体识别清晰，无同名企业混淆（若未填显示待核）"
 										value={brandIdentityAudit}
-										onChange={(e) => setBrandIdentityAudit(e.target.value)}
-										className="border rounded-md px-3 py-1.5 bg-background"
+										onChange={(e) => { markAnalysisDirty(); setBrandIdentityAudit(e.target.value); }}
+										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5 md:col-span-2">
@@ -1483,8 +1710,8 @@ function BrandReportsWorkspace() {
 										type="text"
 										placeholder="输入官方公开内容资产或索引缺口..."
 										value={contentGapsInput}
-										onChange={(e) => setContentGapsInput(e.target.value)}
-										className="border rounded-md px-3 py-1.5 bg-background"
+										onChange={(e) => { markAnalysisDirty(); setContentGapsInput(e.target.value); }}
+										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5 md:col-span-2">
@@ -1495,31 +1722,46 @@ function BrandReportsWorkspace() {
 										rows={3}
 										placeholder="Q01 | 在海外官网增设标杆案例专页 | P0 | 契合主流寻源问法 | 官方技术专题 | 次月复测"
 										value={actionPlanInput}
-										onChange={(e) => setActionPlanInput(e.target.value)}
-										className="border rounded-md p-2 bg-background font-mono"
+										onChange={(e) => { markAnalysisDirty(); setActionPlanInput(e.target.value); }}
+										className="border rounded-md p-2 bg-background font-mono disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 								</div>
 							</div>
 
-							<div className="flex items-center justify-end pt-2">
+							<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2">
+								<div className="text-xs text-muted-foreground">
+									{saveWorkflowPhase === "saving"
+										? "正在保存本轮分析…"
+										: saveWorkflowPhase === "assembling"
+											? "分析已保存，正在自动装配一次报告修订…"
+											: !analysisForm.editable
+												? "当前阶段不可编辑或保存。"
+												: "保存后会自动装配一次新报告修订，不调用模型。"}
+								</div>
 								<button
-									onClick={() => saveAnalysisMutation.mutate()}
+									type="button"
+									onClick={handleSaveAnalysis}
 									disabled={
+										saveWorkflowPhase !== "idle" ||
 										saveAnalysisMutation.isPending ||
 										generateRevisionMutation.isPending ||
+										!analysisForm.editable ||
 										!analystName.trim() ||
 										!executiveConclusion.trim() ||
 										!keyFindings.trim() ||
 										!actionPlanInput.trim()
 									}
-									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50"
+									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50 self-end sm:self-auto"
 								>
 									<IconDeviceFloppy size={15} />
-									{saveAnalysisMutation.isPending || generateRevisionMutation.isPending
-										? "保存并装配新报告中..."
-										: "保存分析并装配新报告 (不调 LLM)"}
+									{saveWorkflowPhase === "saving"
+										? "保存分析中..."
+										: saveWorkflowPhase === "assembling"
+											? "正在装配新报告..."
+											: "保存分析并装配新报告（不调用模型）"}
 								</button>
 							</div>
+							</fieldset>
 						</div>
 					)}
 
@@ -1550,6 +1792,7 @@ function BrandReportsWorkspace() {
 													key={rev.revision_id}
 													type="button"
 													onClick={() => setActiveRevisionId(rev.revision_id)}
+														disabled={reviewMutation.isPending}
 													className={`px-3 py-1 rounded-md font-mono text-xs font-semibold transition-colors flex items-center gap-1.5 ${
 														isSelected
 															? "bg-indigo-600 text-white shadow-sm"
@@ -1573,23 +1816,28 @@ function BrandReportsWorkspace() {
 									<div className="font-semibold">装配不可变修订版本</div>
 									<div className="text-muted-foreground">
 										将已有采集归档与当前人工分析版本装配，同版渲染导出 JSON, HTML, PDF 清单
+										{saveWorkflowPhase !== "idle" && (
+											<div role="status" className="text-blue-700 dark:text-blue-300">
+												正在处理当前保存操作，暂不可另行生成修订。
+											</div>
+										)}
 									</div>
 								</div>
 								<div className="flex items-center gap-2">
 									<input
 										type="text"
 										value={revisionInput}
-										onChange={(e) => setRevisionInput(e.target.value)}
+										onChange={(e) => setRevisionInput(e.target.value)} disabled={saveWorkflowPhase !== "idle" || generateRevisionMutation.isPending}
 										placeholder="rev_01"
-										className="border rounded px-2.5 py-1.5 w-24 bg-background font-mono text-xs"
+										className="border rounded px-2.5 py-1.5 w-24 bg-background font-mono text-xs disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 									<button
-										onClick={() => generateRevisionMutation.mutate(revisionInput)}
-										disabled={generateRevisionMutation.isPending || !revisionInput.trim()}
+										onClick={() => generateRevisionMutation.mutate({ revisionId: revisionInput, origin: "manual" })}
+										disabled={saveWorkflowPhase !== "idle" || generateRevisionMutation.isPending || !revisionInput.trim()}
 										className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 shrink-0"
 									>
 										<IconFileText size={15} />
-										{generateRevisionMutation.isPending
+										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin !== "auto"
 											? "装配渲染中..."
 											: `生成修订 (${revisionInput})`}
 									</button>
@@ -1601,21 +1849,26 @@ function BrandReportsWorkspace() {
 								<div className="flex flex-col gap-4 border-t pt-4">
 									<div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-muted/40 p-4 rounded-xl">
 										<div>
-											<span className="font-bold text-sm">报告审核门禁 (机器前置校验 + 角色强门禁)</span>
+											<span className="font-bold text-sm">报告审核与交付门禁</span>
 											<p className="text-xs text-muted-foreground mt-1">
-												严格机器门禁：合成数据报告严禁批准为正式客户件；非 Admin/Owner 角色无权批准。点击“批准正式交付”将触发合规拦截；“退回草稿”将合规留痕。
+												合成演示报告不可批准为正式客户件；仅 Admin/Owner 可审核。批准会执行既有来源、权限、产物与修订门禁，结果在本区域直接显示。
+												{reviewBlockedReason && (
+													<span className="block mt-1 font-semibold text-amber-700 dark:text-amber-300">
+														{reviewBlockedReason}
+													</span>
+												)}
 											</p>
 										</div>
-										<div className="flex items-center gap-2 shrink-0">
+										<fieldset disabled={Boolean(reviewBlockedReason)} className="m-0 min-w-0 border-0 p-0 flex items-center gap-2 shrink-0">
 											<button
 												onClick={() =>
 													reviewMutation.mutate({
 														action: "reject",
-														reason: "合成测试数据不具备正式客户交付资格，已退回归档",
+														reason: "合成测试数据不具备正式客户交付资格，已退回归档", revisionId: activeRevisionId,
 													})
 												}
 												disabled={reviewMutation.isPending}
-												className="px-3 py-1.5 border border-amber-400 text-amber-700 dark:text-amber-300 rounded-md text-xs font-semibold hover:bg-amber-100/50"
+												className="px-3 py-1.5 border border-amber-400 text-amber-700 dark:text-amber-300 rounded-md text-xs font-semibold hover:bg-amber-100/50 disabled:opacity-50 disabled:cursor-not-allowed"
 											>
 												退回草稿归档
 											</button>
@@ -1623,26 +1876,65 @@ function BrandReportsWorkspace() {
 												onClick={() =>
 													reviewMutation.mutate({
 														action: "approve",
-														reason: "尝试正式批准交付",
+														reason: "尝试正式批准交付", revisionId: activeRevisionId,
 													})
 												}
 												disabled={reviewMutation.isPending}
-												className="px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-semibold hover:bg-green-700"
+												className="px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
 											>
 												批准正式交付（门禁校验）
 											</button>
-										</div>
+										</fieldset>
 									</div>
+
+									{reviewMutation.isPending && (
+										<div
+											role="status"
+											aria-live="polite"
+											className="text-xs text-blue-700 dark:text-blue-300 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 flex items-center gap-2"
+										>
+											<IconRefresh size={14} className="animate-spin shrink-0" />
+											正在提交 {reviewMutation.variables?.revisionId} 的
+											{reviewMutation.variables?.action === "approve" ? "批准" : "退回"}审核，请稍候…
+										</div>
+									)}
+									{!reviewMutation.isPending &&
+										reviewFeedback &&
+										reviewFeedback.revisionId === activeRevisionId && (
+											<div
+												role={reviewFeedback.tone === "error" ? "alert" : "status"}
+												aria-live="polite"
+												className={`text-xs rounded-lg px-3 py-2 flex items-start gap-2 ${
+													reviewFeedback.tone === "error"
+														? "text-red-700 dark:text-red-300 bg-red-50/70 dark:bg-red-950/30 border border-red-200 dark:border-red-800"
+														: "text-green-700 dark:text-green-300 bg-green-50/70 dark:bg-green-950/30 border border-green-200 dark:border-green-800"
+												}`}
+											>
+												{reviewFeedback.tone === "error" ? (
+													<IconAlertTriangle size={14} className="mt-0.5 shrink-0" />
+												) : (
+													<IconCheck size={14} className="mt-0.5 shrink-0" />
+												)}
+												<span className="flex-1">{reviewFeedback.message}</span>
+												<button
+													type="button"
+													onClick={() => setReviewFeedback(null)}
+													className="shrink-0 hover:underline"
+												>
+													关闭
+												</button>
+											</div>
+										)}
 
 									{/* 受控下载通道 */}
 									<div className="flex flex-col gap-2">
 										<span className="text-xs font-bold text-muted-foreground uppercase">
-											受控安全下载通道（elmo 服务端鉴权代理 · 防路径穿越）
+											受控下载通道（仅可下载已就绪的本轮产物）
 										</span>
 										{!downloadsReady && (
 											<div role="status" className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
 												{activeRevision
-													? `当前修订 ${activeRevisionId} 状态为 ${activeRevision.status}，产物未就绪，暂不可下载。`
+													? `当前修订 ${activeRevisionId} 状态为 ${revisionStatusLabel(activeRevision.status)}，产物未就绪，暂不可下载。`
 													: `当前修订 ${activeRevisionId} 尚未生成产物，暂不可下载。`}
 											</div>
 										)}

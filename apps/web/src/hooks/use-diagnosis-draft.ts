@@ -23,7 +23,7 @@ export function useDiagnosisDraft(userId: string, brandId: string, profile: unkn
 	const key = `diagnosis-draft:${userId}:${brandId}`;
 	const profileSignature = JSON.stringify(profile ?? null);
 	const empty = useCallback(
-		(): Draft => ({ profileSignature, dimensions: {}, mode: "synthetic", snapshot: null, submitted: false }),
+		(): Draft => ({ profileSignature, dimensions: {}, mode: "real", snapshot: null, submitted: false }),
 		[profileSignature],
 	);
 	const [draft, setDraft] = useState<Draft>(empty);
