@@ -8,7 +8,7 @@ import { DiagnosisStages } from "@/components/diagnosis-stages";
 import { diagnosisStages } from "@/lib/baseline-stages";
 import { diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
 import { getBrandReports } from "@/server/report-files";
 import {
@@ -64,12 +64,15 @@ function ReportsError(props: ErrorComponentProps) {
 
 class FrozenDimensionInputError extends Error {}
 
-type ReviewFeedback = { tone: "success" | "error"; revisionId: string; message: string };
+type ReviewFeedback = { tone: "success" | "error"; runId: string; revisionId: string; message: string };
 type GenerateRevisionArgs = {
 	revisionId: string;
 	analysisId?: string;
 	origin: "auto" | "manual" | "retry";
+	runId: string;
 };
+type SaveAnalysisArgs = { runId: string; nextRevisionId: string };
+type ReviewArgs = { action: "approve" | "reject"; reason: string; revisionId: string; runId: string };
 
 function revisionStatusLabel(status: string | undefined): string {
 	if (status === "ready") return "已就绪";
@@ -103,6 +106,8 @@ function BrandReportsWorkspace() {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [downloadError, setDownloadError] = useState<string | null>(null);
 	const [saveWorkflowPhase, setSaveWorkflowPhase] = useState<"idle" | "saving" | "assembling">("idle");
+	// 保存/装配工作流必须绑定发起任务：切换任务后不得把阶段、分析编号或反馈写到别的任务上 (B08-R02 F01/F02)
+	const [saveWorkflowRunId, setSaveWorkflowRunId] = useState<string>("");
 	const saveWorkflowRef = useRef(false);
 	const analysisDirtyRef = useRef(false);
 	const loadedAnalysisIdentityRef = useRef("");
@@ -110,6 +115,8 @@ function BrandReportsWorkspace() {
 	const progressScrollTimerRef = useRef<number | null>(null);
 	const launchRequestRef = useRef(false);
 	const activeRevisionIdRef = useRef(activeRevisionId);
+	const activeRunIdRef = useRef(activeRunId);
+	const queryClient = useQueryClient();
 
 	// 题库分类人工补齐状态 (E-R04)
 
@@ -343,6 +350,10 @@ function BrandReportsWorkspace() {
 		setReviewNotice(null);
 	}, [activeRevisionId]);
 
+	useEffect(() => {
+		activeRunIdRef.current = activeRunId;
+	}, [activeRunId]);
+
 	// 仅在显式启动成功并选中当前 run 后定位一次进度看板；轮询与刷新不触发 (B08-05)
 	useEffect(() => () => {
 		if (progressScrollTimerRef.current !== null) {
@@ -368,6 +379,7 @@ function BrandReportsWorkspace() {
 	const handleSelectRun = (runId: string) => {
 		// 路由与选择器可能在同一轮渲染中重复选中同一 run；保留已恢复的分析与未保存修改。
 		if (runId === activeRunId) return;
+		activeRunIdRef.current = runId;
 		setActiveRunId(runId);
 		// 切换 run 时清空所有表单项，防止旧任务数据串入新任务
 		setActiveAnalysisId("");
@@ -518,7 +530,7 @@ function BrandReportsWorkspace() {
 	});
 
 	const saveAnalysisMutation = useMutation({
-		mutationFn: () => {
+		mutationFn: (args: SaveAnalysisArgs) => {
 			const lines = actionPlanInput.split("\n").filter((l) => l.trim().length > 0);
 			if (lines.length === 0) {
 				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式");
@@ -591,7 +603,7 @@ function BrandReportsWorkspace() {
 			return saveBaselineAnalysisFn({
 				data: {
 					brandId: brandId!,
-					runId: activeRunId,
+					runId: args.runId,
 					analystName: analystName.trim() || "未具名分析师",
 					executiveConclusion: executiveConclusion.trim() || "待补充执行结论",
 					keyFindings: keyFindings
@@ -608,26 +620,32 @@ function BrandReportsWorkspace() {
 				},
 			});
 		},
-		onSuccess: async (res) => {
-			setActiveAnalysisId(res.analysis_id);
-			setActionError(null);
-			analysisDirtyRef.current = false;
-			loadedAnalysisIdentityRef.current = "";
+		onSuccess: async (res, args) => {
+			// 只有发起任务仍是当前任务时才写回表单/分析选中；否则仅刷新该任务自己的缓存 (B08-R02 F01)
+			const stillActive = args.runId === activeRunIdRef.current;
 			setSaveWorkflowPhase("assembling");
-			await refetchAnalysis();
-			// 自动装配对应的新报告修订并选中 (F-R05)
-			const nextNum = (reportData?.revisions?.length || 0) + 1;
-			const targetRev = `rev_${String(nextNum).padStart(2, "0")}`;
+			if (stillActive) {
+				setActiveAnalysisId(res.analysis_id);
+				setActionError(null);
+				analysisDirtyRef.current = false;
+				loadedAnalysisIdentityRef.current = "";
+				await refetchAnalysis();
+			} else {
+				await queryClient.invalidateQueries({ queryKey: ["baseline-analysis", brandId, args.runId] });
+			}
+			// 自动装配始终绑定发起任务，不随后续切换改变 (F-R05 / B08-R02 F01)
 			generateRevisionMutation.mutate({
-				revisionId: targetRev,
+				revisionId: args.nextRevisionId,
 				analysisId: res.analysis_id,
 				origin: "auto",
+				runId: args.runId,
 			});
 		},
-		onError: (err: any) => {
+		onError: (err: any, args: SaveAnalysisArgs) => {
 			saveWorkflowRef.current = false;
 			setSaveWorkflowPhase("idle");
-			setActionError(`保存人工分析失败: ${err.message}`);
+			setSaveWorkflowRunId("");
+			if (args.runId === activeRunIdRef.current) setActionError(`保存人工分析失败: ${err.message}`);
 		},
 	});
 
@@ -638,7 +656,7 @@ function BrandReportsWorkspace() {
 			return generateBaselineReportRevisionFn({
 				data: {
 					brandId: brandId!,
-					runId: activeRunId,
+					runId: args.runId,
 					revisionId: revId.trim() || "rev_01",
 					analysisId: anlId,
 					draftNotice: `内部预览草稿，未经终审（${revId.trim() || "rev_01"} · 离线验证）`,
@@ -646,66 +664,88 @@ function BrandReportsWorkspace() {
 			});
 		},
 		onSuccess: (res, args) => {
-			setActiveRevisionId(res.revision_id);
-			// 自动预推下一个 revision 编号供继续修改 (E-R06)
-			const currentNum = parseInt(res.revision_id.replace(/^rev_/, ""), 10) || 1;
-			setRevisionInput(`rev_${String(currentNum + 1).padStart(2, "0")}`);
-			setActionError(null);
+			// 修订选择与编号只回写发起任务；其他任务仅刷新自己的报告缓存 (B08-R02 F01/F02)
+			if (args.runId === activeRunIdRef.current) {
+				setActiveRevisionId(res.revision_id);
+				// 自动预推下一个 revision 编号供继续修改 (E-R06)
+				const currentNum = parseInt(res.revision_id.replace(/^rev_/, ""), 10) || 1;
+				setRevisionInput(`rev_${String(currentNum + 1).padStart(2, "0")}`);
+				setActionError(null);
+				refetchReport();
+			} else {
+				void queryClient.invalidateQueries({ queryKey: ["baseline-report", brandId, args.runId] });
+			}
 			if (args.origin === "auto") {
 				saveWorkflowRef.current = false;
 				setSaveWorkflowPhase("idle");
+				setSaveWorkflowRunId("");
 			}
-			refetchReport();
 		},
 		onError: (err: any, args) => {
-			setActionError(`生成报告修订失败: ${err.message}`);
+			if (args.runId === activeRunIdRef.current) setActionError(`生成报告修订失败: ${err.message}`);
 			if (args.origin === "auto") {
 				saveWorkflowRef.current = false;
 				setSaveWorkflowPhase("idle");
+				setSaveWorkflowRunId("");
 			}
 		},
 	});
 	const handleSaveAnalysis = () => {
-		if (saveWorkflowRef.current) return;
+		if (saveWorkflowRef.current || !activeRunId) return;
+		// 保存与后续自动装配都锁定发起任务与当时的下一个修订号 (B08-R02 F01)
+		const initiatingRunId = activeRunId;
+		const revisionCount = reportData?.run_id === initiatingRunId ? reportData.revisions?.length ?? 0 : 0;
+		const targetRevisionId = `rev_${String(revisionCount + 1).padStart(2, "0")}`;
 		saveWorkflowRef.current = true;
+		setSaveWorkflowRunId(initiatingRunId);
 		setSaveWorkflowPhase("saving");
-		saveAnalysisMutation.mutate();
+		saveAnalysisMutation.mutate({ runId: initiatingRunId, nextRevisionId: targetRevisionId });
 	};
 
 	const reviewMutation = useMutation({
-		mutationFn: (args: { action: "approve" | "reject"; reason: string; revisionId: string }) =>
+		mutationFn: (args: ReviewArgs) =>
 			reviewBaselineReportRevisionFn({
 				data: {
 					brandId: brandId!,
-					reportId: `rpt_${activeRunId}`,
+					reportId: `rpt_${args.runId}`,
 					revisionId: args.revisionId || "rev_01",
 					action: args.action,
 					reason: args.reason,
 				},
 			}),
 		onMutate: (args) => {
-			if (args.revisionId === activeRevisionIdRef.current) {
+			if (args.runId === activeRunIdRef.current && args.revisionId === activeRevisionIdRef.current) {
 				setReviewFeedback(null);
 				setReviewNotice(null);
 			}
 		},
 		onSuccess: (res, args) => {
+			// 成功反馈必须匹配发起任务与当前所选修订，避免同名 revision 串到其他任务 (B08-R02 F02)
+			const stillActive = args.runId === activeRunIdRef.current;
+			const matchedRevision = stillActive && args.revisionId === activeRevisionIdRef.current;
 			const statusText =
 				res.review_status === "approved" ? "已批准" : res.review_status === "rejected" ? "已退回" : res.review_status;
 			const message = `${args.revisionId} 审核完成：${statusText}（审核主体: ${res.reviewer}）`;
-			if (args.revisionId === activeRevisionIdRef.current) {
-				setReviewFeedback({ tone: "success", revisionId: args.revisionId, message });
+			if (matchedRevision) {
+				setReviewFeedback({ tone: "success", runId: args.runId, revisionId: args.revisionId, message });
 				setReviewNotice(message);
 			}
-			setActionError(null);
-			refetchReport();
+			if (stillActive) {
+				setActionError(null);
+				refetchReport();
+			} else {
+				void queryClient.invalidateQueries({ queryKey: ["baseline-report", brandId, args.runId] });
+			}
 		},
 		onError: (err: any, args) => {
 			// 合成数据批准被拒绝是预期内的严格机器门禁行为 (D-R06 / D-R07)
-			setReviewNotice(null);
-			if (args.revisionId === activeRevisionIdRef.current) {
+			const stillActive = args.runId === activeRunIdRef.current;
+			const matchedRevision = stillActive && args.revisionId === activeRevisionIdRef.current;
+			if (matchedRevision) {
+				setReviewNotice(null);
 				setReviewFeedback({
 					tone: "error",
+					runId: args.runId,
 					revisionId: args.revisionId,
 					message: `审核未完成：${err.message}`,
 				});
@@ -783,7 +823,13 @@ function BrandReportsWorkspace() {
 		analysisQueryFailed: Boolean(analysisQueryError),
 		runQueryFailed: Boolean(runError),
 	});
-	const analysisLocked = !analysisForm.editable || saveWorkflowPhase !== "idle";
+	// 保存/装配阶段与任务绑定：阶段提示只对发起任务展示，忙碌状态对所有任务生效 (B08-R02 F01)
+	const saveWorkflowBusy =
+		saveWorkflowPhase !== "idle" || saveAnalysisMutation.isPending || generateRevisionMutation.isPending;
+	const activeSaveWorkflowPhase =
+		saveWorkflowRunId && saveWorkflowRunId === activeRunId ? saveWorkflowPhase : "idle";
+	const foreignSaveWorkflowBusy = saveWorkflowBusy && activeSaveWorkflowPhase === "idle";
+	const analysisLocked = !analysisForm.editable || activeSaveWorkflowPhase !== "idle";
 	const reviewBlockedReason = !activeRevision
 		? `当前修订 ${activeRevisionId || "—"} 尚未生成，暂不可审核。`
 		: activeRevision.status !== "ready"
@@ -1348,8 +1394,8 @@ function BrandReportsWorkspace() {
 										</div>
 									</div>
 									<button
-										onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry" })}
-										disabled={generateRevisionMutation.isPending || saveWorkflowPhase !== "idle"}
+										onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry", runId: activeRunId })}
+										disabled={saveWorkflowBusy}
 										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors shrink-0 disabled:opacity-50"
 									>
 										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin === "retry"
@@ -1730,21 +1776,21 @@ function BrandReportsWorkspace() {
 
 							<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2">
 								<div className="text-xs text-muted-foreground">
-									{saveWorkflowPhase === "saving"
+									{activeSaveWorkflowPhase === "saving"
 										? "正在保存本轮分析…"
-										: saveWorkflowPhase === "assembling"
+										: activeSaveWorkflowPhase === "assembling"
 											? "分析已保存，正在自动装配一次报告修订…"
-											: !analysisForm.editable
-												? "当前阶段不可编辑或保存。"
-												: "保存后会自动装配一次新报告修订，不调用模型。"}
+											: foreignSaveWorkflowBusy
+												? "另一任务的保存/装配仍在进行，完成前暂不可提交本任务。"
+												: !analysisForm.editable
+													? "当前阶段不可编辑或保存。"
+													: "保存后会自动装配一次新报告修订，不调用模型。"}
 								</div>
 								<button
 									type="button"
 									onClick={handleSaveAnalysis}
 									disabled={
-										saveWorkflowPhase !== "idle" ||
-										saveAnalysisMutation.isPending ||
-										generateRevisionMutation.isPending ||
+										saveWorkflowBusy ||
 										!analysisForm.editable ||
 										!analystName.trim() ||
 										!executiveConclusion.trim() ||
@@ -1754,9 +1800,9 @@ function BrandReportsWorkspace() {
 									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50 self-end sm:self-auto"
 								>
 									<IconDeviceFloppy size={15} />
-									{saveWorkflowPhase === "saving"
+									{activeSaveWorkflowPhase === "saving"
 										? "保存分析中..."
-										: saveWorkflowPhase === "assembling"
+										: activeSaveWorkflowPhase === "assembling"
 											? "正在装配新报告..."
 											: "保存分析并装配新报告（不调用模型）"}
 								</button>
@@ -1816,9 +1862,14 @@ function BrandReportsWorkspace() {
 									<div className="font-semibold">装配不可变修订版本</div>
 									<div className="text-muted-foreground">
 										将已有采集归档与当前人工分析版本装配，同版渲染导出 JSON, HTML, PDF 清单
-										{saveWorkflowPhase !== "idle" && (
+										{activeSaveWorkflowPhase !== "idle" && (
 											<div role="status" className="text-blue-700 dark:text-blue-300">
 												正在处理当前保存操作，暂不可另行生成修订。
+											</div>
+										)}
+										{foreignSaveWorkflowBusy && (
+											<div role="status" className="text-blue-700 dark:text-blue-300">
+												另一任务的保存/装配仍在进行，完成前暂不可生成修订。
 											</div>
 										)}
 									</div>
@@ -1827,13 +1878,13 @@ function BrandReportsWorkspace() {
 									<input
 										type="text"
 										value={revisionInput}
-										onChange={(e) => setRevisionInput(e.target.value)} disabled={saveWorkflowPhase !== "idle" || generateRevisionMutation.isPending}
+										onChange={(e) => setRevisionInput(e.target.value)} disabled={saveWorkflowBusy}
 										placeholder="rev_01"
 										className="border rounded px-2.5 py-1.5 w-24 bg-background font-mono text-xs disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 									<button
-										onClick={() => generateRevisionMutation.mutate({ revisionId: revisionInput, origin: "manual" })}
-										disabled={saveWorkflowPhase !== "idle" || generateRevisionMutation.isPending || !revisionInput.trim()}
+										onClick={() => generateRevisionMutation.mutate({ revisionId: revisionInput, origin: "manual", runId: activeRunId })}
+										disabled={saveWorkflowBusy || !revisionInput.trim()}
 										className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 shrink-0"
 									>
 										<IconFileText size={15} />
@@ -1865,6 +1916,7 @@ function BrandReportsWorkspace() {
 													reviewMutation.mutate({
 														action: "reject",
 														reason: "合成测试数据不具备正式客户交付资格，已退回归档", revisionId: activeRevisionId,
+														runId: activeRunId,
 													})
 												}
 												disabled={reviewMutation.isPending}
@@ -1877,6 +1929,7 @@ function BrandReportsWorkspace() {
 													reviewMutation.mutate({
 														action: "approve",
 														reason: "尝试正式批准交付", revisionId: activeRevisionId,
+														runId: activeRunId,
 													})
 												}
 												disabled={reviewMutation.isPending}
@@ -1887,7 +1940,7 @@ function BrandReportsWorkspace() {
 										</fieldset>
 									</div>
 
-									{reviewMutation.isPending && (
+									{reviewMutation.isPending && reviewMutation.variables?.runId === activeRunId && (
 										<div
 											role="status"
 											aria-live="polite"
@@ -1900,6 +1953,7 @@ function BrandReportsWorkspace() {
 									)}
 									{!reviewMutation.isPending &&
 										reviewFeedback &&
+										reviewFeedback.runId === activeRunId &&
 										reviewFeedback.revisionId === activeRevisionId && (
 											<div
 												role={reviewFeedback.tone === "error" ? "alert" : "status"}
