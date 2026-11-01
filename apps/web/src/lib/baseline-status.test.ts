@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { baselineRunStatusSchema, diagnosisStatusText, isDiagnosisInProgress } from "./baseline-status";
+import {
+	baselineRunStatusSchema,
+	diagnosisAnalysisFormStatus,
+	diagnosisStatusText,
+	isBaselineRunActive,
+	isDiagnosisInProgress,
+} from "./baseline-status";
 
 const run = {
 	run_id: "run_test",
@@ -48,5 +54,89 @@ describe("diagnosis status reflects actual tasks", () => {
 	});
 	it("unrecognized task states are rejected instead of inventing success", () => {
 		expect(() => baselineRunStatusSchema.parse({ ...run, status: "unknown" })).toThrow();
+	});
+	it("ready_for_review is not active even if a stale status says running", () => {
+		expect(isBaselineRunActive({ status: "running", current_step: "ready_for_review" })).toBe(false);
+		expect(isBaselineRunActive({ status: "running", current_step: "rendering_report" })).toBe(true);
+	});
+});
+
+describe("analysis form follows the actual analysis state", () => {
+	const status = (value: Parameters<typeof diagnosisAnalysisFormStatus>[0], hasAnalysis = false) =>
+		diagnosisAnalysisFormStatus(value, { hasAnalysis });
+
+	it("does not claim generation before the analysis stage starts", () => {
+		const collecting = status({ ...run, current_step: "collecting" });
+		expect(collecting.phase).toBe("waiting");
+		expect(collecting.editable).toBe(false);
+		expect(collecting.message).toContain("尚未开始");
+		expect(collecting.message).not.toContain("正在自动生成中");
+		expect(status({ ...run, current_step: "queued", status: "queued" }).phase).toBe("waiting");
+	});
+	it("locks the form while the current run is generating analysis", () => {
+		const analyzing = status({ ...run, status: "completed", current_step: "analyzing" });
+		expect(analyzing.phase).toBe("generating");
+		expect(analyzing.editable).toBe(false);
+		expect(analyzing.message).toBe("Negency-Agent正在自动生成中，请稍后。");
+		const withOldVersion = diagnosisAnalysisFormStatus(
+			{ ...run, status: "completed", current_step: "analyzing" },
+			{ hasAnalysis: true },
+		);
+		expect(withOldVersion.phase).toBe("generating");
+		expect(withOldVersion.editable).toBe(false);
+	});
+	it("keeps a saved analysis editable while the report is rendering or failed", () => {
+		for (const current_step of ["rendering_report", "report_render_failed"]) {
+			const ready = status({ ...run, status: "completed", current_step }, true);
+			expect(ready.phase).toBe("ready");
+			expect(ready.editable).toBe(true);
+		}
+	});
+	it("reports analysis failure without asking the user to write from scratch", () => {
+		const failed = status({
+			...run,
+			status: "completed",
+			current_step: "analysis_failed",
+			valid_questions: 9,
+		});
+		expect(failed.phase).toBe("failed");
+		expect(failed.editable).toBe(false);
+		expect(failed.message).toContain("重试入口");
+		expect(failed.message).toContain("空白代写");
+		const stopped = status({ ...run, status: "failed", current_step: "failed" });
+		expect(stopped.phase).toBe("failed");
+		expect(stopped.message).toContain("已中止");
+	});
+	it("distinguishes a read failure from an unfinished analysis", () => {
+		const unreadable = diagnosisAnalysisFormStatus(
+			{ ...run, status: "completed", current_step: "ready_for_review" },
+			{ hasAnalysis: false, analysisQueryFailed: true },
+		);
+		expect(unreadable.phase).toBe("unreadable");
+		expect(unreadable.message).toContain("读取失败");
+		expect(unreadable.message).not.toContain("正在自动生成中");
+		const missing = status({ ...run, status: "completed", current_step: "completed", valid_questions: 9 });
+		expect(missing.phase).toBe("missing");
+		expect(missing.editable).toBe(false);
+	});
+	it("keeps unknown states locked and refreshable", () => {
+		const unknownRun = diagnosisAnalysisFormStatus(null, { hasAnalysis: false, runQueryFailed: true });
+		expect(unknownRun.phase).toBe("unknown");
+		expect(unknownRun.message).toContain("任务状态读取失败");
+		const loadingRun = diagnosisAnalysisFormStatus(null, { hasAnalysis: false });
+		expect(loadingRun.phase).toBe("unknown");
+		expect(loadingRun.message).toContain("正在读取");
+		const reportFailed = status({ ...run, status: "completed", current_step: "report_render_failed" });
+		expect(reportFailed.phase).toBe("unknown");
+		expect(reportFailed.message).toContain("报告生成失败");
+	});
+	it("keeps a previously saved analysis usable after a later analysis failure", () => {
+		const saved = diagnosisAnalysisFormStatus(
+			{ ...run, status: "completed", current_step: "analysis_failed" },
+			{ hasAnalysis: true },
+		);
+		expect(saved.phase).toBe("ready");
+		expect(saved.editable).toBe(true);
+		expect(saved.warning).toContain("此前已保存");
 	});
 });
