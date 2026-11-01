@@ -36,7 +36,7 @@ import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
 import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
-import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
+import { effectiveQueryQuestions } from "@/lib/baseline-query-observations";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
 
@@ -143,16 +143,9 @@ function QueryFanoutPage() {
 		}
 
 		const formalQuestions: any[] = evidenceData?.formal_questions || [];
-		const validQuestions =
-			metricsData?.p0_summary?.effective_sample_count ??
-			metricsData?.p0_summary?.valid_questions ??
-			runData?.valid_questions ??
-			formalQuestions.length;
-
-		// Filter by tags if selected
-		const matchingQuestions = tags.length > 0
-			? formalQuestions.filter((q) => tags.includes(q.dimension_name))
-			: formalQuestions;
+		const matchingQuestions = effectiveQueryQuestions(
+			formalQuestions, metricsData?.sample_summary?.zero_effective_questions, tags,
+		);
 
 		let totalQueries = 0;
 		const byPrompt: PromptFanoutStat[] = [];
@@ -203,22 +196,7 @@ function QueryFanoutPage() {
 			promptRefs: Array.from(item.promptRefs.values()).sort((a, b) => b.runs - a.runs),
 		})).sort((a, b) => b.runs - a.runs);
 
-		const zeroEffectiveCodes = metricsData?.sample_summary?.zero_effective_questions;
-		const matchingEffectiveQuestions = matchingQuestions.filter((q) => {
-			const status = resolveQuestionExecutionStatus(
-				{
-					code: q.question_code,
-					status: q.status,
-					effective_status: q.effective_status,
-					attempts_count: q.attempts_count,
-					error_message: q.error_message,
-				},
-				zeroEffectiveCodes,
-			);
-			return status === "effective";
-		});
-
-		const effectiveRunsCount = tags.length > 0 ? matchingEffectiveQuestions.length : validQuestions;
+		const effectiveRunsCount = matchingQuestions.length;
 		const fanoutRuns = byPrompt.filter((p) => p.totalQueries > 0).length;
 		const uniqueQueries = queryMap.size;
 		const avgPerExecution = fanoutRuns > 0 ? +(totalQueries / fanoutRuns).toFixed(1) : 0;
@@ -365,12 +343,12 @@ function QueryFanoutPage() {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
-					<StatRow data={effectiveData as any} />
+					<StatRow data={effectiveData as any} baseline={activeBaseline.hasBaselineRuns} />
 					<EmptyState
 						message={
 							isZh
-								? "该轮未返回可用检索词（模型在生成回答时未在原始响应中暴露检索词详情）。"
-								: "No web queries returned in this diagnostic run — the model did not expose search query details in the raw response."
+								? "当前有效正式题未提供可观测检索词记录；检索次数及平均值未知，不代表未搜索或免费。"
+								: "No observable query records for the effective formal samples; search counts and averages are unknown, not zero or free."
 						}
 					/>
 				</div>
@@ -380,7 +358,7 @@ function QueryFanoutPage() {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
-					<StatRow data={effectiveData as any} />
+					<StatRow data={effectiveData as any} baseline={activeBaseline.hasBaselineRuns} />
 					<Tabs value={tab} onValueChange={(v) => setTab(v as FanoutTab)} className="gap-4">
 						<TabsList>
 							<TabsTrigger value="fanout">{isZh ? "问题发散明细 (Prompt Fan-Out)" : "Prompt Fan-Out"}</TabsTrigger>
@@ -406,9 +384,9 @@ function QueryFanoutPage() {
 
 	return (
 		<PageHeader
-			title="Query Fan-Out"
-			subtitle="The web searches AI engines run when answering your prompts."
-			infoContent={infoContent}
+			title={isZh ? "联网检索发散" : "Query Fan-Out"}
+			subtitle={isZh ? "展示原始响应中可观测的检索词记录，每个搜索块的查询文本计一条，不等于供应商计费次数。" : "Observable query records: one query text per search block, not provider billable tool calls."}
+			infoContent={activeBaseline.hasBaselineRuns ? (isZh ? "仅统计当前任务的有效正式题；失败题与探针不参与。未提供检索词不代表未搜索，分号文本保持原样。" : "Only effective formal samples in this run. Failed samples and probes are excluded. Missing queries do not imply no search; semicolons are preserved.") : infoContent}
 		>
 			<div className="space-y-6">
 				{activeBaseline.hasBaselineRuns && (
@@ -502,33 +480,38 @@ function UnknownRunsTooltip({ byModel }: { byModel: FanoutData["byModel"] }) {
 	);
 }
 
-function StatRow({ data }: { data: FanoutData }) {
+function StatRow({ data, baseline = false }: { data: FanoutData; baseline?: boolean }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	// Only models that actually produced fan-out — the tooltip describes runs that
 	// "produced at least one web search", so engines that ran but exposed none (e.g.
 	// OpenRouter) are left off rather than listed as 0.
 	const breakdown = data.byModel.filter((m) => m.fanoutRuns > 0).sort((a, b) => b.fanoutRuns - a.fanoutRuns);
 	return (
+		<div className="space-y-3">
 		<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<StatCard
-				label="Search Prompt Runs"
+				label={baseline ? (isZh ? "有效正式题样本" : "Effective Formal Samples") : "Search Prompt Runs"}
 				value={data.totalRuns.toLocaleString()}
-				tip="How many times your prompts were run against engines configured with web search. An engine may still choose not to execute a search on a given run."
+				tip={baseline ? (isZh ? "当前筛选内的有效正式题样本数，不是供应商工具调用或计费次数。" : "Effective formal samples in the current filters, not provider tool calls or billable searches.") : "Runs against search-enabled engines."}
 			/>
 			<StatCard
-				label="Prompt Runs w/ Unknown Queries"
+				label={isZh ? "检索词未知样本" : "Samples with Unknown Queries"}
 				value={(data.totalRuns - data.fanoutRuns).toLocaleString()}
-				tip={<UnknownRunsTooltip byModel={data.byModel} />}
+				tip={isZh ? "这些样本未返回可观测检索词，无法据此判断未搜索或实际搜索次数。" : <UnknownRunsTooltip byModel={data.byModel} />}
 			/>
 			<StatCard
-				label="Prompt Runs w/ Known Queries"
+				label={isZh ? "检索词已知样本" : "Samples with Known Queries"}
 				value={data.fanoutRuns.toLocaleString()}
-				tip={<RunsTooltip breakdown={breakdown} />}
+				tip={isZh ? "至少返回一条原始查询文本的样本数。" : <RunsTooltip breakdown={breakdown} />}
 			/>
 			<StatCard
-				label="Average Fan-Out"
-				value={data.avgPerExecution.toLocaleString()}
-				tip="Average queries per run that had at least one web query."
+				label={isZh ? "已知样本平均检索记录" : "Average Records per Known Sample"}
+				value={baseline && data.fanoutRuns === 0 ? (isZh ? "未知" : "Unknown") : data.avgPerExecution.toLocaleString()}
+				tip={isZh ? "仅以检索词已知样本为分母；未知样本不补零。每个搜索块返回的原始 query 文本计一条，不拆分分号，不等于计费次数。" : "Known-query samples only; unknown samples are not zero-filled. One raw query string per search block, not billable tool calls."}
 			/>
+		</div>
+		{baseline && <p className="text-sm text-muted-foreground">{isZh ? `已知范围：${data.fanoutRuns} / ${data.totalRuns} 个有效正式题样本，共 ${data.totalQueries} 条可观测检索词记录；未知样本未补零。` : `Known coverage: ${data.fanoutRuns} / ${data.totalRuns} effective formal samples, ${data.totalQueries} observable query records. Unknown samples are not zero-filled.`}</p>}
 		</div>
 	);
 }
@@ -690,7 +673,7 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 										<span className="text-muted-foreground text-xs">{p.uniqueQueries.toLocaleString()} variations</span>
 									</span>
 									<span className="text-right text-sm tabular-nums">{p.totalQueries.toLocaleString()}</span>
-									<span className="text-right text-sm tabular-nums">{p.avgPerExecution.toLocaleString()}</span>
+									<span className="text-right text-sm tabular-nums">{p.totalQueries ? p.avgPerExecution.toLocaleString() : "—"}</span>
 								</button>
 								{isOpen && keywords && (
 									<div className="border-border mb-3 ml-8 mr-2 space-y-2 border-l pl-4">

@@ -750,6 +750,9 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 						priority_rationale: z.string(),
 						deliverable: z.string(),
 						verification_method: z.string(),
+						brand_id: z.string().optional(),
+						snapshot_id: z.string().optional(),
+						run_id: z.string().optional(),
 					}),
 				)
 				.min(1),
