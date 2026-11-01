@@ -53,7 +53,8 @@ export function DiagnosisStatus({ brandId, enabledPrompts }: { brandId: string; 
 					本次任务：{formatDiagnosticTaskName({
 						brandName: brandDisplayName,
 						runId: run.run_id,
-						createdAt: (run as any).created_at || (run as any).completed_at,
+						createdAt: run.created_at,
+						completedAt: run.completed_at,
 						isZh: true,
 					})}（编号：{run.run_id}）· {run.mode === "synthetic" ? "离线合成测试，非真实豆包结果" : "真实执行"}
 				</p>

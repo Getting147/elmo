@@ -6,6 +6,7 @@ import {
 	isBaselineRunActive,
 	isDiagnosisInProgress,
 } from "./baseline-status";
+import { formatDiagnosticTaskName } from "./baseline-task-name";
 
 const run = {
 	run_id: "run_test",
@@ -54,6 +55,61 @@ describe("diagnosis status reflects actual tasks", () => {
 	});
 	it("unrecognized task states are rejected instead of inventing success", () => {
 		expect(() => baselineRunStatusSchema.parse({ ...run, status: "unknown" })).toThrow();
+	});
+	it("keeps the run time through schema validation so every page names the run alike", () => {
+		const parsed = baselineRunStatusSchema.parse({
+			...run,
+			run_id: "run_608dd03e-e79d-42b9-a197-8bc702c428de",
+			created_at: "2026-11-01T08:00:00+00:00",
+			completed_at: "2026-11-01T09:30:00+00:00",
+		});
+		const overviewName = formatDiagnosticTaskName({
+			brandName: "美的",
+			runId: parsed.run_id,
+			createdAt: parsed.created_at,
+			completedAt: parsed.completed_at,
+		});
+		expect(overviewName).toBe("美的｜2026-11-01 16:00（北京时间）｜批次608dd03e");
+		const reportName = formatDiagnosticTaskName({
+			brandName: "美的",
+			runId: "run_608dd03e-e79d-42b9-a197-8bc702c428de",
+			createdAt: "2026-11-01T08:00:00+00:00",
+		});
+		expect(overviewName).toBe(reportName);
+	});
+	it("falls back to completed_at when only completion time is known", () => {
+		const parsed = baselineRunStatusSchema.parse({ ...run, completed_at: "2026-11-01T02:30:00Z" });
+		expect(
+			formatDiagnosticTaskName({
+				brandName: "美的",
+				runId: "run_abc12345",
+				createdAt: parsed.created_at,
+				completedAt: parsed.completed_at,
+			}),
+		).toBe("美的｜2026-11-01 10:30（北京时间）｜批次abc12345");
+	});
+	it.each([
+		["missing", {}],
+		["null", { created_at: null, completed_at: null }],
+		["unparseable text", { created_at: "not-a-date" }],
+		["wrong type", { created_at: 1730448000, completed_at: { at: "2026-11-01" } }],
+	])("an old task with %s time still loads and shows time unknown", (_label, times) => {
+		const parsed = baselineRunStatusSchema.parse({ ...run, ...times });
+		expect(parsed.status).toBe("running");
+		expect(
+			formatDiagnosticTaskName({
+				brandName: "美的",
+				runId: "run_abc12345",
+				createdAt: parsed.created_at,
+				completedAt: parsed.completed_at,
+			}),
+		).toBe("美的｜时间未知｜批次abc12345");
+	});
+	it("time tolerance does not relax status validation", () => {
+		expect(() =>
+			baselineRunStatusSchema.parse({ ...run, status: "unknown", created_at: "2026-11-01T08:00:00Z" }),
+		).toThrow();
+		expect(() => baselineRunStatusSchema.parse({ ...run, mode: "production", created_at: null })).toThrow();
 	});
 	it("ready_for_review is not active even if a stale status says running", () => {
 		expect(isBaselineRunActive({ status: "running", current_step: "ready_for_review" })).toBe(false);
