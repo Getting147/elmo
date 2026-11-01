@@ -5,8 +5,13 @@ import { Button } from "@workspace/ui/components/button";
 import { z } from "zod";
 import { baselineRunStatusSchema, diagnosisStatusText, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { getBaselineRunFn, listBaselineRunsFn } from "@/server/baseline";
+import { useBrand } from "@/hooks/use-brands";
+import { formatDiagnosticTaskName } from "@/lib/baseline-task-name";
 
 export function DiagnosisStatus({ brandId, enabledPrompts }: { brandId: string; enabledPrompts: number }) {
+	const { brand } = useBrand(brandId);
+	const brandDisplayName = brand?.name || brandId || "";
+
 	const {
 		data: run,
 		error,
@@ -45,7 +50,12 @@ export function DiagnosisStatus({ brandId, enabledPrompts }: { brandId: string; 
 			</div>
 			{run && (
 				<p className="text-sm text-muted-foreground break-all">
-					本次任务：{run.run_id} · {run.mode === "synthetic" ? "离线合成测试，非真实豆包结果" : "真实执行"}
+					本次任务：{formatDiagnosticTaskName({
+						brandName: brandDisplayName,
+						runId: run.run_id,
+						createdAt: (run as any).created_at || (run as any).completed_at,
+						isZh: true,
+					})}（编号：{run.run_id}）· {run.mode === "synthetic" ? "离线合成测试，非真实豆包结果" : "真实执行"}
 				</p>
 			)}
 			<p className="text-sm text-muted-foreground">

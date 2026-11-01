@@ -11,6 +11,9 @@ import {
 	IconAlertCircle,
 } from "@tabler/icons-react";
 import { useLanguage } from "@/lib/language-context";
+import { useBrand } from "@/hooks/use-brands";
+import { formatDiagnosticTaskName, formatBeijingTime } from "@/lib/baseline-task-name";
+import { diagnosisStatusText } from "@/lib/baseline-status";
 
 export interface DiagnosisRunBannerProps {
 	activeRunId?: string;
@@ -35,6 +38,8 @@ export function DiagnosisRunBanner({
 }: DiagnosisRunBannerProps) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
+	const { brand } = useBrand(brandId);
+	const brandDisplayName = brand?.name || brandId || "";
 
 	if (!runsList || runsList.length === 0 || !activeRunId) {
 		return null;
@@ -49,9 +54,8 @@ export function DiagnosisRunBanner({
 	const platformName = runData?.model_name || "doubao-pro-32k";
 	const webSearchEnabled = runData?.web_search ?? true;
 
-	const sampleDate = (runData?.completed_at || runData?.created_at || "")
-		.replace("T", " ")
-		.slice(0, 16);
+	const rawDate = runData?.completed_at || runData?.created_at;
+	const sampleDate = formatBeijingTime(rawDate, isZh);
 
 	const validQuestions =
 		metricsData?.p0_summary?.effective_sample_count ??
@@ -82,11 +86,29 @@ export function DiagnosisRunBanner({
 						<option value="" disabled>
 							{isZh ? "-- 选择已有任务查看/处理 --" : "-- Select diagnostic task --"}
 						</option>
-						{runsList.map((r: any) => (
-							<option key={r.run_id} value={r.run_id}>
-								{r.run_id} ({r.mode || "real"} · {r.status} · {r.created_at?.slice(0, 16)})
-							</option>
-						))}
+						{runsList.map((r: any) => {
+							const taskLabel = formatDiagnosticTaskName({
+								brandName: brandDisplayName,
+								runId: r.run_id,
+								createdAt: r.created_at || r.completed_at,
+								isZh,
+							});
+							const modeLabel =
+								r.mode === "synthetic"
+									? isZh
+										? "合成演示"
+										: "Synthetic"
+									: isZh
+										? "真实执行"
+										: "Real";
+							const statusObj = diagnosisStatusText(r);
+							const statusTitle = statusObj?.title || r.status || "";
+							return (
+								<option key={r.run_id} value={r.run_id} title={r.run_id}>
+									{taskLabel} ({modeLabel} · {statusTitle})
+								</option>
+							);
+						})}
 					</select>
 				</div>
 
@@ -155,7 +177,13 @@ export function DiagnosisRunBanner({
 						<span className="text-muted-foreground/40">|</span>
 						<span className="flex items-center gap-1">
 							<IconClock size={13} className="text-muted-foreground" />
-							<span>{sampleDate}</span>
+							<span>
+								{sampleDate !== (isZh ? "时间未知" : "Time unknown")
+									? isZh
+										? `${sampleDate}（北京时间）`
+										: `${sampleDate} (UTC+8)`
+									: sampleDate}
+							</span>
 						</span>
 					</>
 				)}

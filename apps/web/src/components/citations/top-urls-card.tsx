@@ -15,6 +15,7 @@ import {
 } from "@/components/citations/shared";
 import type { CitationData } from "@/components/citations/types";
 import { ListPagination, usePagedList } from "@/components/list-pagination";
+import { useLanguage } from "@/lib/language-context";
 
 export function TopUrlsCard({
 	urls,
@@ -35,6 +36,8 @@ export function TopUrlsCard({
 	brandShare: number;
 	brandIsCited: boolean;
 }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	const [urlSearch, setUrlSearch] = useState("");
 	const [selectedCategory, setSelectedCategory] = useState<string>("all");
 	const [selectedPageType, setSelectedPageType] = useState<string>("all");
@@ -65,36 +68,59 @@ export function TopUrlsCard({
 				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
 					<div className="space-y-1 min-w-0">
 						<CardTitle className="flex items-center gap-1.5">
-							Top Cited URLs
+							{isZh ? "高频引用页面" : "Top Cited URLs"}
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
 								</TooltipTrigger>
 								<TooltipContent className="max-w-xs text-sm font-normal">
-									<p className="mb-2">
-										The specific pages most frequently cited by AI models. Filter by category to focus on brand,
-										competitor, or other sources.
-									</p>
-									<p>
-										<strong>Competitor</strong> domains are only those in your{" "}
-										{brandId ? (
-											<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
-												tracked competitors list
-											</Link>
-										) : (
-											"tracked competitors list"
-										)}
-										.
-									</p>
+									{isZh ? (
+										<>
+											<p className="mb-2">
+												AI 模型最频繁引用的具体页面。可按分类筛选以关注品牌、竞品或其他来源。
+											</p>
+											<p>
+												<strong>竞品</strong>域名仅包含您在{" "}
+												{brandId ? (
+													<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
+														监测竞品列表
+													</Link>
+												) : (
+													"监测竞品列表"
+												)}{" "}
+												中添加的域名。
+											</p>
+										</>
+									) : (
+										<>
+											<p className="mb-2">
+												The specific pages most frequently cited by AI models. Filter by category to focus on brand,
+												competitor, or other sources.
+											</p>
+											<p>
+												<strong>Competitor</strong> domains are only those in your{" "}
+												{brandId ? (
+													<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
+														tracked competitors list
+													</Link>
+												) : (
+													"tracked competitors list"
+												)}
+												.
+											</p>
+										</>
+									)}
 								</TooltipContent>
 							</Tooltip>
 						</CardTitle>
 						<CardDescription>
-							Individual pages cited by LLMs
+							{isZh ? "大语言模型引用的具体页面" : "Individual pages cited by LLMs"}
 							{brandIsCited && brandName && (
 								<>
 									{" "}
-									&mdash; {brandName} accounts for <strong>{brandShare}%</strong> of all citations
+									&mdash; {isZh ? `${brandName} 占全部引用的 ` : `${brandName} accounts for `}
+									<strong>{brandShare}%</strong>
+									{isZh ? "" : " of all citations"}
 								</>
 							)}
 						</CardDescription>
@@ -102,7 +128,7 @@ export function TopUrlsCard({
 					<div className="relative w-full sm:w-48 shrink-0">
 						<IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
 						<Input
-							placeholder="Search URLs..."
+							placeholder={isZh ? "搜索 URL..." : "Search URLs..."}
 							value={urlSearch}
 							onChange={(e) => {
 								setUrlSearch(e.target.value);
@@ -188,11 +214,15 @@ export function TopUrlsCard({
 										<Tooltip>
 											<TooltipTrigger asChild>
 												<span className="text-[11px] text-muted-foreground tabular-nums">
-													avg {citation.avgPosition.toFixed(1)}
+													{isZh
+														? `平均顺位 ${citation.avgPosition.toFixed(1)}`
+														: `avg ${citation.avgPosition.toFixed(1)}`}
 												</span>
 											</TooltipTrigger>
 											<TooltipContent className="text-xs">
-												Average citation position (lower = cited earlier in the response)
+												{isZh
+													? "平均引用顺位（数值越小表示在回答中越早出现）"
+													: "Average citation position (lower = cited earlier in the response)"}
 											</TooltipContent>
 										</Tooltip>
 									)}
@@ -203,7 +233,9 @@ export function TopUrlsCard({
 											</span>
 										</TooltipTrigger>
 										<TooltipContent className="text-xs">
-											Total times this URL was cited across all prompt evaluations
+											{isZh
+												? "该 URL 在所有评测问题中被引用的总次数"
+												: "Total times this URL was cited across all prompt evaluations"}
 										</TooltipContent>
 									</Tooltip>
 									<IconExternalLink className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -212,7 +244,9 @@ export function TopUrlsCard({
 						);
 					})}
 					{filteredUrls.length === 0 && (
-						<p className="text-sm text-muted-foreground text-center pt-8 pb-4">No URLs match the current filters.</p>
+						<p className="text-sm text-muted-foreground text-center pt-8 pb-4">
+							{isZh ? "没有匹配当前筛选条件的 URL。" : "No URLs match the current filters."}
+						</p>
 					)}
 				</div>
 				<ListPagination page={page} pageSize={maxUrls} totalItems={totalItems} onPageChange={setPage} />

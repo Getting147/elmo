@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@workspace/ui/components/tooltip";
 import { IconInfoCircle } from "@tabler/icons-react";
+import { useLanguage } from "@/lib/language-context";
 
 function StatCard({ title, tooltip, value }: { title: string; tooltip: React.ReactNode; value: React.ReactNode }) {
 	return (
@@ -32,26 +33,36 @@ export function CitationStatsCards({
 	uniqueDomains: number;
 	totalCitations: number;
 }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
 	return (
 		<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 			<StatCard
-				title="Brand Citation Share"
-				tooltip="The percentage of all citations that link to your brand's domain. A higher share means AI models are more likely to reference your content."
+				title={isZh ? "品牌引用份额" : "Brand Citation Share"}
+				tooltip={
+					isZh
+						? "所有引用中指向您品牌域名的百分比。更高的份额意味着 AI 模型更有可能引用您的内容。"
+						: "The percentage of all citations that link to your brand's domain. A higher share means AI models are more likely to reference your content."
+				}
 				value={`${brandShare}%`}
 			/>
 			<StatCard
-				title="Unique Domains"
-				tooltip="The number of distinct domains cited across all prompt evaluations in this period."
+				title={isZh ? "独立域名数" : "Unique Domains"}
+				tooltip={
+					isZh
+						? "所选周期内所有评测引用的不同独立域名总数。"
+						: "The number of distinct domains cited across all prompt evaluations in this period."
+				}
 				value={uniqueDomains.toLocaleString()}
 			/>
-			{/* Kept deliberately simple: the user doesn't need the Google AI Mode
-			    search/shopping nuance. Those surfaces aren't citations in the
-			    traditional sense (they point back into Google's own product/search
-			    results, not an external domain w.r.t. the model), so they're
-			    excluded from this count and broken out in the Google Shopping card. */}
 			<StatCard
-				title="Total Citations"
-				tooltip="The total external websites cited by AI models across prompt evaluations."
+				title={isZh ? "引用总数" : "Total Citations"}
+				tooltip={
+					isZh
+						? "AI 模型在评测中引用的外部网站链接总数。"
+						: "The total external websites cited by AI models across prompt evaluations."
+				}
 				value={totalCitations.toLocaleString()}
 			/>
 		</div>

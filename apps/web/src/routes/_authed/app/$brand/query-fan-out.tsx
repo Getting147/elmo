@@ -259,9 +259,9 @@ function QueryFanoutPage() {
 
 	const infoContent = (
 		<p>
-			When an AI engine with web search capabilities responds to a prompt, it may choose to make a number of web
-			searches before creating its answer. These underlying web searches, or web queries, are only available for some
-			engines.
+			{isZh
+				? "当具备联网搜索能力的 AI 模型在回答评测问题时，可能会在生成回答前发起多次网络检索。这些底层的网络检索词仅在部分模型中可获取。"
+				: "When an AI engine with web search capabilities responds to a prompt, it may choose to make a number of web searches before creating its answer. These underlying web searches, or web queries, are only available for some engines."}
 		</p>
 	);
 
@@ -621,8 +621,9 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 						<CardTitle className="flex items-center gap-1.5 text-base">
 							{isZh ? "评测问题 (Prompts)" : "Prompts"}
 							<InfoTip>
-								Each prompt's fan-out: how many searches it generates (Queries) and how many per run that searched
-								(Avg/Prompt Run). Expand a prompt to see the searches, with your prompt's keywords bolded.
+								{isZh
+									? "每道问题的检索发散：生成的搜索词数（检索词数）及发起搜索的评测平均值（次均检索数）。展开问题可查看搜索词，其中问题关键词已加粗显示。"
+									: "Each prompt's fan-out: how many searches it generates (Queries) and how many per run that searched (Avg/Prompt Run). Expand a prompt to see the searches, with your prompt's keywords bolded."}
 							</InfoTip>
 						</CardTitle>
 						<CardDescription>
@@ -643,12 +644,12 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 			<CardContent>
 				<div className={cn(GRID, "text-muted-foreground/80 border-b py-2 text-[11px] font-medium")}>
 					<span />
-					<span className="uppercase tracking-wide">Prompt</span>
+					<span className="uppercase tracking-wide">{isZh ? "评测问题 (Prompt)" : "Prompt"}</span>
 					<span className="text-right">
-						<SortHead k="queries" label="Queries" sort={sort} setSort={setSort} />
+						<SortHead k="queries" label={isZh ? "检索词数" : "Queries"} sort={sort} setSort={setSort} />
 					</span>
 					<span className="text-right">
-						<SortHead k="avg" label="Avg/Prompt Run" sort={sort} setSort={setSort} />
+						<SortHead k="avg" label={isZh ? "次均检索数" : "Avg/Prompt Run"} sort={sort} setSort={setSort} />
 					</span>
 				</div>
 				<div className="divide-border divide-y">
@@ -682,7 +683,9 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 										))}
 										{p.uniqueQueries > p.variations.length && (
 											<div className="text-muted-foreground text-xs">
-												Top {p.variations.length} of {p.uniqueQueries.toLocaleString()} variations shown
+												{isZh
+													? `展示前 ${p.variations.length} / 共 ${p.uniqueQueries.toLocaleString()} 条变体`
+													: `Top ${p.variations.length} of ${p.uniqueQueries.toLocaleString()} variations shown`}
 											</div>
 										)}
 										<div className="pt-1">
@@ -739,8 +742,9 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 				<CardTitle className="flex items-center gap-1.5 text-base">
 					{isZh ? "高频检索词 (Top Queries)" : "Top Queries"}
 					<InfoTip>
-						The searches with the widest reach — sort by how many distinct prompts triggered them, or how many prompt
-						runs issued them. Expand a query to see the prompts behind it.
+						{isZh
+							? "覆盖面最广的检索词——按触发它们的不同评测问题数或发起它们的评测次数排序。展开检索词可查看背后的具体问题。"
+							: "The searches with the widest reach — sort by how many distinct prompts triggered them, or how many prompt runs issued them. Expand a query to see the prompts behind it."}
 					</InfoTip>
 				</CardTitle>
 				<CardDescription>
@@ -750,12 +754,12 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 			<CardContent>
 				<div className={cn(TOP_GRID, "text-muted-foreground/80 border-b py-2 text-[11px] font-medium")}>
 					<span />
-					<span className="uppercase tracking-wide">Query</span>
+					<span className="uppercase tracking-wide">{isZh ? "检索词 (Query)" : "Query"}</span>
 					<span className="text-right">
-						<SortHead k="prompts" label="Prompts" sort={sort} setSort={setSort} />
+						<SortHead k="prompts" label={isZh ? "关联问题数" : "Prompts"} sort={sort} setSort={setSort} />
 					</span>
 					<span className="text-right">
-						<SortHead k="runs" label="Prompt Runs" sort={sort} setSort={setSort} />
+						<SortHead k="runs" label={isZh ? "发起次数" : "Prompt Runs"} sort={sort} setSort={setSort} />
 					</span>
 				</div>
 				<div className="divide-border divide-y">
@@ -793,7 +797,7 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 												</Link>
 												<span
 													className="text-muted-foreground shrink-0 text-sm tabular-nums"
-													title="Runs of this prompt that issued the search"
+													title={isZh ? "触发该检索词的评测次数" : "Runs of this prompt that issued the search"}
 												>
 													{p.runs.toLocaleString()}×
 												</span>

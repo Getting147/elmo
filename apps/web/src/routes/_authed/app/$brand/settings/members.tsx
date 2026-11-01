@@ -5,31 +5,45 @@
  * invitations. The redirect in the loader is UX only — the security
  * boundary is the teamInvites guard inside every team server function.
  */
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Alert, AlertDescription } from "@workspace/ui/components/alert";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select";
+import { IconUsers } from "@tabler/icons-react";
 import { useState } from "react";
 import { getDeployment } from "@/lib/config/server";
 import { trackEvent } from "@/lib/posthog";
 import { getAppName, getBrandName, buildTitle } from "@/lib/route-head";
+import { useLanguage } from "@/lib/language-context";
 import { cancelInvitationFn, inviteTeamMemberFn, listTeamFn, removeTeamMemberFn, type TeamData } from "@/server/team";
 
 const getTeamInvitesEnabled = createServerFn({ method: "GET" }).handler(async () => {
 	return { teamInvites: getDeployment().features.teamInvites };
 });
 
+export type MembersRouteData =
+	| {
+			teamInvites: true;
+			data: TeamData;
+	  }
+	| {
+			teamInvites: false;
+			data?: undefined;
+	  };
+
 export const Route = createFileRoute("/_authed/app/$brand/settings/members")({
-	loader: async ({ params }): Promise<TeamData> => {
+	loader: async ({ params }): Promise<MembersRouteData> => {
 		const { teamInvites } = await getTeamInvitesEnabled();
 		if (!teamInvites) {
-			throw redirect({ to: "/app/$brand", params: { brand: params.brand } });
+			return { teamInvites: false };
 		}
-		return listTeamFn({ data: { brandId: params.brand } });
+		const data = await listTeamFn({ data: { brandId: params.brand } });
+		return { teamInvites: true, data };
 	},
 	head: ({ matches, match }) => {
 		const appName = getAppName(match);
@@ -44,9 +58,65 @@ export const Route = createFileRoute("/_authed/app/$brand/settings/members")({
 	component: TeamSettingsPage,
 });
 
+function TeamSettingsPlaceholder({ brandId, isZh }: { brandId: string; isZh: boolean }) {
+	return (
+		<div className="space-y-6 max-w-2xl">
+			<div>
+				<h1 className="text-2xl font-bold tracking-tight">
+					{isZh ? "成员权限" : "Team Members"}
+				</h1>
+				<p className="text-muted-foreground text-sm mt-1">
+					{isZh ? "管理团队成员与访问权限设置。" : "Manage team members and access permissions."}
+				</p>
+			</div>
+			<Card>
+				<CardHeader>
+					<div className="flex items-center gap-3">
+						<div className="rounded-full bg-muted p-2.5">
+							<IconUsers className="h-6 w-6 text-muted-foreground" />
+						</div>
+						<div>
+							<CardTitle className="text-base">
+								{isZh ? "成员管理" : "Team Management"}
+							</CardTitle>
+							<CardDescription>
+								{isZh ? "功能还在开发中，敬请期待。" : "Feature in development, coming soon."}
+							</CardDescription>
+						</div>
+					</div>
+				</CardHeader>
+				<CardContent className="pt-2">
+					<p className="text-sm text-muted-foreground mb-4">
+						{isZh
+							? "当前工作区暂未启用成员邀请与多用户协同功能。您可以返回工作区概览继续查看品牌诊断与分析报告。"
+							: "Team invitations and multi-user collaboration are not enabled for this workspace yet. You can return to workspace overview to view diagnostic reports."}
+					</p>
+					<Button asChild variant="outline">
+						<Link to="/app/$brand" params={{ brand: brandId }}>
+							{isZh ? "返回工作区" : "Back to Workspace"}
+						</Link>
+					</Button>
+				</CardContent>
+			</Card>
+		</div>
+	);
+}
+
 function TeamSettingsPage() {
 	const { brand: brandId } = Route.useParams();
-	const { members, invitations, currentUserId } = Route.useLoaderData();
+	const loaderData = Route.useLoaderData();
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
+	if (!loaderData.teamInvites) {
+		return <TeamSettingsPlaceholder brandId={brandId} isZh={isZh} />;
+	}
+
+	return <TeamSettingsActive brandId={brandId} data={loaderData.data} />;
+}
+
+function TeamSettingsActive({ brandId, data }: { brandId: string; data: TeamData }) {
+	const { members, invitations, currentUserId } = data;
 	const router = useRouter();
 	const [inviteEmail, setInviteEmail] = useState("");
 	const [inviteRole, setInviteRole] = useState<"member" | "admin">("member");

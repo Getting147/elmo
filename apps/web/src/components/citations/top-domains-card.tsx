@@ -9,6 +9,7 @@ import { TrackDomainPopover } from "@/components/citations/track-domain-popover"
 import type { CitationData } from "@/components/citations/types";
 import { ListPagination, usePagedList } from "@/components/list-pagination";
 import { DOMAIN_CATEGORY_COLORS, ProgressBarChart } from "@/components/progress-bar-chart";
+import { useLanguage } from "@/lib/language-context";
 
 export function TopDomainsCard({
 	domains,
@@ -27,6 +28,8 @@ export function TopDomainsCard({
 	competitors?: CitationData["competitors"];
 	onCompetitorAdded?: () => void;
 }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	const [domainSearch, setDomainSearch] = useState("");
 	const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
@@ -50,23 +53,28 @@ export function TopDomainsCard({
 				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
 					<div className="space-y-1 min-w-0">
 						<CardTitle className="flex items-center gap-1.5">
-							Top Cited Domains
+							{isZh ? "高频引用域名" : "Top Cited Domains"}
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<IconInfoCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
 								</TooltipTrigger>
 								<TooltipContent className="max-w-xs text-sm font-normal">
-									The most frequently cited domains across all prompt evaluations. Each domain is colored by its
-									category (brand, competitor, etc.).
+									{isZh
+										? "在所有评测问题中最常被引用的域名。每个域名根据其所属分类（品牌、竞品等）标注颜色。"
+										: "The most frequently cited domains across all prompt evaluations. Each domain is colored by its category (brand, competitor, etc.)."}
 								</TooltipContent>
 							</Tooltip>
 						</CardTitle>
-						<CardDescription>Which domains LLMs reference most when responding to your prompts</CardDescription>
+						<CardDescription>
+							{isZh
+								? "大语言模型在回答您的问题时最常引用的域名"
+								: "Which domains LLMs reference most when responding to your prompts"}
+						</CardDescription>
 					</div>
 					<div className="relative w-full sm:w-48 shrink-0">
 						<IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
 						<Input
-							placeholder="Search domains..."
+							placeholder={isZh ? "搜索域名..." : "Search domains..."}
 							value={domainSearch}
 							onChange={(e) => {
 								setDomainSearch(e.target.value);
@@ -118,7 +126,9 @@ export function TopDomainsCard({
 						<ListPagination page={page} pageSize={maxDomains} totalItems={totalItems} onPageChange={setPage} />
 					</>
 				) : (
-					<p className="text-sm text-muted-foreground text-center py-4">No domains match the current filters.</p>
+					<p className="text-sm text-muted-foreground text-center py-4">
+						{isZh ? "没有匹配当前筛选条件的域名。" : "No domains match the current filters."}
+					</p>
 				)}
 			</CardContent>
 		</Card>

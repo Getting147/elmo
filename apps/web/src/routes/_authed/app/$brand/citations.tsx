@@ -286,7 +286,20 @@ function CitationsPage() {
 		: isLoading);
 	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : isError;
 
-	const infoContent = (
+	const infoContent = isZh ? (
+		<>
+			<p className="mb-2">
+				信源引用是大模型在回答您的评测问题时在响应中所包含的链接与参考来源。它们展示了 AI 模型在相关主题下认为具有权威性或关联度的网站。
+			</p>
+			<p>
+				<strong>竞品</strong>域名仅包含您已添加到{" "}
+				<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
+					监测竞品列表
+				</Link>{" "}
+				中的域名。其他域名将归入系统识别的分类（搜索、社交媒体、官方机构或其他）。
+			</p>
+		</>
+	) : (
 		<>
 			<p className="mb-2">
 				Citations are the links and sources that AI models include in their responses when answering your prompts. They
@@ -307,8 +320,8 @@ function CitationsPage() {
 	if (activeBaseline.isRequestedRunMissing) {
 		return (
 			<PageHeader
-				title="Citations"
-				subtitle="See which sources LLMs cite when responding to your prompts."
+				title={isZh ? "信源引用" : "Citations"}
+				subtitle={isZh ? "查看大语言模型在回答您的提示词时引用了哪些来源。" : "See which sources LLMs cite when responding to your prompts."}
 				infoContent={infoContent}
 			>
 				<div className="space-y-6">
@@ -357,8 +370,8 @@ function CitationsPage() {
 	if (isUnsupportedBaselineModel(filters.model)) {
 		return (
 			<PageHeader
-				title="Citations"
-				subtitle="See which sources LLMs cite when responding to your prompts."
+				title={isZh ? "信源引用" : "Citations"}
+				subtitle={isZh ? "查看大语言模型在回答您的提示词时引用了哪些来源。" : "See which sources LLMs cite when responding to your prompts."}
 				infoContent={infoContent}
 			>
 				<div className="space-y-6">
@@ -395,8 +408,8 @@ function CitationsPage() {
 
 	return (
 		<PageHeader
-			title="Citations"
-			subtitle="See which sources LLMs cite when responding to your prompts."
+			title={isZh ? "信源引用" : "Citations"}
+			subtitle={isZh ? "查看大语言模型在回答您的提示词时引用了哪些来源。" : "See which sources LLMs cite when responding to your prompts."}
 			infoContent={infoContent}
 		>
 			<div className="space-y-6">
