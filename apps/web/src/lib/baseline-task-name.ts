@@ -4,36 +4,18 @@ export interface FormatDiagnosticTaskOptions {
 	createdAt?: string | Date | null;
 	completedAt?: string | Date | null;
 	isZh?: boolean;
-	conflictingRunIds?: (string | null | undefined)[];
 }
 
 /**
  * Extracts a stable short identifier from a run_id by stripping the optional 'run_' prefix
- * and taking up to 8 characters.
- * If conflictingRunIds is provided and another run shares the same 8-character prefix,
- * extends the short identifier (up to 13 chars) to disambiguate the conflict.
+ * and taking 8 characters.
+ * This is a deterministic, stateless pure function that does not depend on external lists
+ * or change when items are added or removed.
  */
-export function getShortRunId(
-	runId?: string | null,
-	conflictingRunIds?: (string | null | undefined)[],
-): string {
+export function getShortRunId(runId?: string | null): string {
 	if (!runId) return "";
 	const cleaned = runId.startsWith("run_") ? runId.slice(4) : runId;
-	const defaultShort = cleaned.slice(0, 8);
-	if (!conflictingRunIds || conflictingRunIds.length === 0) {
-		return defaultShort;
-	}
-
-	const hasCollision = conflictingRunIds.some((other) => {
-		if (!other || other === runId) return false;
-		const otherCleaned = other.startsWith("run_") ? other.slice(4) : other;
-		return otherCleaned.slice(0, 8) === defaultShort;
-	});
-
-	if (!hasCollision) return defaultShort;
-
-	// When collision exists among the provided runs, extend up to 13 chars to disambiguate
-	return cleaned.length > 8 ? cleaned.slice(0, 13) : defaultShort;
+	return cleaned.slice(0, 8);
 }
 
 /**
@@ -75,6 +57,9 @@ export function formatBeijingTime(dateInput?: string | Date | null, isZh = true)
  * Formats diagnostic task display name according to the unified specification:
  * 品牌显示名｜YYYY-MM-DD HH:mm（北京时间）｜批次<短编号>
  * Example: 美的｜2026-11-01 16:00（北京时间）｜批次608dd03e
+ *
+ * This format is completely stable across overview dashboard, reports, and banner,
+ * and does not fluctuate with list changes.
  */
 export function formatDiagnosticTaskName({
 	brandName,
@@ -82,12 +67,11 @@ export function formatDiagnosticTaskName({
 	createdAt,
 	completedAt,
 	isZh = true,
-	conflictingRunIds,
 }: FormatDiagnosticTaskOptions): string {
 	const brand = (brandName || "").trim() || (isZh ? "未命名品牌" : "Brand");
 	const rawDate = createdAt || completedAt;
 	const timeStr = formatBeijingTime(rawDate, isZh);
-	const shortId = getShortRunId(runId, conflictingRunIds);
+	const shortId = getShortRunId(runId);
 	const unknownTimeStr = isZh ? "时间未知" : "Time unknown";
 
 	if (isZh) {
@@ -98,9 +82,9 @@ export function formatDiagnosticTaskName({
 		return `${brand}｜${timeStr}（北京时间）｜${batchStr}`;
 	}
 
-	const batchStr = shortId ? `Batch ${shortId}` : "Batch unknown";
+	const batchStrEn = shortId ? `Batch ${shortId}` : "Batch unknown";
 	if (timeStr === unknownTimeStr) {
-		return `${brand} | Time unknown | ${batchStr}`;
+		return `${brand} | Time unknown | ${batchStrEn}`;
 	}
-	return `${brand} | ${timeStr} (UTC+8) | ${batchStr}`;
+	return `${brand} | ${timeStr} (UTC+8) | ${batchStrEn}`;
 }

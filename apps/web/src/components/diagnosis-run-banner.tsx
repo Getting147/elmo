@@ -87,33 +87,29 @@ export function DiagnosisRunBanner({
 						<option value="" disabled>
 							{isZh ? "-- 选择已有任务查看/处理 --" : "-- Select diagnostic task --"}
 						</option>
-						{(() => {
-							const allRunIds = runsList.map((r: any) => r.run_id);
-							return runsList.map((r: any) => {
-								const taskLabel = formatDiagnosticTaskName({
-									brandName: brandDisplayName,
-									runId: r.run_id,
-									createdAt: r.created_at || r.completed_at,
-									isZh,
-									conflictingRunIds: allRunIds,
-								});
-								const modeLabel =
-									r.mode === "synthetic"
-										? isZh
-											? "合成演示"
-											: "Synthetic"
-										: isZh
-											? "真实执行"
-											: "Real";
-								const statusObj = diagnosisStatusText(r);
-								const statusTitle = statusObj?.title || r.status || "";
-								return (
-									<option key={r.run_id} value={r.run_id} title={r.run_id}>
-										{taskLabel} ({modeLabel} · {statusTitle})
-									</option>
-								);
+						{runsList.map((r: any) => {
+							const taskLabel = formatDiagnosticTaskName({
+								brandName: brandDisplayName,
+								runId: r.run_id,
+								createdAt: r.created_at || r.completed_at,
+								isZh,
 							});
-						})()}
+							const modeLabel =
+								r.mode === "synthetic"
+									? isZh
+										? "合成演示"
+										: "Synthetic"
+									: isZh
+										? "真实执行"
+										: "Real";
+							const statusObj = diagnosisStatusText(r);
+							const statusTitle = statusObj?.title || r.status || "";
+							return (
+								<option key={r.run_id} value={r.run_id} title={r.run_id}>
+									{taskLabel} ({modeLabel} · {statusTitle})
+								</option>
+							);
+						})}
 					</select>
 					{activeRunId && (
 						<button
