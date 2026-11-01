@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { INVALID_REPORT_TASK_LINK, validateReportSearch } from "@/lib/baseline-report-search";
+import { formatActionPlan, parseActionPlan, type AnalysisAction } from "@/lib/analysis-action-editor";
 import { useAuth } from "@/hooks/use-auth";
 import { DiagnosisDimensionInput } from "@/components/diagnosis-dimension-input";
 import { DefaultErrorComponent } from "@/router-default-components";
@@ -131,7 +132,7 @@ function BrandReportsWorkspace() {
 	const [brandIdentityAudit, setBrandIdentityAudit] = useState<string>("");
 	const [contentGapsInput, setContentGapsInput] = useState<string>("");
 	const [actionPlanInput, setActionPlanInput] = useState<string>("");
-	const [rawActionPlan, setRawActionPlan] = useState<any[]>([]);
+	const [rawActionPlan, setRawActionPlan] = useState<AnalysisAction[]>([]);
 
 	const brandName = brand?.name || brandId || "";
 	const markAnalysisDirty = () => {
@@ -302,24 +303,7 @@ function BrandReportsWorkspace() {
 		);
 		if (Array.isArray(analysisData.payload?.action_plan)) {
 			setRawActionPlan(analysisData.payload.action_plan);
-			setActionPlanInput(
-				analysisData.payload.action_plan
-					.map((ap: any) => {
-						const promptCode =
-							Array.isArray(ap.evidence_refs) && ap.evidence_refs.length > 0
-								? ap.evidence_refs.join(", ")
-								: typeof ap.evidence_refs === "string"
-									? ap.evidence_refs
-									: "";
-						const action = ap.action || "";
-						const priority = ap.priority || "P2";
-						const rationale = ap.priority_rationale || "";
-						const deliverable = ap.deliverable || "";
-						const verification = ap.verification_method || "";
-						return `${promptCode} | ${action} | ${priority} | ${rationale} | ${deliverable} | ${verification}`;
-					})
-					.join("\n"),
-			);
+			setActionPlanInput(formatActionPlan(analysisData.payload.action_plan));
 		}
 		loadedAnalysisIdentityRef.current = identity;
 	}, [analysisData, activeRunId]);
@@ -536,50 +520,7 @@ function BrandReportsWorkspace() {
 				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式");
 			}
 
-			const actionPlan = lines.map((line, idx) => {
-				const parts = line.split("|").map((s) => s.trim());
-				const rawItem = rawActionPlan[idx];
-				const evidenceRefs = parts[0]
-					? parts[0]
-							.split(/[,，]/)
-							.map((s) => s.trim())
-							.filter(Boolean)
-					: [];
-
-				const action = parts[1] || "待补充行动方案";
-				const rawPrio = (parts[2] || "").toUpperCase();
-				const priority = (["P0", "P1", "P2"].includes(rawPrio) ? rawPrio : "P1") as "P0" | "P1" | "P2";
-				const rationale = parts[3] || "待补充优先级依据";
-				const deliverable = parts[4] || "待补充交付件";
-				const verification = parts[5] || "待补充验证方法";
-
-				// 若当前项与原项未变动，且原项存在合法 finding，则原样继承原项 finding (E4-R02)
-				const isUnchangedFromRaw =
-					rawItem &&
-					Array.isArray(rawItem.evidence_refs) &&
-					rawItem.evidence_refs.length === evidenceRefs.length &&
-					rawItem.evidence_refs.every((ref: string, i: number) => ref === evidenceRefs[i]) &&
-					rawItem.action === action &&
-					rawItem.priority === priority &&
-					rawItem.deliverable === deliverable;
-
-				const finding =
-					isUnchangedFromRaw && rawItem.finding
-						? rawItem.finding
-						: parts[0]
-							? `针对 ${parts[0]} 的实测发现`
-							: "待补充实测发现";
-
-				return {
-					finding,
-					evidence_refs: evidenceRefs,
-					action,
-					priority,
-					priority_rationale: rationale,
-					deliverable,
-					verification_method: verification,
-				};
-			});
+			const actionPlan = parseActionPlan(actionPlanInput, rawActionPlan);
 
 			let finalBrandIdentityAudit: any = brandIdentityAudit.trim() || "待人工核实与完善";
 			if (rawBrandIdentityAudit && typeof rawBrandIdentityAudit === "object") {
@@ -1350,6 +1291,11 @@ function BrandReportsWorkspace() {
 							{activeRunId && (evidenceError || metricsError) && <p role="status" className="text-xs text-amber-700">本轮归档或统计暂未同步，相关区域暂不展示；已尝试题数来自当前任务。可刷新查询，不会重新采集。</p>}
 							{runData && <>
 								<p className="text-xs text-muted-foreground" aria-label="本次诊断计数">{diagnosisCountText(runData)} · 物理请求数：{!evidenceError && evidenceData?.run_id === runData.run_id ? evidenceData.total_requests_used : "归档计数待同步"}</p>
+								{!evidenceError && evidenceData?.run_id === activeRunId && evidenceData.formal_questions?.filter((q: any) => q.effective_status !== "effective").map((q: any) => (
+									<p key={q.question_code} role="status" className="text-xs text-amber-700">
+										[{q.question_code}] {q.attempts_count ? q.error_message || "采样失败，具体原因未知；无法判断品牌提及" : "未尝试；无法判断品牌提及"}。不会自动补采。
+									</p>
+								))}
 								<DiagnosisStages stages={diagnosisStages(runData, metricsError ? undefined : metricsData, analysisData, reportData)} />
 							</>}
 
@@ -1551,7 +1497,8 @@ function BrandReportsWorkspace() {
 													</div>
 
 													<div className="text-muted-foreground bg-background p-2.5 rounded border leading-relaxed">
-														<span className="font-semibold text-foreground">💬 模型实测回答：</span>
+														{q.effective_status !== "effective" && <p className="text-amber-700 mb-2">{q.attempts_count ? q.error_message || "采样失败，具体原因未知" : "未尝试"}；无法判断品牌提及，未计入有效样本。</p>}
+														<span className="font-semibold text-foreground">{q.effective_status === "effective" ? "💬 模型实测回答：" : "💬 部分内容（如有，未完成／非有效样本）："}</span>
 														{isExpanded
 															? q.answer_text || "无有效回答"
 															: q.answer_text
@@ -1574,7 +1521,7 @@ function BrandReportsWorkspace() {
 													)}
 
 													<div className="flex items-center gap-4 text-muted-foreground text-[11px]">
-														<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
+														<span>🔍 检索词记录: {q.search_queries?.join(", ") || "未提供／未知"}</span>
 														<span>🔗 引用数: {q.citations?.length ?? 0}</span>
 														<span>
 															⚡ Token: {q.raw_usage?.total_tokens !== undefined && q.raw_usage?.total_tokens !== null ? q.raw_usage.total_tokens : "未知"}
@@ -1762,7 +1709,7 @@ function BrandReportsWorkspace() {
 								</div>
 								<div className="flex flex-col gap-1.5 md:col-span-2">
 									<label className="font-semibold">
-										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式)
+										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式 | 实测发现)
 									</label>
 									<textarea
 										rows={3}
@@ -1771,6 +1718,8 @@ function BrandReportsWorkspace() {
 										onChange={(e) => { markAnalysisDirty(); setActionPlanInput(e.target.value); }}
 										className="border rounded-md p-2 bg-background font-mono disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
+									<p className="text-muted-foreground">正文竖线使用 \|，换行使用 \n。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。</p>
+									{rawActionPlan.map((item, index) => (!item.action?.trim() || !item.evidence_refs?.length) && <p key={index} role="status" className="text-amber-700">行动建议第 {index + 1} 项未就绪：{!item.action?.trim() ? "缺少 action（具体举措） " : ""}{!item.evidence_refs?.length ? "缺少 evidence_refs（题目证据引用）" : ""}</p>)}
 								</div>
 							</div>
 
