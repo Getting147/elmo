@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { INVALID_REPORT_TASK_LINK, validateReportSearch } from "@/lib/baseline-report-search";
 import { formatActionPlan, parseActionPlan, type AnalysisAction } from "@/lib/analysis-action-editor";
 import { formatDiagnosticTaskName } from "@/lib/baseline-task-name";
@@ -8,7 +8,7 @@ import { DefaultErrorComponent } from "@/router-default-components";
 import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
 import { DiagnosisStages } from "@/components/diagnosis-stages";
 import { diagnosisStages } from "@/lib/baseline-stages";
-import { diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
+import { diagnosisAnalysisFailureMessage, diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, diagnosisTaskSection, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
@@ -113,9 +113,14 @@ function BrandReportsWorkspace() {
 	const saveWorkflowRef = useRef(false);
 	const analysisDirtyRef = useRef(false);
 	const loadedAnalysisIdentityRef = useRef("");
-	const progressPanelRef = useRef<HTMLDivElement | null>(null);
-	const progressScrollTimerRef = useRef<number | null>(null);
-	const launchRequestRef = useRef(false);
+	const progressPanelRef = useRef<HTMLElement | null>(null);
+	const analysisPanelRef = useRef<HTMLElement | null>(null);
+	const reportPanelRef = useRef<HTMLElement | null>(null);
+	const pendingPanelScrollRef = useRef<{ runId: string; section: 3 | 4 | 5 } | null>(null);
+	const [focusRequest, setFocusRequest] = useState<{ runId: string; sequence: number } | null>(null);
+	const [locationNotice, setLocationNotice] = useState<{ runId: string; message: string } | null>(null);
+	const retryAnalysisRunRef = useRef<string | null>(null);
+	const [retryAnalysisFeedback, setRetryAnalysisFeedback] = useState<{ runId: string; message: string } | null>(null);
 	const activeRevisionIdRef = useRef(activeRevisionId);
 	const activeRunIdRef = useRef(activeRunId);
 	const queryClient = useQueryClient();
@@ -144,6 +149,7 @@ function BrandReportsWorkspace() {
 	const {
 		data: profileData,
 		isLoading: profileLoading,
+		isFetching: profileFetching,
 		error: profileError,
 		refetch: refetchProfile,
 	} = useQuery({
@@ -173,12 +179,10 @@ function BrandReportsWorkspace() {
 		void write.then(() => pendingDimensionWrites.current.delete(write), () => pendingDimensionWrites.current.delete(write));
 		return write;
 	};
-	useEffect(() => { if (draft.runId && !requestedRunId) handleSelectRun(draft.runId); }, [draft.runId]);
-	useEffect(() => { if (requestedRunId) handleSelectRun(requestedRunId); }, [requestedRunId]);
-
 	// 2. 查询最近任务列表 (E-R06)
 	const {
 		data: runsListData,
+		isFetching: runsListFetching,
 		error: runsListError,
 		refetch: refetchRunsList,
 	} = useQuery({
@@ -210,7 +214,7 @@ function BrandReportsWorkspace() {
 	});
 
 	// 4. 查询当前 run 的逐题证据
-	const { data: evidenceData, error: evidenceError, refetch: refetchEvidence } = useQuery({
+	const { data: evidenceData, error: evidenceError, refetch: refetchEvidence, isFetching: evidenceFetching } = useQuery({
 		queryKey: ["baseline-evidence", brandId, activeRunId],
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled:
@@ -226,7 +230,7 @@ function BrandReportsWorkspace() {
 		: null;
 
 	// 5. 查询当前 run 的客观统计指标
-	const { data: metricsData, error: metricsError, refetch: refetchMetrics } = useQuery({
+	const { data: metricsData, error: metricsError, refetch: refetchMetrics, isFetching: metricsFetching } = useQuery({
 		queryKey: ["baseline-metrics", brandId, activeRunId],
 		queryFn: () => getBaselineMetricsFn({ data: { brandId: brandId!, runId: activeRunId } }),
 		enabled:
@@ -242,6 +246,7 @@ function BrandReportsWorkspace() {
 		data: analysisData,
 		error: analysisQueryError,
 		isLoading: analysisQueryLoading,
+		isFetching: analysisFetching,
 		refetch: refetchAnalysis,
 	} = useQuery({
 		queryKey: ["baseline-analysis", brandId, activeRunId],
@@ -254,6 +259,7 @@ function BrandReportsWorkspace() {
 	// 5.2. 查询当前 run 的报告及其修订版本列表 (E2-R04)
 	const {
 		data: reportData,
+		isFetching: reportFetching,
 		error: reportQueryError,
 		refetch: refetchReport,
 	} = useQuery({
@@ -339,12 +345,30 @@ function BrandReportsWorkspace() {
 		activeRunIdRef.current = activeRunId;
 	}, [activeRunId]);
 
-	// 仅在显式启动成功并选中当前 run 后定位一次进度看板；轮询与刷新不触发 (B08-05)
-	useEffect(() => () => {
-		if (progressScrollTimerRef.current !== null) {
-			window.clearTimeout(progressScrollTimerRef.current);
-		}
-	}, []);
+	useEffect(() => {
+		if (!focusRequest || focusRequest.runId !== activeRunId || activeTab !== "portal") return;
+		// Read-only panels above the target can change its position when their queries finish.
+		if (runFetching || profileFetching || runsListFetching || evidenceFetching || metricsFetching || analysisFetching || reportFetching) return;
+		if (!runError && runData?.run_id !== focusRequest.runId) return;
+		const section = diagnosisTaskSection(runError ? null : runData);
+		const message = runError
+			? "任务状态读取失败，已定位板块3状态区；未重发任务，请只读刷新后确认。"
+			: !runData || !["queued", "collecting", "analyzing", "analysis_failed", "rendering_report", "report_render_failed", "ready_for_review", "completed", "failed", "exception", "auth_guard_rejected", "network_guard_blocked"].includes(runData.current_step)
+				? "当前处理阶段尚未确认，已定位板块3状态区；不会重发任务。"
+				: `已定位本任务当前处理位置：板块${section}。此查看操作不会启动采样、分析或报告生成。`;
+		pendingPanelScrollRef.current = { runId: focusRequest.runId, section };
+		setLocationNotice({ runId: focusRequest.runId, message });
+		setFocusRequest(null);
+	}, [focusRequest, activeRunId, activeTab, runFetching, profileFetching, runsListFetching, evidenceFetching, metricsFetching, analysisFetching, reportFetching, runError, runData]);
+
+	useLayoutEffect(() => {
+		const target = pendingPanelScrollRef.current;
+		pendingPanelScrollRef.current = null;
+		if (!target || target.runId !== activeRunId || activeTab !== "portal") return;
+		// Commit the status notice above the panels before measuring the final scroll position.
+		const panel = target.section === 4 ? analysisPanelRef.current : target.section === 5 ? reportPanelRef.current : progressPanelRef.current;
+		panel?.scrollIntoView({ behavior: "instant", block: "start" });
+	}, [locationNotice, activeRunId, activeTab]);
 
 	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
 	useEffect(() => {
@@ -361,9 +385,11 @@ function BrandReportsWorkspace() {
 	}, [runData?.current_step, runData?.status]);
 
 	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
-	const handleSelectRun = (runId: string) => {
+	const handleSelectRun = useCallback((runId: string) => {
 		// 路由与选择器可能在同一轮渲染中重复选中同一 run；保留已恢复的分析与未保存修改。
-		if (runId === activeRunId) return;
+		if (runId === activeRunIdRef.current) return;
+		setFocusRequest(null);
+		setLocationNotice(null);
 		activeRunIdRef.current = runId;
 		setActiveRunId(runId);
 		// 切换 run 时清空所有表单项，防止旧任务数据串入新任务
@@ -383,12 +409,21 @@ function BrandReportsWorkspace() {
 		setActionError(null);
 		setReviewNotice(null);
 		setReviewFeedback(null);
-	};
+	}, []);
+
+	const requestTaskFocus = useCallback((runId: string) => {
+		handleSelectRun(runId);
+		setActiveTab("portal");
+		setFocusRequest((previous) => ({ runId, sequence: (previous?.sequence ?? 0) + 1 }));
+	}, [handleSelectRun]);
+
+	useEffect(() => { if (draft.runId && !requestedRunId) requestTaskFocus(draft.runId); }, [draft.runId, requestedRunId, requestTaskFocus]);
+	useEffect(() => { if (requestedRunId) requestTaskFocus(requestedRunId); }, [requestedRunId, requestTaskFocus]);
 
 	// Restore the persisted task when returning from overview or reloading; never create work on mount.
 	useEffect(() => {
-		if (!activeRunId && !requestedRunId && runsListData?.items?.[0]?.run_id) handleSelectRun(draft.runId ?? runsListData.items[0].run_id);
-	}, [runsListData, activeRunId]);
+		if (!activeRunId && !requestedRunId && runsListData?.items?.[0]?.run_id) requestTaskFocus(draft.runId ?? runsListData.items[0].run_id);
+	}, [runsListData, activeRunId, requestedRunId, draft.runId, requestTaskFocus]);
 
 	// 5.3. 查询当前快照的有效服务端预授权 (E5-R01)
 	const { data: activeAuthData, refetch: refetchActiveAuth } = useQuery({
@@ -463,26 +498,13 @@ function BrandReportsWorkspace() {
 			return { ...prepared, runId: result.run_id, submitted: true };
 		}),
 		onSuccess: (current) => {
-			const shouldFocusProgress = launchRequestRef.current;
-			launchRequestRef.current = false;
 			if (current.runId) {
-				if (shouldFocusProgress) {
-					if (progressScrollTimerRef.current !== null) {
-						window.clearTimeout(progressScrollTimerRef.current);
-					}
-					// 延迟到路由搜索参数与当前任务渲染完成后再定位，避免被导航滚动复位覆盖。
-					progressScrollTimerRef.current = window.setTimeout(() => {
-						progressScrollTimerRef.current = null;
-						progressPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-					}, 200);
-				}
-				handleSelectRun(current.runId);
-				void navigate({ search: { runId: current.runId }, replace: true });
+				requestTaskFocus(current.runId);
+				void navigate({ search: { runId: current.runId }, replace: true, resetScroll: false });
 			}
 			refetchRunsList();
 		},
 		onError: (err: Error) => {
-			launchRequestRef.current = false;
 			setActionError(
 				draft.submitted && draft.runId
 					? `本次任务状态查询未完成：${err.message}。已保留原任务身份，不会重新启动或重复计费。`
@@ -493,26 +515,44 @@ function BrandReportsWorkspace() {
 	const preparationBusy = freezeMutation.isPending || authorizeMutation.isPending || createRunMutation.isPending;
 	const handleStartDiagnosis = () => {
 		if (preparationBusy) return;
-		launchRequestRef.current = !draft.submitted;
+		if (draft.submitted && draft.runId) {
+			requestTaskFocus(draft.runId);
+			void navigate({ search: { runId: draft.runId }, replace: true, resetScroll: false });
+			return;
+		}
 		createRunMutation.mutate();
 	};
 
 	const retryAnalysisMutation = useMutation({
-		mutationFn: () =>
+		mutationFn: ({ runId }: { runId: string }) =>
 			retryBaselineAnalysisFn({
 				data: {
 					brandId: brandId!,
-					runId: activeRunId,
+					runId,
 				},
 			}),
-		onSuccess: () => {
-			setActionError(null);
-			refetchRun();
-			refetchAnalysis();
-			refetchReport();
+		onSuccess: async (_result, { runId }) => {
+			await Promise.all(["baseline-run", "baseline-analysis", "baseline-report"].map((key) =>
+				queryClient.invalidateQueries({ queryKey: [key, brandId, runId] }),
+			));
+			if (runId === activeRunIdRef.current) {
+				setRetryAnalysisFeedback(null);
+				requestTaskFocus(runId);
+			}
 		},
-		onError: (err: any) => setActionError(`重试 AI 自动分析失败: ${err.message}`),
+		onError: (err: Error, { runId }) => {
+			setRetryAnalysisFeedback({ runId, message: `本次分析请求未成功完成：${err.message}。请核对本任务状态，不会自动重试。` });
+			void queryClient.invalidateQueries({ queryKey: ["baseline-run", brandId, runId] });
+		},
+		onSettled: () => { retryAnalysisRunRef.current = null; },
 	});
+	const handleRetryAnalysis = () => {
+		if (retryAnalysisRunRef.current || retryAnalysisMutation.isPending || runData?.run_id !== activeRunId || runData.current_step !== "analysis_failed") return;
+		retryAnalysisRunRef.current = activeRunId;
+		setRetryAnalysisFeedback(null);
+		requestTaskFocus(activeRunId);
+		retryAnalysisMutation.mutate({ runId: activeRunId });
+	};
 
 	const saveAnalysisMutation = useMutation({
 		mutationFn: (args: SaveAnalysisArgs) => {
@@ -800,15 +840,15 @@ function BrandReportsWorkspace() {
 					? "查询本次任务状态"
 					: preparedRun.status === "failed" || preparedRun.status === "interrupted"
 						? "查看本次任务（已中止）"
-						: preparedRun.status === "partial"
-							? "查看本次任务（部分完成）"
-							: preparedRun.current_step === "analysis_failed"
-								? "查看本次任务（分析失败）"
+						: preparedRun.current_step === "analysis_failed"
+							? "查看本次任务（分析失败）"
 								: preparedRun.current_step === "report_render_failed"
 									? "查看本次任务（报告失败）"
 									: preparedRun.current_step === "ready_for_review"
 										? "查看本次任务（待审核）"
-										: "查看本次任务（已结束）";
+										: preparedRun.status === "partial"
+											? "查看本次任务（部分完成）"
+											: "查看本次任务（已结束）";
 	const analysisStatusTitle =
 		analysisForm.phase === "ready"
 			? "分析已就绪，可人工修改"
@@ -930,7 +970,7 @@ function BrandReportsWorkspace() {
 								<select
 									value={activeRunId}
 									aria-label="切换已有监测任务"
-									onChange={(e) => { if (!e.target.value || e.target.value === activeRunId) return; handleSelectRun(e.target.value); void navigate({ search: { runId: e.target.value }, replace: true }); }}
+									onChange={(e) => { if (!e.target.value) return; requestTaskFocus(e.target.value); void navigate({ search: { runId: e.target.value }, replace: true, resetScroll: false }); }}
 									className="border rounded-md px-2 py-1.5 bg-background font-mono text-xs max-w-xs"
 								>
 									<option value="" disabled>-- 选择已有任务查看/处理 --</option>
@@ -1216,14 +1256,21 @@ function BrandReportsWorkspace() {
 						</div>
 						{draft.submitted && preparedRunActive && (
 							<p role="status" className="text-xs text-blue-700 dark:text-blue-300">
-								本次任务仍在排队、采集、分析或生成报告中，启动入口已锁定；请在步骤 3 查看进度或只读刷新，不会重复发起任务。
+								本次任务仍在执行，启动入口已锁定，不会重复发起任务。
+								<button type="button" className="ml-2 underline" onClick={() => {
+									if (!draft.runId) return;
+									requestTaskFocus(draft.runId);
+									void navigate({ search: { runId: draft.runId }, replace: true, resetScroll: false });
+								}}>查看本次任务进度（只读）</button>
 							</p>
 						)}
+						{focusRequest?.runId === activeRunId && <p role="status" className="text-xs">正在读取本任务状态，确认后定位；不会重发任务。</p>}
+						{locationNotice?.runId === activeRunId && <p role="status" className="text-xs">{locationNotice.message}</p>}
 					</div>
 
 					{/* 步骤 3: 诊断任务状态与客观指标看板 */}
 					{activeRunId && (
-						<div ref={progressPanelRef} data-no-i18n="true" className="scroll-mt-6 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+						<section ref={progressPanelRef} aria-label="板块3：任务进度与客观指标" data-no-i18n="true" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1246,6 +1293,7 @@ function BrandReportsWorkspace() {
 								</button>
 							</div>
 
+							{runError && <p role="alert" className="text-xs text-red-700">当前任务状态读取失败，不能确认处理阶段。请刷新查询；不会重发任务。</p>}
 							{runData?.mode === "synthetic" && (
 								<div
 									role="status"
@@ -1309,58 +1357,6 @@ function BrandReportsWorkspace() {
 								))}
 								<DiagnosisStages stages={diagnosisStages(runData, metricsError ? undefined : metricsData, analysisData, reportData)} />
 							</>}
-
-							{/* 分析失败恢复卡片 */}
-							{runData?.current_step === "analysis_failed" && (
-								<div className="bg-red-50/70 dark:bg-red-950/30 border border-red-300 dark:border-red-800 rounded-lg p-3 text-xs flex items-center justify-between gap-3">
-									<div>
-										<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
-											<IconAlertTriangle size={16} />
-											<span>Negency-Agent 自动分析执行异常</span>
-										</div>
-										<div className="text-red-600 dark:text-red-400 mt-0.5">
-											{runData.error_message || "分析执行失败"}
-										</div>
-										<div className="text-muted-foreground mt-0.5">
-											💡 采集数据已完整归档，无需重新采样。点击右侧按钮可直接重试 Negency-Agent 自动分析。
-										</div>
-									</div>
-									<button
-										onClick={() => retryAnalysisMutation.mutate()}
-										disabled={retryAnalysisMutation.isPending}
-										className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors shrink-0 disabled:opacity-50"
-									>
-										{retryAnalysisMutation.isPending ? "重试中..." : "重试 AI 自动分析"}
-									</button>
-								</div>
-							)}
-
-							{/* 报告渲染失败恢复卡片 */}
-							{runData?.current_step === "report_render_failed" && (
-								<div className="bg-red-50/70 dark:bg-red-950/30 border border-red-300 dark:border-red-800 rounded-lg p-3 text-xs flex items-center justify-between gap-3">
-									<div>
-										<div className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
-											<IconAlertTriangle size={16} />
-											<span>报告草稿渲染失败</span>
-										</div>
-										<div className="text-red-600 dark:text-red-400 mt-0.5">
-											{runData.error_message || "渲染失败"}
-										</div>
-										<div className="text-muted-foreground mt-0.5">
-											💡 已保存的分析会直接复用；点击右侧按钮重新生成 PDF/HTML，不重复调用模型。
-										</div>
-									</div>
-									<button
-										onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry", runId: activeRunId })}
-										disabled={saveWorkflowBusy}
-										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors shrink-0 disabled:opacity-50"
-									>
-										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin === "retry"
-											? "渲染中..."
-											: "重试报告草稿生成"}
-									</button>
-								</div>
-							)}
 
 							{/* 失败任务原因与安全恢复说明 (E2-R04) */}
 							{runData?.status === "failed" && (
@@ -1614,12 +1610,12 @@ function BrandReportsWorkspace() {
 									)}
 								</div>
 							)}
-						</div>
+						</section>
 					)}
 
 					{/* 步骤 4: 录入人工成因诊断与优先行动清单 (E-R05: 全部真实输入，严禁预填伪造内容) */}
 					{activeRunId && (
-						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
+						<section ref={analysisPanelRef} aria-label="板块4：诊断分析与恢复" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1639,6 +1635,23 @@ function BrandReportsWorkspace() {
 									)}
 								</div>
 							</div>
+
+							{runData?.run_id === activeRunId && (runData.current_step === "analysis_failed" || (retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId) || retryAnalysisFeedback?.runId === activeRunId) && (
+								<div role="alert" className="border border-red-300 rounded-lg p-3 text-xs space-y-2 bg-red-50/70 dark:bg-red-950/30">
+									<p className="font-semibold">Negency-Agent 自动分析与手动恢复</p>
+									<p>{retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId
+										? "本次分析请求正在处理中，请勿重复提交；等待期间可只读查看本任务状态。"
+										: diagnosisAnalysisFailureMessage(runData)}</p>
+									{runData.current_step === "analysis_failed" && <p className="break-words">{runData.error_message || "分析执行失败，具体原因尚未取得。"}</p>}
+									{retryAnalysisFeedback?.runId === activeRunId && <p className="break-words">{retryAnalysisFeedback.message}</p>}
+									<p>手动重试仅复用已有豆包采样，不调用 Ark 重采。有可用分析时服务端优先复用；没有可用分析时会重新执行完整分析，可能产生分析费用，不保证成功。不会自动重试。</p>
+									<button type="button" onClick={handleRetryAnalysis}
+										disabled={retryAnalysisMutation.isPending || runFetching || runData.current_step !== "analysis_failed"}
+										className="bg-red-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
+										{retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId ? "分析请求处理中..." : "重试 Negency-Agent 自动分析"}
+									</button>
+								</div>
+							)}
 
 							<div
 								role={analysisForm.phase === "failed" || analysisForm.phase === "unreadable" ? "alert" : "status"}
@@ -1768,12 +1781,12 @@ function BrandReportsWorkspace() {
 								</button>
 							</div>
 							</fieldset>
-						</div>
+						</section>
 					)}
 
 					{/* 步骤 5: 生成报告修订、审核与受控下载 (E-R06: 支持 rev_02 递增，不撞 rev_01；支持历史修订查看与下载) */}
-					{(activeAnalysisId || (reportData?.revisions && reportData.revisions.length > 0)) && (
-						<div className="border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+					{activeRunId && (diagnosisTaskSection(runData) === 5 || activeAnalysisId || (reportData?.revisions && reportData.revisions.length > 0)) && (
+						<section ref={reportPanelRef} aria-label="板块5：报告修订与审核" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1787,6 +1800,18 @@ function BrandReportsWorkspace() {
 							</div>
 
 							{/* 已有修订版本切换 (E2-R04: 支持已有历史版本选择与受控下载，无需重新生成) */}
+							{runData?.current_step === "report_render_failed" && (
+								<div role="alert" className="border border-red-300 rounded-lg p-3 text-xs space-y-2">
+									<p className="font-semibold">报告草稿渲染失败</p>
+									<p>{runData.error_message || "渲染失败"}</p>
+									<p>复用已保存分析重新生成 PDF/HTML，不重复调用模型。</p>
+									<button type="button" onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry", runId: activeRunId })}
+										disabled={saveWorkflowBusy || !activeAnalysisId}
+										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
+										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin === "retry" ? "渲染中..." : "重试报告草稿生成"}
+									</button>
+								</div>
+							)}
 							{reportData?.revisions && reportData.revisions.length > 0 && (
 								<div className="flex items-center gap-2 flex-wrap text-xs bg-muted/20 p-3 rounded-lg border">
 									<span className="font-semibold text-muted-foreground shrink-0">已生成修订版本:</span>
@@ -1844,7 +1869,7 @@ function BrandReportsWorkspace() {
 									/>
 									<button
 										onClick={() => generateRevisionMutation.mutate({ revisionId: revisionInput, origin: "manual", runId: activeRunId })}
-										disabled={saveWorkflowBusy || !revisionInput.trim()}
+										disabled={saveWorkflowBusy || !activeAnalysisId || !revisionInput.trim()}
 										className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 shrink-0"
 									>
 										<IconFileText size={15} />
@@ -1987,7 +2012,7 @@ function BrandReportsWorkspace() {
 									</div>
 								</div>
 							)}
-						</div>
+						</section>
 					)}
 				</div>
 			)}

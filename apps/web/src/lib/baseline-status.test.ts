@@ -3,6 +3,8 @@ import {
 	baselineRunStatusSchema,
 	diagnosisAnalysisFormStatus,
 	diagnosisStatusText,
+	diagnosisTaskSection,
+	diagnosisAnalysisFailureMessage,
 	isBaselineRunActive,
 	isDiagnosisInProgress,
 } from "./baseline-status";
@@ -18,6 +20,33 @@ const run = {
 	failed_questions: 1,
 	mode: "synthetic" as const,
 };
+
+describe("read-only task location and analysis failure guidance", () => {
+	it.each([
+		["queued", 3], ["collecting", 3], ["completed", 3], ["failed", 3],
+		["exception", 3], ["auth_guard_rejected", 3], ["unknown_step", 3],
+		["analyzing", 4], ["analysis_failed", 4],
+		["rendering_report", 5], ["report_render_failed", 5], ["ready_for_review", 5],
+	] as const)("locates %s by current_step rather than partial status", (current_step, section) => {
+		expect(diagnosisTaskSection({ status: "partial", current_step })).toBe(section);
+	});
+	it("does not invent a stage without a readable run", () => {
+		expect(diagnosisTaskSection(null)).toBe(3);
+	});
+	it.each(["evidence_validation_failed", "llm_auth_failed", "llm_timeout", "analysis_failed"])(
+		"gives actionable guidance for %s without promising success", (error_category) => {
+			const message = diagnosisAnalysisFailureMessage({ error_category });
+			expect(message.length).toBeGreaterThan(15);
+			expect(message).not.toContain("必成功");
+			if (error_category === "evidence_validation_failed") expect(message).toContain("原文引证");
+			if (error_category === "llm_auth_failed") expect(message).toContain("认证");
+			if (error_category === "llm_timeout") expect(message).toContain("超时");
+		},
+	);
+	it("explains legacy evidence failures without reclassifying collection failures", () => {
+		expect(diagnosisAnalysisFailureMessage({ error_message: "CH8 Q02 (unsupported_evidence)" })).toContain("原文引证");
+	});
+});
 
 describe("diagnosis status reflects actual tasks", () => {
 	it("no task gives a manual start instruction", () => {
@@ -157,7 +186,7 @@ describe("analysis form follows the actual analysis state", () => {
 		});
 		expect(failed.phase).toBe("failed");
 		expect(failed.editable).toBe(false);
-		expect(failed.message).toContain("重试入口");
+		expect(failed.message).toContain("本板块");
 		expect(failed.message).toContain("空白代写");
 		const stopped = status({ ...run, status: "failed", current_step: "failed" });
 		expect(stopped.phase).toBe("failed");
