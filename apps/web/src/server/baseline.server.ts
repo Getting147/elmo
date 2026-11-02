@@ -9,6 +9,7 @@
  */
 
 import { baselineIdentityHeaders } from "./baseline-identity";
+import { baselineResponseError } from "@/lib/baseline-request-error";
 import { db } from "@workspace/lib/db/db";
 import { brands, competitors, prompts, brandProductLines, brandCredentials, member } from "@workspace/lib/db/schema";
 import { eq, and, isNull, asc } from "drizzle-orm";
@@ -142,21 +143,7 @@ export async function callBaselineBackend<T = any>(args: {
 	});
 
 	if (!resp.ok) {
-		let errMsg = `Baseline backend error (${resp.status})`;
-		try {
-			const errBody = await resp.json();
-			errMsg =
-				errBody.message ||
-				errBody.detail?.message ||
-				(typeof errBody.detail === "string" ? errBody.detail : JSON.stringify(errBody));
-		} catch {
-			const text = await resp.text();
-			if (text) errMsg = text;
-		}
-		const err: any = new Error(errMsg);
-		err.status = resp.status;
-		err.statusCode = resp.status;
-		throw err;
+		throw await baselineResponseError(resp);
 	}
 
 	return resp.json();

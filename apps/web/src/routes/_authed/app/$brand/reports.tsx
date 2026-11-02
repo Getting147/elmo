@@ -1,6 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { INVALID_REPORT_TASK_LINK, validateReportSearch } from "@/lib/baseline-report-search";
-import { formatActionPlan, parseActionPlan, type AnalysisAction } from "@/lib/analysis-action-editor";
+import { formatActionPlan, parseActionPlan, inspectActionPlan, type AnalysisAction } from "@/lib/analysis-action-editor";
+import { analysisRequestErrorMessage, baselineBrowserFetch } from "@/lib/baseline-request-error";
+import { analysisRecoveryStatus } from "@/lib/analysis-recovery";
 import { formatDiagnosticTaskName } from "@/lib/baseline-task-name";
 import { useAuth } from "@/hooks/use-auth";
 import { DiagnosisDimensionInput } from "@/components/diagnosis-dimension-input";
@@ -8,7 +10,7 @@ import { DefaultErrorComponent } from "@/router-default-components";
 import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
 import { DiagnosisStages } from "@/components/diagnosis-stages";
 import { diagnosisStages } from "@/lib/baseline-stages";
-import { diagnosisAnalysisFailureMessage, diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, diagnosisTaskSection, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
+import { questionObservationMessage, diagnosisAnalysisFailureMessage, diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, diagnosisTaskSection, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
@@ -120,7 +122,7 @@ function BrandReportsWorkspace() {
 	const [focusRequest, setFocusRequest] = useState<{ runId: string; sequence: number } | null>(null);
 	const [locationNotice, setLocationNotice] = useState<{ runId: string; message: string } | null>(null);
 	const retryAnalysisRunRef = useRef<string | null>(null);
-	const [retryAnalysisFeedback, setRetryAnalysisFeedback] = useState<{ runId: string; message: string } | null>(null);
+	const [retryAnalysisFeedback, setRetryAnalysisFeedback] = useState<Record<string, { message: string; after: number }>>({});
 	const activeRevisionIdRef = useRef(activeRevisionId);
 	const activeRunIdRef = useRef(activeRunId);
 	const queryClient = useQueryClient();
@@ -197,6 +199,8 @@ function BrandReportsWorkspace() {
 		error: runError,
 		refetch: refetchRun,
 		isFetching: runFetching,
+		dataUpdatedAt: runUpdatedAt,
+		errorUpdatedAt: runErrorAt,
 	} = useQuery({
 		queryKey: ["baseline-run", brandId, activeRunId],
 		queryFn: () => getBaselineRunFn({ data: { brandId: brandId!, runId: activeRunId } }),
@@ -247,6 +251,8 @@ function BrandReportsWorkspace() {
 		error: analysisQueryError,
 		isLoading: analysisQueryLoading,
 		isFetching: analysisFetching,
+		dataUpdatedAt: analysisUpdatedAt,
+		errorUpdatedAt: analysisErrorAt,
 		refetch: refetchAnalysis,
 	} = useQuery({
 		queryKey: ["baseline-analysis", brandId, activeRunId],
@@ -526,6 +532,7 @@ function BrandReportsWorkspace() {
 	const retryAnalysisMutation = useMutation({
 		mutationFn: ({ runId }: { runId: string }) =>
 			retryBaselineAnalysisFn({
+				fetch: baselineBrowserFetch,
 				data: {
 					brandId: brandId!,
 					runId,
@@ -536,20 +543,22 @@ function BrandReportsWorkspace() {
 				queryClient.invalidateQueries({ queryKey: [key, brandId, runId] }),
 			));
 			if (runId === activeRunIdRef.current) {
-				setRetryAnalysisFeedback(null);
+				setRetryAnalysisFeedback((current) => { const next = { ...current }; delete next[runId]; return next; });
 				requestTaskFocus(runId);
 			}
 		},
 		onError: (err: Error, { runId }) => {
-			setRetryAnalysisFeedback({ runId, message: `本次分析请求未成功完成：${err.message}。请核对本任务状态，不会自动重试。` });
-			void queryClient.invalidateQueries({ queryKey: ["baseline-run", brandId, runId] });
+			setRetryAnalysisFeedback((current) => ({ ...current, [runId]: { message: analysisRequestErrorMessage(err), after: Date.now() } }));
+			for (const key of ["baseline-run", "baseline-analysis", "baseline-report"]) {
+				void queryClient.invalidateQueries({ queryKey: [key, brandId, runId] });
+			}
 		},
 		onSettled: () => { retryAnalysisRunRef.current = null; },
 	});
 	const handleRetryAnalysis = () => {
-		if (retryAnalysisRunRef.current || retryAnalysisMutation.isPending || runData?.run_id !== activeRunId || runData.current_step !== "analysis_failed") return;
+		if (retryAnalysisRunRef.current || retryAnalysisMutation.isPending || runError || analysisQueryError || runData?.run_id !== activeRunId || runData.current_step !== "analysis_failed" || (recovery && !recovery.canRetry)) return;
 		retryAnalysisRunRef.current = activeRunId;
-		setRetryAnalysisFeedback(null);
+		setRetryAnalysisFeedback((current) => { const next = { ...current }; delete next[activeRunId]; return next; });
 		requestTaskFocus(activeRunId);
 		retryAnalysisMutation.mutate({ runId: activeRunId });
 	};
@@ -799,6 +808,24 @@ function BrandReportsWorkspace() {
 	);
 	const downloadsReady = activeRevision?.status === "ready";
 	const hasCurrentAnalysis = analysisData?.run_id === activeRunId;
+	const requestFeedback = retryAnalysisFeedback[activeRunId];
+	const recovery = requestFeedback ? analysisRecoveryStatus(runData, {
+		fresh: Math.max(runUpdatedAt, runErrorAt) >= requestFeedback.after && Math.max(analysisUpdatedAt, analysisErrorAt) >= requestFeedback.after,
+		readFailed: Boolean(runError || analysisQueryError),
+		hasAnalysis: hasCurrentAnalysis,
+	}) : null;
+	const editedActions = inspectActionPlan(actionPlanInput, rawActionPlan);
+	const evidenceQuestions = evidenceData?.run_id === activeRunId
+		? [...(evidenceData.formal_questions ?? []), ...(evidenceData.probe_questions ?? [])]
+		: [];
+	const updateActionRefs = (index: number, code: string, checked: boolean) => {
+		if (editedActions.error) { setActionError(editedActions.error); return; }
+		const items = editedActions.items.map((item, i) => i !== index ? item : {
+			...item, evidence_refs: checked ? [...(item.evidence_refs ?? []), code] : (item.evidence_refs ?? []).filter((ref) => ref !== code),
+		});
+		markAnalysisDirty();
+		setActionPlanInput(formatActionPlan(items));
+	};
 	const analysisForm = diagnosisAnalysisFormStatus(runData, {
 		hasAnalysis: hasCurrentAnalysis,
 		analysisLoading: analysisQueryLoading,
@@ -1352,7 +1379,7 @@ function BrandReportsWorkspace() {
 								<p className="text-xs text-muted-foreground" aria-label="本次诊断计数">{diagnosisCountText(runData)} · 物理请求数：{!evidenceError && evidenceData?.run_id === runData.run_id ? evidenceData.total_requests_used : "归档计数待同步"}</p>
 								{!evidenceError && evidenceData?.run_id === activeRunId && evidenceData.formal_questions?.filter((q: any) => q.effective_status !== "effective").map((q: any) => (
 									<p key={q.question_code} role="status" className="text-xs text-amber-700">
-										[{q.question_code}] {q.attempts_count ? q.error_message || "采样失败，具体原因未知；无法判断品牌提及" : "未尝试；无法判断品牌提及"}。不会自动补采。
+										[{q.question_code}] {questionObservationMessage(q)}
 									</p>
 								))}
 								<DiagnosisStages stages={diagnosisStages(runData, metricsError ? undefined : metricsData, analysisData, reportData)} />
@@ -1504,13 +1531,13 @@ function BrandReportsWorkspace() {
 													</div>
 
 													<div className="text-muted-foreground bg-background p-2.5 rounded border leading-relaxed">
-														{q.effective_status !== "effective" && <p className="text-amber-700 mb-2">{q.attempts_count ? q.error_message || "采样失败，具体原因未知" : "未尝试"}；无法判断品牌提及，未计入有效样本。</p>}
-														<span className="font-semibold text-foreground">{q.effective_status === "effective" ? "💬 模型实测回答：" : "💬 部分内容（如有，未完成／非有效样本）："}</span>
+														{q.effective_status !== "effective" && <p className="text-amber-700 mb-2">{questionObservationMessage(q)}</p>}
+														<span className="font-semibold text-foreground">{q.effective_status === "in_progress" ? "正在等待本题回答：" : q.effective_status === "effective" ? "💬 模型实测回答：" : "💬 部分内容（如有，未完成／非有效样本）："}</span>
 														{isExpanded
-															? q.answer_text || "无有效回答"
+															? q.answer_text || (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
 															: q.answer_text
 																? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
-																: "无有效回答"}
+																: q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答"}
 													</div>
 
 													{/* 实际引用列表展示 (E-R06) */}
@@ -1575,12 +1602,13 @@ function BrandReportsWorkspace() {
 														</div>
 
 														<div className="text-muted-foreground bg-background p-2.5 rounded border leading-relaxed">
+															{q.effective_status !== "effective" && <p className="text-amber-700">{questionObservationMessage(q)}</p>}
 															<span className="font-semibold text-foreground">💬 探针回答：</span>
 															{isExpanded
-																? q.answer_text || "无有效回答"
+																? q.answer_text || (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
 																: q.answer_text
 																	? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
-																	: "无有效回答"}
+																	: q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答"}
 														</div>
 
 														{q.citations?.length > 0 && isExpanded && (
@@ -1636,17 +1664,18 @@ function BrandReportsWorkspace() {
 								</div>
 							</div>
 
-							{runData?.run_id === activeRunId && (runData.current_step === "analysis_failed" || (retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId) || retryAnalysisFeedback?.runId === activeRunId) && (
+							{runData?.run_id === activeRunId && (runData.current_step === "analysis_failed" || (retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId) || recovery) && (
 								<div role="alert" className="border border-red-300 rounded-lg p-3 text-xs space-y-2 bg-red-50/70 dark:bg-red-950/30">
 									<p className="font-semibold">Negency-Agent 自动分析与手动恢复</p>
 									<p>{retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId
 										? "本次分析请求正在处理中，请勿重复提交；等待期间可只读查看本任务状态。"
-										: diagnosisAnalysisFailureMessage(runData)}</p>
-									{runData.current_step === "analysis_failed" && <p className="break-words">{runData.error_message || "分析执行失败，具体原因尚未取得。"}</p>}
-									{retryAnalysisFeedback?.runId === activeRunId && <p className="break-words">{retryAnalysisFeedback.message}</p>}
+										: recovery?.message ?? diagnosisAnalysisFailureMessage(runData)}</p>
+									{runData.current_step === "analysis_failed" && (!recovery || recovery.phase === "failed") && <p className="break-words">{runData.error_message || "分析执行失败，具体原因尚未取得。"}</p>}
+									{requestFeedback && recovery?.phase !== "ready" && <p className="break-words">{requestFeedback.message}</p>}
+									{recovery && <button type="button" className="underline" onClick={() => { void refetchRun(); void refetchAnalysis(); void refetchReport(); }}>刷新本次请求状态（只读）</button>}
 									<p>手动重试仅复用已有豆包采样，不调用 Ark 重采。有可用分析时服务端优先复用；没有可用分析时会重新执行完整分析，可能产生分析费用，不保证成功。不会自动重试。</p>
 									<button type="button" onClick={handleRetryAnalysis}
-										disabled={retryAnalysisMutation.isPending || runFetching || runData.current_step !== "analysis_failed"}
+										disabled={retryAnalysisMutation.isPending || runFetching || Boolean(runError || analysisQueryError) || runData.current_step !== "analysis_failed" || Boolean(recovery && !recovery.canRetry)}
 										className="bg-red-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
 										{retryAnalysisMutation.isPending && retryAnalysisMutation.variables?.runId === activeRunId ? "分析请求处理中..." : "重试 Negency-Agent 自动分析"}
 									</button>
@@ -1743,7 +1772,19 @@ function BrandReportsWorkspace() {
 										className="border rounded-md p-2 bg-background font-mono disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
 									/>
 									<p className="text-muted-foreground">正文竖线使用 \|，换行使用 \n。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。</p>
-									{rawActionPlan.map((item, index) => (!item.action?.trim() || !item.evidence_refs?.length) && <p key={index} role="status" className="text-amber-700">行动建议第 {index + 1} 项未就绪：{!item.action?.trim() ? "缺少 action（具体举措） " : ""}{!item.evidence_refs?.length ? "缺少 evidence_refs（题目证据引用）" : ""}</p>)}
+									{editedActions.error && <p role="alert" className="text-red-700">{editedActions.error}</p>}
+									{editedActions.items.map((item, index) => <details key={index} className="border rounded p-2">
+										<summary>第 {index + 1} 条建议：查看与关联题目依据{!item.evidence_refs?.length ? "（尚未关联支持这条建议的题目依据）" : ""}</summary>
+										{!item.action?.trim() && <p role="status">第 {index + 1} 条尚未填写具体举措。</p>}
+										<p className="text-muted-foreground">仅选择确实支持此建议的原文。未完成题只支持采样局限；关联题码不代表已经通过语义审核。</p>
+										{evidenceQuestions.map((q) => <label key={q.question_code} className="block border-t py-2">
+											<input type="checkbox" aria-label={`第${index + 1}条关联${q.question_code}`} checked={item.evidence_refs?.includes(q.question_code) ?? false} onChange={(e) => updateActionRefs(index, q.question_code, e.target.checked)} />
+											<span> [{q.question_code}] {q.question_text}</span>
+											<p className="whitespace-pre-wrap">{q.effective_status === "effective" ? q.answer_text : questionObservationMessage(q)}</p>
+										</label>)}
+										{!evidenceQuestions.length && <p role="status">当前题目依据未读取到，请先只读刷新结果。</p>}
+										<button type="button" className="underline" onClick={() => { markAnalysisDirty(); setActionPlanInput(formatActionPlan(editedActions.items.filter((_, i) => i !== index))); }}>移除第{index + 1}条建议</button>
+									</details>)}
 								</div>
 							</div>
 
@@ -1805,7 +1846,8 @@ function BrandReportsWorkspace() {
 									<p className="font-semibold">报告草稿渲染失败</p>
 									<p>{runData.error_message || "渲染失败"}</p>
 									<p>复用已保存分析重新生成 PDF/HTML，不重复调用模型。</p>
-									<button type="button" onClick={() => generateRevisionMutation.mutate({ revisionId: "rev_01", origin: "retry", runId: activeRunId })}
+									{runData.error_category === "report_content_invalid" && <button type="button" className="underline" onClick={() => analysisPanelRef.current?.scrollIntoView({ behavior: "instant", block: "start" })}>在板块4核对分析内容与题目依据，修正后保存</button>}
+									<button type="button" onClick={() => generateRevisionMutation.mutate({ revisionId: revisionInput, origin: "retry", runId: activeRunId })}
 										disabled={saveWorkflowBusy || !activeAnalysisId}
 										className="bg-blue-600 text-white px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50">
 										{generateRevisionMutation.isPending && generateRevisionMutation.variables?.origin === "retry" ? "渲染中..." : "重试报告草稿生成"}

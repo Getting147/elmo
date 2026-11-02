@@ -18,6 +18,12 @@ export const baselineRunStatusSchema = z.object({
 
 export type BaselineRunStatus = z.infer<typeof baselineRunStatusSchema>;
 
+export function questionObservationMessage(q: { effective_status?: string | null; attempts_count?: number; error_message?: string | null }): string {
+	if (q.effective_status === "in_progress") return "采样进行中，请耐心等待";
+	if (!q.attempts_count) return "未尝试；无法判断品牌提及。";
+	return `${q.error_message || "采样未取得有效回答，具体原因未知"}；无法判断品牌提及，未计入有效样本。不会自动补采。`;
+}
+
 export function diagnosisTaskSection(
 	run: Pick<BaselineRunStatus, "status" | "current_step"> | null | undefined,
 ): 3 | 4 | 5 {

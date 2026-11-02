@@ -62,6 +62,11 @@ export function parseActionPlan(text: string, originals: AnalysisAction[] = []) 
 		.map((line, index) => {
 			const original = originals.find((item) => formatAction(item) === line);
 			const parts = splitFields(line);
+			const matches = parts.length === 7 ? originals.filter((item) => {
+				const old = splitFields(formatAction(item));
+				return old.filter((value, i) => value === parts[i]).length >= 6;
+			}) : [];
+			const origin = original ?? (matches.length === 1 ? matches[0] : undefined);
 			if (parts.length > 7) throw new Error(`行动建议第 ${index + 1} 项字段过多；正文竖线请写成 \\|。`);
 			const rawPriority = (original?.priority ?? parts[2] ?? "").toUpperCase();
 			if (!["P0", "P1", "P2", "P3"].includes(rawPriority)) {
@@ -69,7 +74,7 @@ export function parseActionPlan(text: string, originals: AnalysisAction[] = []) 
 			}
 			const priority = rawPriority as "P0" | "P1" | "P2" | "P3";
 			return {
-				...original,
+				...origin,
 				evidence_refs:
 					original?.evidence_refs ??
 					(parts[0] ?? "")
@@ -84,4 +89,13 @@ export function parseActionPlan(text: string, originals: AnalysisAction[] = []) 
 				finding: original?.finding ?? parts[6] ?? "",
 			};
 		});
+}
+
+export function inspectActionPlan(text: string, originals: AnalysisAction[] = []) {
+	try {
+		return { items: parseActionPlan(text, originals), error: null };
+	} catch (error) {
+		if (!(error instanceof Error)) throw error;
+		return { items: [], error: error.message };
+	}
 }
