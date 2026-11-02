@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { INVALID_REPORT_TASK_LINK, validateReportSearch } from "@/lib/baseline-report-search";
 import { formatActionPlan, parseActionPlan, type AnalysisAction } from "@/lib/analysis-action-editor";
 import { formatDiagnosticTaskName } from "@/lib/baseline-task-name";
@@ -116,6 +116,7 @@ function BrandReportsWorkspace() {
 	const progressPanelRef = useRef<HTMLElement | null>(null);
 	const analysisPanelRef = useRef<HTMLElement | null>(null);
 	const reportPanelRef = useRef<HTMLElement | null>(null);
+	const pendingPanelScrollRef = useRef<{ runId: string; section: 3 | 4 | 5 } | null>(null);
 	const [focusRequest, setFocusRequest] = useState<{ runId: string; sequence: number } | null>(null);
 	const [locationNotice, setLocationNotice] = useState<{ runId: string; message: string } | null>(null);
 	const retryAnalysisRunRef = useRef<string | null>(null);
@@ -355,15 +356,19 @@ function BrandReportsWorkspace() {
 			: !runData || !["queued", "collecting", "analyzing", "analysis_failed", "rendering_report", "report_render_failed", "ready_for_review", "completed", "failed", "exception", "auth_guard_rejected", "network_guard_blocked"].includes(runData.current_step)
 				? "当前处理阶段尚未确认，已定位板块3状态区；不会重发任务。"
 				: `已定位本任务当前处理位置：板块${section}。此查看操作不会启动采样、分析或报告生成。`;
-		const frame = window.requestAnimationFrame(() => {
-			const panel = section === 4 ? analysisPanelRef.current : section === 5 ? reportPanelRef.current : progressPanelRef.current;
-			if (!panel) return;
-			panel.scrollIntoView({ behavior: "instant", block: "start" });
-			setLocationNotice({ runId: focusRequest.runId, message });
-			setFocusRequest(null);
-		});
-		return () => window.cancelAnimationFrame(frame);
+		pendingPanelScrollRef.current = { runId: focusRequest.runId, section };
+		setLocationNotice({ runId: focusRequest.runId, message });
+		setFocusRequest(null);
 	}, [focusRequest, activeRunId, activeTab, runFetching, profileFetching, runsListFetching, evidenceFetching, metricsFetching, analysisFetching, reportFetching, runError, runData]);
+
+	useLayoutEffect(() => {
+		const target = pendingPanelScrollRef.current;
+		pendingPanelScrollRef.current = null;
+		if (!target || target.runId !== activeRunId || activeTab !== "portal") return;
+		// Commit the status notice above the panels before measuring the final scroll position.
+		const panel = target.section === 4 ? analysisPanelRef.current : target.section === 5 ? reportPanelRef.current : progressPanelRef.current;
+		panel?.scrollIntoView({ behavior: "instant", block: "start" });
+	}, [locationNotice, activeRunId, activeTab]);
 
 	// 任务达到待审核或终态时自动刷新分析与报告数据 (REPORT-001F)
 	useEffect(() => {
@@ -1265,7 +1270,7 @@ function BrandReportsWorkspace() {
 
 					{/* 步骤 3: 诊断任务状态与客观指标看板 */}
 					{activeRunId && (
-						<section ref={progressPanelRef} aria-label="板块3：任务进度与客观指标" data-no-i18n="true" className="scroll-mt-6 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+						<section ref={progressPanelRef} aria-label="板块3：任务进度与客观指标" data-no-i18n="true" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1610,7 +1615,7 @@ function BrandReportsWorkspace() {
 
 					{/* 步骤 4: 录入人工成因诊断与优先行动清单 (E-R05: 全部真实输入，严禁预填伪造内容) */}
 					{activeRunId && (
-						<section ref={analysisPanelRef} aria-label="板块4：诊断分析与恢复" className="scroll-mt-6 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
+						<section ref={analysisPanelRef} aria-label="板块4：诊断分析与恢复" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-4">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
@@ -1781,7 +1786,7 @@ function BrandReportsWorkspace() {
 
 					{/* 步骤 5: 生成报告修订、审核与受控下载 (E-R06: 支持 rev_02 递增，不撞 rev_01；支持历史修订查看与下载) */}
 					{activeRunId && (diagnosisTaskSection(runData) === 5 || activeAnalysisId || (reportData?.revisions && reportData.revisions.length > 0)) && (
-						<section ref={reportPanelRef} aria-label="板块5：报告修订与审核" className="scroll-mt-6 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
+						<section ref={reportPanelRef} aria-label="板块5：报告修订与审核" className="scroll-mt-24 border rounded-xl p-5 bg-card text-card-foreground shadow-sm flex flex-col gap-5">
 							<div className="flex items-center justify-between border-b pb-3">
 								<div className="flex items-center gap-2 font-semibold text-base">
 									<span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
