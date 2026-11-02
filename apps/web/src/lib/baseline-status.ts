@@ -18,6 +18,30 @@ export const baselineRunStatusSchema = z.object({
 
 export type BaselineRunStatus = z.infer<typeof baselineRunStatusSchema>;
 
+export function diagnosisTaskSection(
+	run: Pick<BaselineRunStatus, "status" | "current_step"> | null | undefined,
+): 3 | 4 | 5 {
+	if (!run) return 3;
+	if (["analyzing", "analysis_failed"].includes(run.current_step)) return 4;
+	if (["rendering_report", "report_render_failed", "ready_for_review"].includes(run.current_step)) return 5;
+	return 3;
+}
+
+export function diagnosisAnalysisFailureMessage(
+	run: Pick<BaselineRunStatus, "error_category" | "error_message">,
+): string {
+	if (
+		run.error_category === "evidence_validation_failed" ||
+		run.error_message?.includes("(unsupported_evidence)") ||
+		run.error_message?.includes("(invalid_evidence)")
+	) return "模型返回的分析未通过原文引证校验，未作为新草稿保存。需要核对对应章节、题码与引文；再次重试不保证通过。";
+	if (["llm_auth_failed", "missing_llm_api_key", "missing_llm_config"].includes(run.error_category ?? ""))
+		return "分析服务配置或认证失败。请先核对分析服务配置，再决定是否手动重试。";
+	if (run.error_category === "llm_timeout")
+		return "分析服务请求超时，尚未取得可用的新分析。请先核对本任务状态；页面不会自动重发。";
+	return "本轮分析未成功完成，请核对下方原因；已有采集归档和已保存分析版本保留，再次重试不保证成功。";
+}
+
 export function diagnosisCountText(run: BaselineRunStatus): string {
 	return `已尝试 ${run.completed_questions} / ${run.total_questions} 题 · 有效 ${run.valid_questions} 题 · 失败 ${run.failed_questions} 题 · 未尝试 ${Math.max(0, run.total_questions - run.completed_questions)} 题`;
 }
@@ -119,7 +143,7 @@ export function diagnosisAnalysisFormStatus(
 		return {
 			phase: "failed",
 			editable: false,
-			message: "本轮自动分析失败，暂无可用分析草稿。请使用现有重试入口，不会要求你从空白代写。",
+			message: "本轮自动分析失败，暂无可用分析草稿。请在本板块核对具体原因后决定是否手动重试；不可从空白代写保存。",
 		};
 	if (["failed", "interrupted"].includes(run.status))
 		return {
