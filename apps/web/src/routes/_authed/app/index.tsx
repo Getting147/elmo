@@ -21,11 +21,14 @@ import {
 } from "@workspace/ui/components/dialog";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { syncAuth0UserById } from "@workspace/whitelabel/auth-hooks";
-import { Trash2 } from "lucide-react";
+import { authClient } from "@workspace/lib/auth/client";
+import { LogOut, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import FullPageCard from "@/components/full-page-card";
 import { listUserOrganizations, requireAuthSession, type UserOrgEntry } from "@/lib/auth/helpers";
 import { getDeployment } from "@/lib/config/server";
+import { useLanguage } from "@/lib/language-context";
+import { resetPostHog } from "@/lib/posthog";
 import { deleteBrandFn } from "@/server/brands";
 
 const getOrganizations = createServerFn({ method: "GET" }).handler(
@@ -94,17 +97,48 @@ interface OrgEntry {
 
 function BrandSwitcherPage() {
 	const router = useRouter();
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 	const [mounted, setMounted] = useState(false);
 	const [orgs, setOrgs] = useState<OrgEntry[]>([]);
 	const [deleteTarget, setDeleteTarget] = useState<OrgEntry | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [deleteError, setDeleteError] = useState("");
+	const [isLoggingOut, setIsLoggingOut] = useState(false);
+	const [logoutError, setLogoutError] = useState("");
 	const { organizations, canCreateBrands } = Route.useLoaderData();
 
 	useEffect(() => {
 		setMounted(true);
 		setOrgs(organizations);
 	}, [organizations]);
+
+	const handleLogout = async () => {
+		if (isLoggingOut) return;
+		setIsLoggingOut(true);
+		setLogoutError("");
+		try {
+			await authClient.signOut({
+				fetchOptions: {
+					onSuccess: () => {
+						resetPostHog();
+						window.location.href = "/auth/logout";
+					},
+					onError: (ctx) => {
+						setIsLoggingOut(false);
+						setLogoutError(
+							isZh
+								? "退出登录失败，请重试"
+								: ctx?.error?.message || "Failed to log out, please retry",
+						);
+					},
+				},
+			});
+		} catch (err) {
+			setIsLoggingOut(false);
+			setLogoutError(isZh ? "退出登录失败，请重试" : "Failed to log out, please retry");
+		}
+	};
 
 	const handleDelete = async () => {
 		if (!deleteTarget) return;
@@ -128,7 +162,10 @@ function BrandSwitcherPage() {
 	if (!mounted) return null;
 
 	return (
-		<FullPageCard title="Brand Switcher" subtitle="Select a brand to get started">
+		<FullPageCard
+			title={isZh ? "切换品牌" : "Brand Switcher"}
+			subtitle={isZh ? "选择一个品牌开始使用" : "Select a brand to get started"}
+		>
 			<div className="flex flex-col space-y-3 min-w-[200px]">
 				{orgs.length > 0 ? (
 					orgs.map((org) => {
@@ -159,13 +196,48 @@ function BrandSwitcherPage() {
 						);
 					})
 				) : (
-					<p className="text-muted-foreground text-center">No brands available</p>
+					<p className="text-muted-foreground text-center">
+						{isZh ? "暂无可用品牌" : "No brands available"}
+					</p>
 				)}
 				{canCreateBrands && (
 					<Button asChild variant="outline">
-						<Link to="/app/new">+ Create new brand</Link>
+						<Link to="/app/new">
+							{isZh ? "+ 创建新品牌" : "+ Create new brand"}
+						</Link>
 					</Button>
 				)}
+
+				<div className="pt-3 border-t flex flex-col space-y-2 mt-1">
+					{logoutError && (
+						<p
+							className="text-sm text-destructive text-center"
+							role="alert"
+							data-testid="logout-error-message"
+						>
+							{logoutError}
+						</p>
+					)}
+					<Button
+						type="button"
+						variant="ghost"
+						className="w-full text-muted-foreground hover:text-foreground cursor-pointer flex items-center justify-center gap-2"
+						onClick={handleLogout}
+						disabled={isLoggingOut}
+						data-testid="logout-button"
+					>
+						<LogOut className="h-4 w-4" />
+						<span>
+							{isLoggingOut
+								? isZh
+									? "正在退出…"
+									: "Logging out…"
+								: isZh
+									? "退出登录"
+									: "Log out"}
+						</span>
+					</Button>
+				</div>
 			</div>
 
 			<Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
