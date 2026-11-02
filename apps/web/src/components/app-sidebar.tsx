@@ -31,7 +31,7 @@ import {
 	SidebarMenuItem,
 	useSidebar,
 } from "@workspace/ui/components/sidebar";
-import { NavMain, type NavGroup } from "@/components/nav-main";
+import { NavMain, type NavGroup, type NavItem } from "@/components/nav-main";
 import { NavUser } from "@/components/nav-user";
 import { NavAppInfo } from "@/components/nav-app-info";
 import { DemoModePill } from "@/components/demo-mode-pill";
@@ -107,7 +107,7 @@ export function AppSidebar({
 
 	// Dashboard section
 	if (!adminOnly) {
-		const dashboardItems = [
+		const dashboardItems: NavItem[] = [
 			{
 				title: t?.overview || "概览总览",
 				url: "/",
@@ -120,26 +120,31 @@ export function AppSidebar({
 				{
 					title: t?.visibility || "AI 可见度",
 					url: "/visibility",
+					preserveDashboardFilters: true,
 					icon: IconChartBar,
 				},
 				{
 					title: t?.shareOfVoice || "声量份额（SOV）",
 					url: "/share-of-voice",
+					preserveDashboardFilters: true,
 					icon: IconSpeakerphone,
 				},
 				{
 					title: t?.queryFanOut || "联网检索发散",
 					url: "/query-fan-out",
+					preserveDashboardFilters: true,
 					icon: IconSitemap,
 				},
 				{
 					title: t?.citations || "信源引用分析",
 					url: "/citations",
+					preserveDashboardFilters: true,
 					icon: IconLink,
 				},
 				{
 					title: t?.opportunities || "增长机会地图",
 					url: "/opportunities",
+					preserveDashboardFilters: true,
 					icon: IconTarget,
 				},
 				{
