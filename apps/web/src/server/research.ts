@@ -813,6 +813,9 @@ export function applyDraftPayloadPatch(
 			prompt: p.prompt,
 			tags: p.tags ?? [],
 		}));
+		// The user has replaced the generated list; the old generation stats no
+		// longer describe what is on screen.
+		delete next.suggestedPromptsMeta;
 	}
 	if (patch.productLines !== undefined) {
 		const prevProductLines = prev.productLines as OnboardingSuggestion["productLines"];

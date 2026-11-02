@@ -34,6 +34,7 @@ import {
 	fetchDraft,
 	patchDraft,
 	type ResearchDraftPayload,
+	type SuggestedPromptsMeta,
 	triggerResearch,
 } from "@/lib/brand-research-client";
 import { useLanguage } from "@/lib/language-context";
@@ -55,11 +56,75 @@ interface WizardData {
 	aliases: string[];
 	competitors: CompetitorEntry[];
 	prompts: EditablePrompt[];
+	suggestedCategories: string[];
+	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	// Epic A-2 (V1.0): 公司档案（一句话定位 + 简介）+ 产品线/SKU
 	summary: string;
 	description: string;
 	productLines: EditableProductLine[];
 	unverifiedLines: UnverifiedProductLine[];
+}
+
+interface CategoryOptionSource {
+	productLines: Array<{ name: string }>;
+	unverifiedLines: Array<{ name: string }>;
+	suggestedCategories?: string[];
+	prompts?: Array<{ tags: string[] }>;
+}
+
+/** Category choices come from real business lines and the model's own prompt
+ *  classifications — not only from product lines whose SKUs passed evidence. */
+export function collectCategoryOptions(source: CategoryOptionSource): string[] {
+	const options = new Set<string>();
+	const add = (value: string | undefined) => {
+		const trimmed = value?.trim();
+		if (trimmed) options.add(trimmed);
+	};
+	for (const line of source.productLines) add(line.name);
+	for (const line of source.unverifiedLines) add(line.name);
+	for (const category of source.suggestedCategories ?? []) add(category);
+	for (const prompt of source.prompts ?? []) {
+		for (const tag of prompt.tags) {
+			if (!tag.startsWith("dim:") && !tag.startsWith("cat:")) continue;
+			add(tag.replace(/^(?:(?:dim|cat):\s*)+/i, ""));
+		}
+	}
+	return [...options];
+}
+
+export function buildPromptNotice(args: {
+	language: "zh" | "en";
+	promptCount: number;
+	meta?: SuggestedPromptsMeta;
+}): string | null {
+	const { language, promptCount, meta } = args;
+	const isZh = language === "zh";
+	if (promptCount === 0) {
+		if (!meta) {
+			return isZh ? "暂无建议问题，可手动添加。" : "No suggested prompts yet — add one manually.";
+		}
+		if (meta.generated === 0) {
+			return isZh
+				? "模型本次未返回建议问题，可手动添加或稍后重新调研。"
+				: "The model returned no suggested prompts. Add one manually or run research again later.";
+		}
+		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0) {
+			return isZh
+				? `模型生成了 ${meta.generated} 条建议，均因包含品牌名、别名或专有型号被现有防引导规则过滤；可手动添加不带品牌名的问题。`
+				: `The model returned ${meta.generated} suggestions, but all were filtered because they named the brand, an alias, or a proprietary model. Add an unbranded question manually.`;
+		}
+		if (meta.kept === 0) {
+			return isZh
+				? `模型生成的 ${meta.generated} 条建议为空或重复，未得到可用问题；可手动添加。`
+				: `The model returned ${meta.generated} suggestions, but they were empty or duplicates. Add a question manually.`;
+		}
+	}
+	if (meta && meta.filteredForBrandOrSku > 0) {
+		return isZh
+			? `已按防引导规则过滤 ${meta.filteredForBrandOrSku} 条含品牌名、别名或专有型号的建议。`
+			: `${meta.filteredForBrandOrSku} suggestions were filtered because they named the brand, an alias, or a proprietary model.`;
+	}
+	return null;
 }
 
 const EditableTagsInput = memo(
@@ -112,6 +177,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		aliases: [],
 		competitors: [],
 		prompts: [],
+		suggestedCategories: [],
 		summary: "",
 		description: "",
 		productLines: [],
@@ -280,9 +346,35 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		return () => window.clearTimeout(timer);
 	}, [phase, stopAnalyzing, t.researchTimedOut]);
 
-	const categoryOptions = useMemo(() => {
-		return data.productLines.map((l) => l.name.trim()).filter(Boolean);
-	}, [data.productLines]);
+	const categoryOptions = useMemo(
+		() =>
+			collectCategoryOptions({
+				productLines: data.productLines,
+				unverifiedLines: data.unverifiedLines,
+				suggestedCategories: data.suggestedCategories,
+				prompts: data.prompts,
+			}),
+		[data.productLines, data.unverifiedLines, data.suggestedCategories, data.prompts],
+	);
+
+	const promptNotice = useMemo(
+		() =>
+			buildPromptNotice({
+				language,
+				promptCount: data.prompts.filter((prompt) => prompt.value.trim().length > 0).length,
+				meta: data.suggestedPromptsMeta,
+			}),
+		[language, data.prompts, data.suggestedPromptsMeta],
+	);
+
+	const categoryHint =
+		language === "zh"
+			? categoryOptions.length === 0
+				? "暂无建议分类，可手动输入。"
+				: "可从建议分类中选择，也可直接输入。"
+			: categoryOptions.length === 0
+				? "No suggested categories — type one manually."
+				: "Choose a suggested category or type your own.";
 
 	const previewCounts = useMemo(() => {
 		const enabled = data.prompts.filter((p) => p.enabled && p.value.trim().length > 0).length;
@@ -517,6 +609,8 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					onChange={updatePrompts}
 					showSystemTags={false}
 					categoryOptions={categoryOptions}
+					notice={promptNotice ?? undefined}
+					categoryHint={categoryHint ?? undefined}
 				/>
 			</div>
 
@@ -573,6 +667,8 @@ export function suggestionToWizardData(
 		prompts: (suggestion.suggestedPrompts || []).map((p) =>
 			newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
 		),
+		suggestedCategories: suggestion.suggestedCategories ?? [],
+		suggestedPromptsMeta: suggestion.suggestedPromptsMeta,
 		summary: suggestion.summary ?? "",
 		description: suggestion.description ?? "",
 		productLines: productLines.map((entry) =>

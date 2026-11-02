@@ -5,6 +5,13 @@
  * 端点契约见 research/index.ts + drafts/$draftId.ts。
  */
 
+export interface SuggestedPromptsMeta {
+	generated: number;
+	kept: number;
+	filteredForBrandOrSku: number;
+	skippedDuplicateOrEmpty: number;
+}
+
 export interface ResearchDraftPayload {
 	brandName: string;
 	website: string;
@@ -12,6 +19,8 @@ export interface ResearchDraftPayload {
 	aliases: string[];
 	competitors: Array<{ name: string; domains: string[]; aliases: string[] }>;
 	suggestedPrompts: Array<{ prompt: string; tags: string[] }>;
+	suggestedCategories?: string[];
+	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	summary?: string;
 	description?: string;
 	productLines?: {

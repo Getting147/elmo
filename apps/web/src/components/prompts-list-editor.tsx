@@ -68,6 +68,10 @@ interface PromptsListEditorProps {
 	showSystemTags?: boolean;
 	/** Available category options for autocomplete (e.g. from product lines). */
 	categoryOptions?: string[];
+	/** Why the list is empty or why some suggestions were filtered. */
+	notice?: string;
+	/** Shown when there are no category options, so an empty autocomplete is not silent. */
+	categoryHint?: string;
 	/** `_key`s of rows edited since the last save, flagged with an accent rail
 	 *  so a change is findable in a list of up to {@link MAX_PROMPTS} rows. */
 	changedKeys?: ReadonlySet<string>;
@@ -78,6 +82,8 @@ export function PromptsListEditor({
 	onChange,
 	showSystemTags = true,
 	categoryOptions,
+	notice,
+	categoryHint,
 	changedKeys,
 }: PromptsListEditorProps) {
 	const { language, t } = useLanguage();
@@ -213,6 +219,12 @@ export function PromptsListEditor({
 				))}
 			</datalist>
 
+			{notice && (
+				<p className="text-xs text-amber-600 dark:text-amber-400" role="status">
+					{notice}
+				</p>
+			)}
+
 			{liveSelectedCount > 0 && (
 				<div className="hidden md:flex flex-wrap items-center justify-between gap-x-2 gap-y-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
 					<span className="text-muted-foreground">
@@ -303,6 +315,10 @@ export function PromptsListEditor({
 					<span className="sr-only">Enabled</span>
 				</div>
 			</div>
+
+			{categoryHint && (
+				<p className="text-xs text-muted-foreground">{categoryHint}</p>
+			)}
 
 			{prompts.length === 0 ? (
 				<div className="border-2 border-dashed border-muted rounded-lg min-h-48 flex items-center justify-center">

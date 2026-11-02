@@ -362,4 +362,79 @@ describe("analyzeBrand", () => {
 		// category 规整为空符号（如 !!!）时不产生无意义的 dim: 标签
 		expect(result.suggestedPrompts[4].tags).toEqual(["二手交易"]);
 	});
+
+	it("B14: generic SKU descriptors do not drop generic Chinese prompts; brand and model codes still filter", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "美的",
+			additionalDomains: [],
+			aliases: ["美的集团", "Midea"],
+			competitors: [
+				{ name: "格力", domains: ["gree.com"], aliases: [] },
+				{ name: "海尔", domains: ["haier.com"], aliases: [] },
+				{ name: "海信", domains: ["hisense.com"], aliases: [] },
+			],
+			productLines: [
+				// DeepSeek records generic descriptors here when no model number is known.
+				{ name: "空调", skus: [{ name: "空调", model: "空调", oneLiner: "", evidenceUrl: null }] },
+				{ name: "冰箱", skus: [{ name: "冰箱", model: null, oneLiner: "", evidenceUrl: null }] },
+				{ name: "空调型号", skus: [{ name: "KFR-35GW", model: null, oneLiner: "", evidenceUrl: null }] },
+			],
+			suggestedPrompts: [
+				{ prompt: "空调哪个牌子好", category: "空调", tags: ["选购"] },
+				{ prompt: "买冰箱选择什么品牌", category: "冰箱", tags: [] },
+				{ prompt: "美的空调怎么样", category: "空调", tags: [] },
+				{ prompt: "KFR-35GW 适合多大面积", category: "空调", tags: [] },
+				{ prompt: "空调哪个牌子好", category: "空调", tags: [] },
+				{ prompt: "", category: "空调", tags: [] },
+			],
+		});
+
+		const result = await analyzeBrand({ website: "midea.com", brandName: "美的集团（中国）", language: "zh" });
+
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好", "买冰箱选择什么品牌"]);
+		expect(result.suggestedCategories).toEqual(["空调", "冰箱"]);
+		expect(result.suggestedPromptsMeta).toEqual({
+			generated: 6,
+			kept: 2,
+			filteredForBrandOrSku: 2,
+			skippedDuplicateOrEmpty: 2,
+		});
+	});
+
+	it("B14: keeps the model's category even when every prompt is filtered, and reports an empty generation", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "美的",
+			additionalDomains: [],
+			aliases: ["Midea"],
+			competitors: [{ name: "格力", domains: ["gree.com"], aliases: [] }],
+			productLines: [{ name: "空调", skus: [] }],
+			suggestedPrompts: [{ prompt: "美的空调推荐", category: "空调", tags: [] }],
+		});
+		const filtered = await analyzeBrand({ website: "midea.com", brandName: "美的", language: "zh" });
+		expect(filtered.suggestedPrompts).toEqual([]);
+		expect(filtered.suggestedCategories).toEqual(["空调"]);
+		expect(filtered.suggestedPromptsMeta).toEqual({
+			generated: 1,
+			kept: 0,
+			filteredForBrandOrSku: 1,
+			skippedDuplicateOrEmpty: 0,
+		});
+
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "美的",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [{ name: "格力", domains: ["gree.com"], aliases: [] }],
+			productLines: [{ name: "空调", skus: [] }],
+			suggestedPrompts: [],
+		});
+		const empty = await analyzeBrand({ website: "midea.com", brandName: "美的", language: "zh" });
+		expect(empty.suggestedPrompts).toEqual([]);
+		expect(empty.suggestedPromptsMeta).toEqual({
+			generated: 0,
+			kept: 0,
+			filteredForBrandOrSku: 0,
+			skippedDuplicateOrEmpty: 0,
+		});
+	});
 });

@@ -106,6 +106,25 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 		expect(next.summary).toBe("old summary"); // 未传字段保留
 	});
 
+	it("B14: prompts patch clears stale generation metadata but keeps model categories", () => {
+		const next = applyDraftPayloadPatch(
+			{
+				...BASE_PAYLOAD,
+				suggestedCategories: ["Refrigerators", "Robots"],
+				suggestedPromptsMeta: {
+					generated: 5,
+					kept: 2,
+					filteredForBrandOrSku: 3,
+					skippedDuplicateOrEmpty: 0,
+				},
+			},
+			{ prompts: [{ prompt: "buy fridge" }] },
+		);
+
+		expect(next.suggestedPromptsMeta).toBeUndefined();
+		expect(next.suggestedCategories).toEqual(["Refrigerators", "Robots"]);
+	});
+
 	it("productLines：confirmed 替换 + evidence→sourceEvidenceChecked 默认 0 + unverified 保留", () => {
 		const next = applyDraftPayloadPatch(
 			{ ...BASE_PAYLOAD },

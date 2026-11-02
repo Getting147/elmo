@@ -178,6 +178,17 @@ export interface OnboardingProductLines {
 	unverified: { line: OnboardingProductLine; reason: string }[];
 }
 
+export interface SuggestedPromptsMeta {
+	/** Number of prompt rows the model returned before post-processing. */
+	generated: number;
+	/** Number kept after brand/SKU filtering, de-duplication and the max cap. */
+	kept: number;
+	/** Number dropped because they named the brand, an alias, or a proprietary SKU. */
+	filteredForBrandOrSku: number;
+	/** Number skipped because they were empty or duplicates. */
+	skippedDuplicateOrEmpty: number;
+}
+
 export interface OnboardingSuggestion {
 	brandName: string;
 	website: string;
@@ -185,6 +196,11 @@ export interface OnboardingSuggestion {
 	aliases: string[];
 	competitors: OnboardingCompetitor[];
 	suggestedPrompts: OnboardingPrompt[];
+	/** Business categories proposed by the model, kept even when their prompt row
+	 *  was filtered out, so the review UI can still offer real category choices. */
+	suggestedCategories?: string[];
+	/** Generation/filter counts used to explain an empty review list honestly. */
+	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	// Epic A-2 (V1.0): 公司档案 + 产品线/SKU（按 evidence 校验分 confirmed/unverified）
 	summary?: string;
 	description?: string;
@@ -357,6 +373,31 @@ function normalizeTag(tag: string): string {
 		.replace(/\s*:\s*/g, ":")
 		.replace(/[^\p{L}\p{N}:_-]+/gu, "-")
 		.replace(/^-+|-+$/g, "");
+}
+
+/**
+ * DeepSeek often fills SKU.name with a generic category descriptor when it
+ * cannot confirm a model number ("空调", "Flat-pack container house module"),
+ * even though product-line names are already excluded from brand needles.
+ * A name without a model-like token is not proprietary enough to drop a
+ * generic category question; model numbers and brand names remain protected.
+ */
+function hasModelLikeSkuToken(name: string): boolean {
+	return /\d/.test(name) || /[A-Z]/.test(name.slice(1));
+}
+
+function promptCategoryCandidate(prompt: { category?: string | null; tags?: string[] }): string {
+	const rawCategory = typeof prompt.category === "string" ? prompt.category : "";
+	const cleanCategory = rawCategory.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim();
+	if (cleanCategory) return normalizeTag(cleanCategory);
+	for (const tag of prompt.tags ?? []) {
+		if (typeof tag !== "string") continue;
+		const match = tag.match(/^(?:dim|cat):\s*(.+)$/i);
+		if (!match?.[1]) continue;
+		const normalized = normalizeTag(match[1]);
+		if (normalized) return normalized;
+	}
+	return "";
 }
 
 /**
@@ -539,12 +580,16 @@ function normalize(args: {
 	}
 
 	const suggestedPrompts: OnboardingPrompt[] = [];
+	const suggestedCategories = new Set<string>();
+	let promptMeta: SuggestedPromptsMeta | undefined;
 	if (includePrompts) {
 		// Owner 2026-09-08: prompt 含品牌名/别名/专有产品名 → AI 回答必提品牌 →
 		// 品牌提及率注水。规则层已禁，此处在解析后做运行时护栏再剔一层
 		// （productLines 同批输出，先扫 raw 收集专名用于交叉检测）。
 		const brandNeedles = new Set<string>(
-			[brandName, ...aliases, ...(raw.aliases ?? [])].map((s) => s.toLowerCase()).filter(Boolean),
+			[brandName, raw.brandName, ...aliases, ...(raw.aliases ?? [])]
+				.map((s) => s.toLowerCase())
+				.filter(Boolean),
 		);
 		const productNeedles = new Set<string>();
 		for (const line of raw.productLines ?? []) {
@@ -554,30 +599,60 @@ function normalize(args: {
 				// 仅专有 SKU 专名加入检测，防止通用品类搜索词被误杀
 				if (Array.isArray(lineObj.skus)) {
 					for (const sku of lineObj.skus) {
-						if (sku && typeof sku === "object" && typeof (sku as { name?: unknown }).name === "string") {
-							productNeedles.add((sku as { name: string }).name.toLowerCase());
+						if (!sku || typeof sku !== "object") continue;
+						const skuObj = sku as { name?: unknown; model?: unknown };
+						const model = typeof skuObj.model === "string" ? skuObj.model.trim() : "";
+						if (model.length > 1 && hasModelLikeSkuToken(model)) {
+							productNeedles.add(model.toLowerCase());
+						}
+						const name = typeof skuObj.name === "string" ? skuObj.name.trim() : "";
+						if (name.length > 1 && hasModelLikeSkuToken(name)) {
+							productNeedles.add(name.toLowerCase());
 						}
 					}
 				}
 			}
 		}
 		const allNeedles = [...brandNeedles, ...productNeedles].filter((n) => n.length > 1);
+
+		// Collect category suggestions from every raw prompt first: a filtered
+		// question must not take the model's real business category with it.
+		for (const p of raw.suggestedPrompts ?? []) {
+			const category = promptCategoryCandidate(p);
+			if (category && !allNeedles.some((n) => category.includes(n))) {
+				suggestedCategories.add(category);
+			}
+		}
+
 		const seen = new Set<string>();
+		let filteredForBrandOrSku = 0;
+		let skippedDuplicateOrEmpty = 0;
 		for (const p of raw.suggestedPrompts ?? []) {
 			if (suggestedPrompts.length >= maxPrompts) break;
 			const value = p.prompt.trim().toLowerCase();
-			if (!value || seen.has(value)) continue;
-			if (allNeedles.some((n) => value.includes(n))) continue; // contaminated → drop
+			if (!value || seen.has(value)) {
+				skippedDuplicateOrEmpty++;
+				continue;
+			}
+			if (allNeedles.some((n) => value.includes(n))) {
+				filteredForBrandOrSku++;
+				continue;
+			}
 			seen.add(value);
 			let tags = uniqueLowercase((p.tags ?? []).map(normalizeTag).filter(Boolean)).slice(0, 3);
-			const cleanCat = typeof p.category === "string" ? p.category.replace(/^(?:(?:dim|cat):\s*)+/i, "").trim() : "";
-			const normCat = cleanCat ? normalizeTag(cleanCat) : "";
+			const normCat = promptCategoryCandidate(p);
 			const catDim = normCat ? `dim:${normCat}` : null;
 			if (catDim && !tags.some((t) => t.startsWith("dim:") || t.startsWith("cat:"))) {
 				tags = [catDim, ...tags];
 			}
 			suggestedPrompts.push({ prompt: value, tags });
 		}
+		promptMeta = {
+			generated: (raw.suggestedPrompts ?? []).length,
+			kept: suggestedPrompts.length,
+			filteredForBrandOrSku,
+			skippedDuplicateOrEmpty,
+		};
 	}
 
 	const result: OnboardingSuggestion = {
@@ -588,6 +663,10 @@ function normalize(args: {
 		competitors,
 		suggestedPrompts,
 	};
+	if (includePrompts) {
+		result.suggestedCategories = [...suggestedCategories].slice(0, Math.min(Math.max(maxPrompts, 0), 30));
+		if (promptMeta) result.suggestedPromptsMeta = promptMeta;
+	}
 
 	// Epic A-2 (V1.0): 公司档案 summary / description + 产品线/SKU (按 evidence 校验分 confirmed/unverified)
 	if (includeProducts) {
