@@ -108,10 +108,15 @@ export function buildPromptNotice(args: {
 				? "模型本次未返回建议问题，可手动添加或稍后重新调研。"
 				: "The model returned no suggested prompts. Add one manually or run research again later.";
 		}
-		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0) {
+		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0 && meta.skippedDuplicateOrEmpty === 0) {
 			return isZh
 				? `模型生成了 ${meta.generated} 条建议，均因包含品牌名、别名或专有型号被现有防引导规则过滤；可手动添加不带品牌名的问题。`
 				: `The model returned ${meta.generated} suggestions, but all were filtered because they named the brand, an alias, or a proprietary model. Add an unbranded question manually.`;
+		}
+		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0) {
+			return isZh
+				? `模型生成了 ${meta.generated} 条建议，其中 ${meta.filteredForBrandOrSku} 条因包含品牌名、别名或专有型号被防引导规则过滤，${meta.skippedDuplicateOrEmpty} 条为空或重复，未得到可用问题；可手动添加。`
+				: `The model returned ${meta.generated} suggestions: ${meta.filteredForBrandOrSku} were filtered for naming the brand, an alias, or a proprietary model and ${meta.skippedDuplicateOrEmpty} were empty or duplicates, so no usable question remained. Add one manually.`;
 		}
 		if (meta.kept === 0) {
 			return isZh

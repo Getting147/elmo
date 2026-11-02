@@ -88,6 +88,9 @@ export function PromptsListEditor({
 }: PromptsListEditorProps) {
 	const { language, t } = useLanguage();
 	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+	// Row whose category input was last focused, so its candidate chips stay
+	// clickable without stealing focus from the input.
+	const [activeCategoryIndex, setActiveCategoryIndex] = useState<number | null>(null);
 
 	const allCategoryOptions = useMemo(() => {
 		const set = new Set<string>(categoryOptions ?? []);
@@ -129,6 +132,23 @@ export function PromptsListEditor({
 		if (prompts.length >= MAX_PROMPTS) return;
 		onChange([...prompts, newPromptEntry()]);
 	};
+
+	const categoryChips = (index: number) =>
+		activeCategoryIndex === index && allCategoryOptions.length > 0 ? (
+			<div className="flex flex-wrap gap-1 pt-1">
+				{allCategoryOptions.map((option) => (
+					<button
+						key={option}
+						type="button"
+						onMouseDown={(event) => event.preventDefault()}
+						onClick={() => handleCategoryChange(index, option)}
+						className="rounded border bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+					>
+						{option}
+					</button>
+				))}
+			</div>
+		) : null;
 
 	// Bulk paste. The parse is pure and lives in @workspace/lib so the rules
 	// (trim, dedupe, cap) are tested without a DOM, and it runs on every
@@ -367,6 +387,7 @@ export function PromptsListEditor({
 												list="prompt-category-options"
 												value={promptCategory}
 												onChange={(e) => handleCategoryChange(index, e.target.value)}
+												onFocus={() => setActiveCategoryIndex(index)}
 												placeholder={t.selectCategoryPlaceholder}
 												className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 											/>
@@ -375,6 +396,7 @@ export function PromptsListEditor({
 													{t.unclassifiedWarning}
 												</p>
 											)}
+											{categoryChips(index)}
 										</div>
 										<div className="flex-1">
 											<TagsInput
@@ -412,6 +434,7 @@ export function PromptsListEditor({
 											list="prompt-category-options"
 											value={promptCategory}
 											onChange={(e) => handleCategoryChange(index, e.target.value)}
+											onFocus={() => setActiveCategoryIndex(index)}
 											placeholder={t.selectCategoryPlaceholder}
 											className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 										/>
@@ -420,6 +443,7 @@ export function PromptsListEditor({
 												{t.unclassifiedWarning}
 											</p>
 										)}
+										{categoryChips(index)}
 									</div>
 									<TagsInput
 										value={customTags}

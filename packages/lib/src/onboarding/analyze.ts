@@ -376,14 +376,24 @@ function normalizeTag(tag: string): string {
 }
 
 /**
- * DeepSeek often fills SKU.name with a generic category descriptor when it
- * cannot confirm a model number ("空调", "Flat-pack container house module"),
- * even though product-line names are already excluded from brand needles.
- * A name without a model-like token is not proprietary enough to drop a
- * generic category question; model numbers and brand names remain protected.
+ * Business-line names and the model's own prompt categories are category
+ * vocabulary. An SKU whose name is exactly one of them ("空调" under line
+ * "空调") is a category label, not a proprietary identifier, so it must not
+ * drop generic category questions.
  */
-function hasModelLikeSkuToken(name: string): boolean {
-	return /\d/.test(name) || /[A-Z]/.test(name.slice(1));
+const CATEGORY_SEEKING_PHRASES =
+	/(哪个牌子|什么牌子|哪个品牌|什么品牌|哪些品牌|哪家好|哪个好|怎么选|如何选|选购|排行|排名|对比|which\s+brand|what\s+brand|best\s+brand|\bvs\b|comparison)/i;
+
+/**
+ * A prompt that names a term and immediately asks "which brand / how to
+ * choose" is a category-seeking question and does not force a brand mention.
+ * Naming a proprietary series as the subject ("星澜设备怎么样") is not, so the
+ * anti-brand guard still applies there.
+ */
+function seeksCategoryAfter(prompt: string, needle: string): boolean {
+	const at = prompt.indexOf(needle);
+	if (at < 0) return false;
+	return CATEGORY_SEEKING_PHRASES.test(prompt.slice(at + needle.length, at + needle.length + 10));
 }
 
 function promptCategoryCandidate(prompt: { category?: string | null; tags?: string[] }): string {
@@ -591,29 +601,39 @@ function normalize(args: {
 				.map((s) => s.toLowerCase())
 				.filter(Boolean),
 		);
-		const productNeedles = new Set<string>();
+		const categoryTerms = new Set<string>();
+		for (const line of raw.productLines ?? []) {
+			const lineName =
+				line && typeof line === "object" && typeof (line as { name?: unknown }).name === "string"
+					? normalizeTag((line as { name: string }).name).toLowerCase()
+					: "";
+			if (lineName) categoryTerms.add(lineName);
+		}
+		for (const p of raw.suggestedPrompts ?? []) {
+			const category = promptCategoryCandidate(p);
+			if (category) categoryTerms.add(category.toLowerCase());
+		}
+
+		const modelNeedles = new Set<string>();
+		const nameNeedles = new Set<string>();
 		for (const line of raw.productLines ?? []) {
 			if (line && typeof line === "object") {
 				const lineObj = line as { name?: unknown; skus?: unknown };
 				// lineObj.name 是通用品类/业务线名称（如"Refrigerators"或"轻钢房屋"），而非专有专名；
-				// 仅专有 SKU 专名加入检测，防止通用品类搜索词被误杀
+				// 仅非品类词的 SKU 专名/型号加入检测，防止通用品类搜索词被误杀
 				if (Array.isArray(lineObj.skus)) {
 					for (const sku of lineObj.skus) {
 						if (!sku || typeof sku !== "object") continue;
 						const skuObj = sku as { name?: unknown; model?: unknown };
-						const model = typeof skuObj.model === "string" ? skuObj.model.trim() : "";
-						if (model.length > 1 && hasModelLikeSkuToken(model)) {
-							productNeedles.add(model.toLowerCase());
-						}
-						const name = typeof skuObj.name === "string" ? skuObj.name.trim() : "";
-						if (name.length > 1 && hasModelLikeSkuToken(name)) {
-							productNeedles.add(name.toLowerCase());
-						}
+						const model = typeof skuObj.model === "string" ? normalizeTag(skuObj.model).toLowerCase() : "";
+						if (model.length > 1 && !categoryTerms.has(model)) modelNeedles.add(model);
+						const name = typeof skuObj.name === "string" ? normalizeTag(skuObj.name).toLowerCase() : "";
+						if (name.length > 1 && !categoryTerms.has(name)) nameNeedles.add(name);
 					}
 				}
 			}
 		}
-		const allNeedles = [...brandNeedles, ...productNeedles].filter((n) => n.length > 1);
+		const allNeedles = [...brandNeedles, ...modelNeedles, ...nameNeedles].filter((n) => n.length > 1);
 
 		// Collect category suggestions from every raw prompt first: a filtered
 		// question must not take the model's real business category with it.
@@ -634,7 +654,11 @@ function normalize(args: {
 				skippedDuplicateOrEmpty++;
 				continue;
 			}
-			if (allNeedles.some((n) => value.includes(n))) {
+			const contaminated =
+				[...brandNeedles].some((n) => value.includes(n)) ||
+				[...modelNeedles].some((n) => value.includes(n)) ||
+				[...nameNeedles].some((n) => value.includes(n) && !seeksCategoryAfter(value, n));
+			if (contaminated) {
 				filteredForBrandOrSku++;
 				continue;
 			}

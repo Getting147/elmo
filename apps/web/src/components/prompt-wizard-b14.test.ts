@@ -79,4 +79,24 @@ describe("B14 prompt suggestions and category candidates", () => {
 			}),
 		).toContain("过滤 1 条");
 	});
+
+	it("B14-R01-F02: mixed empty results report each known cause by its real count", () => {
+		const zh = buildPromptNotice({
+			language: "zh",
+			promptCount: 0,
+			meta: { generated: 2, kept: 0, filteredForBrandOrSku: 1, skippedDuplicateOrEmpty: 1 },
+		});
+		expect(zh).toContain("其中 1 条因包含品牌名");
+		expect(zh).toContain("1 条为空或重复");
+		expect(zh).not.toContain("均因");
+
+		const en = buildPromptNotice({
+			language: "en",
+			promptCount: 0,
+			meta: { generated: 2, kept: 0, filteredForBrandOrSku: 1, skippedDuplicateOrEmpty: 1 },
+		});
+		expect(en).toContain("1 were filtered");
+		expect(en).toContain("1 were empty or duplicates");
+		expect(en).not.toContain("all were filtered");
+	});
 });

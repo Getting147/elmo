@@ -437,4 +437,60 @@ describe("analyzeBrand", () => {
 			skippedDuplicateOrEmpty: 0,
 		});
 	});
+
+	it("B14-R01-F01: category-seeking questions keep generic SKU names while proprietary names stay filtered", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "华星设备",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			productLines: [
+				{
+					name: "设备",
+					skus: [
+						{ name: "空调", model: null, oneLiner: "", evidenceUrl: null },
+						{ name: "星澜", model: null, oneLiner: "", evidenceUrl: null },
+						{ name: "Orion", model: null, oneLiner: "", evidenceUrl: null },
+						{ name: "3D打印机", model: null, oneLiner: "", evidenceUrl: null },
+						{ name: "USB集线器", model: null, oneLiner: "", evidenceUrl: null },
+					],
+				},
+			],
+			suggestedPrompts: [
+				{ prompt: "空调哪个牌子好", category: "设备", tags: [] },
+				{ prompt: "星澜设备怎么样", category: "设备", tags: [] },
+				{ prompt: "orion设备怎么样", category: "设备", tags: [] },
+				{ prompt: "3d打印机哪个牌子好", category: "设备", tags: [] },
+				{ prompt: "usb集线器哪个牌子好", category: "设备", tags: [] },
+			],
+		});
+
+		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual([
+			"空调哪个牌子好",
+			"3d打印机哪个牌子好",
+			"usb集线器哪个牌子好",
+		]);
+		expect(result.suggestedPromptsMeta).toEqual({
+			generated: 5,
+			kept: 3,
+			filteredForBrandOrSku: 2,
+			skippedDuplicateOrEmpty: 0,
+		});
+	});
+
+	it("B14-R01-F01: an SKU name equal to its business line is a category label, not a proprietary needle", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "华星设备",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			productLines: [{ name: "空调", skus: [{ name: "空调", model: null, oneLiner: "", evidenceUrl: null }] }],
+			suggestedPrompts: [{ prompt: "空调怎么样", category: "空调", tags: [] }],
+		});
+
+		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调怎么样"]);
+	});
 });
