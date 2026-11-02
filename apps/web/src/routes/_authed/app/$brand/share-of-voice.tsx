@@ -27,8 +27,16 @@ import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { computeShareOfVoice } from "@/lib/visibility-stats";
 import { useMemo } from "react";
-import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
+import {
+	getBaselineModelAliases,
+	getBaselineModelOptions,
+	isBaselineModelMismatch,
+	isUnsupportedBaselineModel,
+	isRunWithinLookback,
+	isModelMatch,
+} from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatch-notice";
 import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
@@ -66,7 +74,7 @@ const TIPS = {
 
 function ShareOfVoicePage() {
 	const { brand: brandId } = Route.useParams();
-	const { model, lookback, tags } = useListFilters();
+	const { model, lookback, tags, setFilters } = useListFilters();
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 
@@ -194,16 +202,20 @@ function ShareOfVoicePage() {
 		return Array.from(set);
 	}, [activeBaseline.metricsData?.questions]);
 
-	const baselineModels = useMemo(() => {
-		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
-		const brandModels = brand?.effectiveModels || [];
-		const combined = Array.from(new Set([runModel, ...brandModels]));
-		return getAvailableModels(combined);
-	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
+	const baselineRunModel = activeBaseline.runData?.model_name?.trim() || "";
+	const baselineModels = useMemo(
+		() => getBaselineModelOptions(baselineRunModel),
+		[baselineRunModel],
+	);
+	const baselineModelAliases = useMemo(
+		() => getBaselineModelAliases(baselineRunModel),
+		[baselineRunModel],
+	);
 
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveModelAliases = activeBaseline.hasBaselineRuns ? baselineModelAliases : undefined;
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
 		: isLoading && !data);
@@ -286,6 +298,14 @@ function ShareOfVoicePage() {
 					</div>
 				</CardContent>
 			</Card>
+		);
+	} else if (activeBaseline.runData && isBaselineModelMismatch(model, baselineRunModel)) {
+		content = (
+			<BaselineModelMismatchNotice
+				runModel={baselineRunModel}
+				selectedModel={model}
+				onClearModel={() => setFilters({ model: undefined })}
+			/>
 		);
 	} else if (isFilteredOut && (!effectiveData || effectiveData.totalRuns === 0)) {
 		content = (
@@ -476,6 +496,7 @@ function ShareOfVoicePage() {
 					<FilterBar
 						availableTags={effectiveTags}
 						availableModels={effectiveModels}
+						modelAliases={effectiveModelAliases}
 						showSearch={false}
 						showModelSelector
 					/>

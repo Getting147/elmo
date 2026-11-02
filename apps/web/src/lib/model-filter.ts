@@ -52,6 +52,43 @@ export function isModelMatch(filterModel?: string | null, runModel?: string | nu
 	return normFilter === normRun || (normFilter === "doubao" && isDoubaoModel(normRun));
 }
 
+/** True when the URL narrows results to a concrete model (not absent/'all'). */
+export function isModelFilterSpecified(filterModel?: string | null): boolean {
+	if (!filterModel) return false;
+	const normalized = filterModel.trim().toLowerCase();
+	return normalized !== "" && normalized !== ALL_MODELS_VALUE;
+}
+
+/** A baseline run is one task with one executed model, so its menu is built
+ *  from that run's own model_name only — brand configuration describes future
+ *  capability, not what this run sampled. Missing identity yields no option
+ *  instead of guessing a model. */
+export function getBaselineModelOptions(runModel?: string | null): string[] {
+	const trimmed = runModel?.trim();
+	return trimmed ? [trimmed] : [];
+}
+
+/** The legacy generic `doubao` URL value means the Doubao family. For a run
+ *  that executed one concrete Doubao model, normalize only that confirmed
+ *  alias for display/selection so the menu doesn't present two Doubao
+ *  identities. Other concrete versions stay distinct. */
+export function getBaselineModelAliases(runModel?: string | null): Record<string, string> {
+	const trimmed = runModel?.trim();
+	if (!trimmed || !isDoubaoModel(trimmed)) return {};
+	return { doubao: trimmed };
+}
+
+/** True when a concrete model filter cannot apply to the run's identity:
+ *  unknown identity or a different concrete model. Generic `doubao` remains
+ *  a match through `isModelMatch`; non-Doubao filters are handled separately
+ *  by the unsupported-model notice. */
+export function isBaselineModelMismatch(
+	filterModel?: string | null,
+	runModel?: string | null,
+): boolean {
+	return isModelFilterSpecified(filterModel) && !isModelMatch(filterModel, runModel);
+}
+
 /**
  * Pure helper to verify if a run date falls within the selected lookback period.
  */

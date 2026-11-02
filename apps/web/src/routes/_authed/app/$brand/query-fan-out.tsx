@@ -34,8 +34,16 @@ import { promptKeywords, type PromptFanoutStat, type TopQueryStat, type QueryPro
 import { useActiveBaselineRun } from "@/hooks/use-active-baseline-run";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
-import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
+import {
+	getBaselineModelAliases,
+	getBaselineModelOptions,
+	isBaselineModelMismatch,
+	isUnsupportedBaselineModel,
+	isRunWithinLookback,
+	isModelMatch,
+} from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatch-notice";
 import { effectiveQueryQuestions } from "@/lib/baseline-query-observations";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
@@ -67,7 +75,7 @@ export const Route = createFileRoute("/_authed/app/$brand/query-fan-out")({
 
 function QueryFanoutPage() {
 	const { brand: brandId } = Route.useParams();
-	const { model, lookback, tags } = useListFilters();
+	const { model, lookback, tags, setFilters } = useListFilters();
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 
@@ -98,7 +106,7 @@ function QueryFanoutPage() {
 	const baselineData = useMemo(() => {
 		if (!activeBaseline.hasBaselineRuns) return null;
 		const { runData, metricsData, evidenceData } = activeBaseline;
-		const modelName = runData?.model_name || "doubao-pro-32k";
+		const modelName = runData?.model_name?.trim() || "";
 
 		// Model filter check
 		if (!isModelMatch(model, modelName)) {
@@ -219,16 +227,18 @@ function QueryFanoutPage() {
 			topByRuns,
 			terms: [],
 			wordChanges: { added: [], dropped: [], preserved: [] },
-			byModel: [
-				{
-					model: modelName,
-					runs: effectiveRunsCount,
-					fanoutRuns,
-					totalQueries,
-					avgPerExecution,
-					topQueries: topQueries.map((t) => ({ query: t.query, count: t.runs, brandMentionRate: 0 })),
-				},
-			],
+			byModel: modelName
+				? [
+						{
+							model: modelName,
+							runs: effectiveRunsCount,
+							fanoutRuns,
+							totalQueries,
+							avgPerExecution,
+							topQueries: topQueries.map((t) => ({ query: t.query, count: t.runs, brandMentionRate: 0 })),
+						},
+					]
+				: [],
 		};
 	}, [activeBaseline, brand?.name, tags, model, lookback]);
 
@@ -242,16 +252,20 @@ function QueryFanoutPage() {
 		return Array.from(set);
 	}, [activeBaseline.evidenceData?.formal_questions, activeBaseline.metricsData?.questions]);
 
-	const baselineModels = useMemo(() => {
-		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
-		const brandModels = brand?.effectiveModels || [];
-		const combined = Array.from(new Set([runModel, ...brandModels]));
-		return getAvailableModels(combined);
-	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
+	const baselineRunModel = activeBaseline.runData?.model_name?.trim() || "";
+	const baselineModels = useMemo(
+		() => getBaselineModelOptions(baselineRunModel),
+		[baselineRunModel],
+	);
+	const baselineModelAliases = useMemo(
+		() => getBaselineModelAliases(baselineRunModel),
+		[baselineRunModel],
+	);
 
 	const effectiveData = activeBaseline.hasBaselineRuns ? baselineData : data;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveModelAliases = activeBaseline.hasBaselineRuns ? baselineModelAliases : undefined;
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
 		: isLoading && !data);
@@ -317,6 +331,14 @@ function QueryFanoutPage() {
 						? "无法加载检索发散数据，请刷新页面重试。"
 						: "Couldn't load query fan-out right now. Reload the page to try again."
 				}
+			/>
+		);
+	} else if (activeBaseline.runData && isBaselineModelMismatch(model, baselineRunModel)) {
+		content = (
+			<BaselineModelMismatchNotice
+				runModel={baselineRunModel}
+				selectedModel={model}
+				onClearModel={() => setFilters({ model: undefined })}
 			/>
 		);
 	} else if (isFilteredOut && (!effectiveData || effectiveData.totalRuns === 0)) {
@@ -404,6 +426,7 @@ function QueryFanoutPage() {
 					<FilterBar
 						availableTags={effectiveTags}
 						availableModels={effectiveModels}
+						modelAliases={effectiveModelAliases}
 						showSearch={false}
 						showModelSelector
 					/>

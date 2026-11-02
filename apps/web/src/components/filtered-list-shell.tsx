@@ -10,6 +10,7 @@ interface FilteredListShellProps {
 	filters: ListFilterState;
 	availableTags: readonly string[];
 	availableModels: string[];
+	modelAliases?: Readonly<Record<string, string>>;
 	showSearch?: boolean;
 	showModelSelector?: boolean;
 	/** Show "n results" / "n of m results" next to the filter dropdowns. */
@@ -48,6 +49,7 @@ export function FilteredListShell({
 	filters,
 	availableTags,
 	availableModels,
+	modelAliases,
 	showSearch = false,
 	showModelSelector = true,
 	showResultCount = false,
@@ -96,6 +98,7 @@ export function FilteredListShell({
 				<FilterBar
 					availableTags={availableTags}
 					availableModels={availableModels}
+					modelAliases={modelAliases}
 					showSearch={showSearch}
 					showModelSelector={showModelSelector}
 					resultCount={showResultCount && !isLoading ? effectiveFilteredCount : undefined}

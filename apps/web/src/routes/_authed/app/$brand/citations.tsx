@@ -23,8 +23,16 @@ import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import { useLanguage } from "@/lib/language-context";
 import { type CitationCategory, emptyCategoryCounts, toRoundedPercentages } from "@/lib/domain-categories";
 import type { CitationData } from "@/components/citations/types";
-import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
+import {
+	getBaselineModelAliases,
+	getBaselineModelOptions,
+	isBaselineModelMismatch,
+	isUnsupportedBaselineModel,
+	isRunWithinLookback,
+	isModelMatch,
+} from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatch-notice";
 import { Button } from "@workspace/ui/components/button";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { FilterBar } from "@/components/filter-bar";
@@ -266,12 +274,15 @@ function CitationsPage() {
 		return Array.from(set);
 	}, [activeBaseline.evidenceData?.formal_questions, activeBaseline.metricsData?.questions]);
 
-	const baselineModels = useMemo(() => {
-		const runModel = activeBaseline.runData?.model_name || "doubao-pro-32k";
-		const brandModels = brand?.effectiveModels || [];
-		const combined = Array.from(new Set([runModel, ...brandModels]));
-		return getAvailableModels(combined);
-	}, [activeBaseline.runData?.model_name, brand?.effectiveModels]);
+	const baselineRunModel = activeBaseline.runData?.model_name?.trim() || "";
+	const baselineModels = useMemo(
+		() => getBaselineModelOptions(baselineRunModel),
+		[baselineRunModel],
+	);
+	const baselineModelAliases = useMemo(
+		() => getBaselineModelAliases(baselineRunModel),
+		[baselineRunModel],
+	);
 
 	const probeCitationsCount = useMemo(() => {
 		const probeQuestions: any[] = activeBaseline.evidenceData?.probe_questions || [];
@@ -281,6 +292,7 @@ function CitationsPage() {
 	const effectiveCitationData = activeBaseline.hasBaselineRuns ? baselineCitationData : citationData;
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : citationData?.availableTags || [];
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
+	const effectiveModelAliases = activeBaseline.hasBaselineRuns ? baselineModelAliases : undefined;
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
 		? activeBaseline.isLoading && !activeBaseline.runData
 		: isLoading);
@@ -389,10 +401,50 @@ function CitationsPage() {
 					<FilterBar
 						availableTags={effectiveTags}
 						availableModels={effectiveModels}
+						modelAliases={effectiveModelAliases}
 						showSearch={false}
 						showModelSelector={true}
 					/>
 					<UnsupportedModelNotice />
+				</div>
+			</PageHeader>
+		);
+	}
+
+	if (
+		activeBaseline.hasBaselineRuns &&
+		activeBaseline.runData &&
+		!effectiveLoading &&
+		isBaselineModelMismatch(filters.model, baselineRunModel)
+	) {
+		return (
+			<PageHeader
+				title={isZh ? "信源引用" : "Citations"}
+				subtitle={isZh ? "查看大语言模型在回答您的提示词时引用了哪些来源。" : "See which sources LLMs cite when responding to your prompts."}
+				infoContent={infoContent}
+			>
+				<div className="space-y-6">
+					<DiagnosisRunBanner
+						activeRunId={activeBaseline.activeRunId}
+						runsList={activeBaseline.runsList}
+						runData={activeBaseline.runData}
+						metricsData={activeBaseline.metricsData}
+						onSelectRun={activeBaseline.selectRun}
+						brandId={brandId}
+						isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+					/>
+					<FilterBar
+						availableTags={effectiveTags}
+						availableModels={effectiveModels}
+						modelAliases={effectiveModelAliases}
+						showSearch={false}
+						showModelSelector={true}
+					/>
+					<BaselineModelMismatchNotice
+						runModel={baselineRunModel}
+						selectedModel={filters.model}
+						onClearModel={() => filters.setFilters({ model: undefined })}
+					/>
 				</div>
 			</PageHeader>
 		);
@@ -446,6 +498,7 @@ function CitationsPage() {
 					filters={filters}
 					availableTags={effectiveTags}
 					availableModels={effectiveModels}
+					modelAliases={effectiveModelAliases}
 					showModelSelector
 					isLoading={showFullSkeleton}
 					loadingState={

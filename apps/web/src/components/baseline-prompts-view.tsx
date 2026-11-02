@@ -17,14 +17,21 @@ import {
 import { useLanguage } from "@/lib/language-context";
 import { VisibilityBar, VisibilityBarEmpty } from "@/components/visibility-bar";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
-import { FilterBar, ALL_MODELS_VALUE } from "@/components/filter-bar";
+import { FilterBar } from "@/components/filter-bar";
 import { FilteredListShell } from "@/components/filtered-list-shell";
 import type { useListFilters } from "@/hooks/use-list-filters";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
-import { isUnsupportedBaselineModel, isRunWithinLookback, getAvailableModels } from "@/lib/model-filter";
+import {
+	isBaselineModelMismatch,
+	isModelMatch,
+	isUnsupportedBaselineModel,
+	isRunWithinLookback,
+	getBaselineModelAliases,
+	getBaselineModelOptions,
+} from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatch-notice";
 import { resolveQuestionExecutionStatus } from "@/lib/baseline-status";
-import { useBrand } from "@/hooks/use-brands";
 
 interface BaselinePromptsViewProps {
 	brandId: string | undefined;
@@ -133,13 +140,9 @@ export function BaselinePromptsView({
 		return Array.from(tagSet);
 	}, [questions]);
 
-	const { brand } = useBrand(brandId);
-	const availableModels = useMemo(() => {
-		const runModel = runData?.model_name || "doubao-pro-32k";
-		const brandModels = brand?.effectiveModels || [];
-		const combined = Array.from(new Set([runModel, ...brandModels]));
-		return getAvailableModels(combined);
-	}, [runData?.model_name, brand?.effectiveModels]);
+	const runModel = runData?.model_name?.trim() || "";
+	const availableModels = useMemo(() => getBaselineModelOptions(runModel), [runModel]);
+	const modelAliases = useMemo(() => getBaselineModelAliases(runModel), [runModel]);
 
 	// Filter questions by selected search, tags, lookback, and model
 	const filteredQuestions = useMemo(() => {
@@ -160,12 +163,12 @@ export function BaselinePromptsView({
 				if (!matchText && !matchDimension) return false;
 			}
 			// Model filter
-			if (model && model !== ALL_MODELS_VALUE && model !== runData?.model_name) {
+			if (!isModelMatch(model, runModel)) {
 				return false;
 			}
 			return true;
 		});
-	}, [questions, tags, search, model, lookback, runData?.model_name, runData?.completed_at, runData?.created_at]);
+	}, [questions, tags, search, model, lookback, runModel, runData?.completed_at, runData?.created_at]);
 
 	const p0Summary = metricsData?.p0_summary;
 	const validQuestions =
@@ -356,10 +359,39 @@ export function BaselinePromptsView({
 				<FilterBar
 					availableTags={availableTags}
 					availableModels={availableModels}
+					modelAliases={modelAliases}
 					showSearch
 					showModelSelector
 				/>
 				<UnsupportedModelNotice />
+			</div>
+		);
+	}
+
+	if (runData && isBaselineModelMismatch(model, runModel)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<FilterBar
+					availableTags={availableTags}
+					availableModels={availableModels}
+					modelAliases={modelAliases}
+					showSearch
+					showModelSelector
+				/>
+				<BaselineModelMismatchNotice
+					runModel={runModel}
+					selectedModel={model}
+					onClearModel={() => filters.setFilters({ model: undefined })}
+				/>
 			</div>
 		);
 	}
@@ -389,6 +421,7 @@ export function BaselinePromptsView({
 				filters={filters}
 				availableTags={availableTags}
 				availableModels={availableModels}
+				modelAliases={modelAliases}
 				showSearch
 				showModelSelector
 				showResultCount

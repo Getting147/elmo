@@ -9,12 +9,17 @@ import {
 	useSidebar,
 } from "@workspace/ui/components/sidebar";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
+import { pickDashboardFilterSearch } from "@/lib/dashboard-filter-search";
 
 export interface NavItem {
 	title: string;
 	url: string;
 	icon?: Icon;
 	absolute?: boolean;
+	/** Dashboard pages share filter search params; keep runId/model/lookback/
+	 *  tags/q when moving between them so a filter (including a mismatched
+	 *  model) is not silently dropped. */
+	preserveDashboardFilters?: boolean;
 }
 
 export interface NavGroup {
@@ -52,7 +57,13 @@ export function NavMain({ groups }: { groups: NavGroup[] }) {
 								<SidebarMenuButton asChild tooltip={item.title} isActive={isActive(item.url, item.absolute)}>
 									<Link
 										to={getHref(item.url, item.absolute)}
-										search={item.absolute ? undefined : (prev: any) => (prev?.runId ? { runId: prev.runId } : {})}
+										search={
+											item.absolute
+												? undefined
+												: item.preserveDashboardFilters
+													? pickDashboardFilterSearch
+													: (prev: any) => (prev?.runId ? { runId: prev.runId } : {})
+										}
 										onClick={() => setOpenMobile(false)}
 									>
 										{item.icon && <item.icon />}

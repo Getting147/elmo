@@ -20,14 +20,21 @@ import {
 import { useLanguage } from "@/lib/language-context";
 import { DiagnosisRunBanner } from "@/components/diagnosis-run-banner";
 import type { ActiveBaselineRunResult } from "@/hooks/use-active-baseline-run";
-import { isUnsupportedBaselineModel, isRunWithinLookback, isModelMatch } from "@/lib/model-filter";
+import {
+	isBaselineModelMismatch,
+	isUnsupportedBaselineModel,
+	isRunWithinLookback,
+	isModelMatch,
+} from "@/lib/model-filter";
 import { UnsupportedModelNotice } from "@/components/unsupported-model-notice";
+import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatch-notice";
 
 interface BaselineOpportunitiesViewProps {
 	brandId: string;
 	activeBaseline: ActiveBaselineRunResult;
 	model?: string;
 	lookback?: string;
+	onClearModel?: () => void;
 }
 
 export function BaselineOpportunitiesView({
@@ -35,6 +42,7 @@ export function BaselineOpportunitiesView({
 	activeBaseline,
 	model,
 	lookback,
+	onClearModel,
 }: BaselineOpportunitiesViewProps) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
@@ -147,6 +155,27 @@ export function BaselineOpportunitiesView({
 					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
 				/>
 				<UnsupportedModelNotice />
+			</div>
+		);
+	}
+
+	if (runData && isBaselineModelMismatch(model, runData.model_name)) {
+		return (
+			<div className="space-y-6">
+				<DiagnosisRunBanner
+					activeRunId={activeBaseline.activeRunId}
+					runsList={activeBaseline.runsList}
+					runData={runData}
+					metricsData={metricsData}
+					onSelectRun={activeBaseline.selectRun}
+					brandId={brandId}
+					isRequestedRunMissing={activeBaseline.isRequestedRunMissing}
+				/>
+				<BaselineModelMismatchNotice
+					runModel={runData.model_name}
+					selectedModel={model}
+					onClearModel={onClearModel}
+				/>
 			</div>
 		);
 	}

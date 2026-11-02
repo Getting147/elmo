@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_authed/app/$brand/opportunities")({
 
 function OpportunitiesPage() {
 	const { brand: brandId } = Route.useParams();
-	const { model, lookback } = useListFilters();
+	const { model, lookback, setFilters } = useListFilters();
 	const activeBaseline = useActiveBaselineRun(brandId);
 	const { data, isLoading, isError } = useOpportunities(brandId);
 	const { language } = useLanguage();
@@ -69,6 +69,7 @@ function OpportunitiesPage() {
 					activeBaseline={activeBaseline}
 					model={model}
 					lookback={lookback}
+					onClearModel={() => setFilters({ model: undefined })}
 				/>
 			</PageHeader>
 		);
