@@ -106,6 +106,51 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 		expect(next.summary).toBe("old summary"); // 未传字段保留
 	});
 
+	it("B14: prompts patch clears stale generation metadata but keeps model categories and exclusion record", () => {
+		const next = applyDraftPayloadPatch(
+			{
+				...BASE_PAYLOAD,
+				suggestedCategories: ["Refrigerators", "Robots"],
+				suggestedPromptsMeta: {
+					generated: 5,
+					kept: 2,
+					filteredForBrandOrSku: 1,
+					filteredForProprietary: 1,
+					unconfirmed: 1,
+					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
+				},
+				suggestedPromptsExcluded: [
+					{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
+				],
+				termAssessments: [
+					{ term: "fridge", kind: "generic", evidenceUrl: null, evidenceQuote: null },
+					{ term: "unresolved", kind: false },
+				],
+				termAssessmentChecks: [
+					{ index: 0, term: "fridge", status: "missingSource" },
+					{ index: 1, term: "unresolved", status: "invalidStructure" },
+				],
+			},
+			{ prompts: [{ prompt: "buy fridge" }] },
+		);
+
+		expect(next.suggestedPromptsMeta).toBeUndefined();
+		expect(next.suggestedCategories).toEqual(["Refrigerators", "Robots"]);
+		expect(next.suggestedPromptsExcluded).toEqual([
+			{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
+		]);
+		const restored = JSON.parse(JSON.stringify(next));
+		expect(restored.termAssessments).toEqual([
+			{ term: "fridge", kind: "generic", evidenceUrl: null, evidenceQuote: null },
+			{ term: "unresolved", kind: false },
+		]);
+		expect(restored.termAssessmentChecks).toEqual([
+			{ index: 0, term: "fridge", status: "missingSource" },
+			{ index: 1, term: "unresolved", status: "invalidStructure" },
+		]);
+	});
+
 	it("productLines：confirmed 替换 + evidence→sourceEvidenceChecked 默认 0 + unverified 保留", () => {
 		const next = applyDraftPayloadPatch(
 			{ ...BASE_PAYLOAD },

@@ -68,6 +68,10 @@ interface PromptsListEditorProps {
 	showSystemTags?: boolean;
 	/** Available category options for autocomplete (e.g. from product lines). */
 	categoryOptions?: string[];
+	/** Why the list is empty or why some suggestions were filtered. */
+	notice?: string;
+	/** Shown when there are no category options, so an empty autocomplete is not silent. */
+	categoryHint?: string;
 	/** `_key`s of rows edited since the last save, flagged with an accent rail
 	 *  so a change is findable in a list of up to {@link MAX_PROMPTS} rows. */
 	changedKeys?: ReadonlySet<string>;
@@ -78,10 +82,15 @@ export function PromptsListEditor({
 	onChange,
 	showSystemTags = true,
 	categoryOptions,
+	notice,
+	categoryHint,
 	changedKeys,
 }: PromptsListEditorProps) {
 	const { language, t } = useLanguage();
 	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+	// Row whose category input was last focused, so its candidate chips stay
+	// clickable without stealing focus from the input.
+	const [activeCategoryIndex, setActiveCategoryIndex] = useState<number | null>(null);
 
 	const allCategoryOptions = useMemo(() => {
 		const set = new Set<string>(categoryOptions ?? []);
@@ -123,6 +132,23 @@ export function PromptsListEditor({
 		if (prompts.length >= MAX_PROMPTS) return;
 		onChange([...prompts, newPromptEntry()]);
 	};
+
+	const categoryChips = (index: number) =>
+		activeCategoryIndex === index && allCategoryOptions.length > 0 ? (
+			<div className="flex flex-wrap gap-1 pt-1">
+				{allCategoryOptions.map((option) => (
+					<button
+						key={option}
+						type="button"
+						onMouseDown={(event) => event.preventDefault()}
+						onClick={() => handleCategoryChange(index, option)}
+						className="rounded border bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+					>
+						{option}
+					</button>
+				))}
+			</div>
+		) : null;
 
 	// Bulk paste. The parse is pure and lives in @workspace/lib so the rules
 	// (trim, dedupe, cap) are tested without a DOM, and it runs on every
@@ -212,6 +238,12 @@ export function PromptsListEditor({
 					<option key={c} value={c} />
 				))}
 			</datalist>
+
+			{notice && (
+				<p className="text-xs text-amber-600 dark:text-amber-400" role="status">
+					{notice}
+				</p>
+			)}
 
 			{liveSelectedCount > 0 && (
 				<div className="hidden md:flex flex-wrap items-center justify-between gap-x-2 gap-y-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
@@ -304,6 +336,10 @@ export function PromptsListEditor({
 				</div>
 			</div>
 
+			{categoryHint && (
+				<p className="text-xs text-muted-foreground">{categoryHint}</p>
+			)}
+
 			{prompts.length === 0 ? (
 				<div className="border-2 border-dashed border-muted rounded-lg min-h-48 flex items-center justify-center">
 					<div className="text-center py-8 text-muted-foreground">
@@ -351,6 +387,7 @@ export function PromptsListEditor({
 												list="prompt-category-options"
 												value={promptCategory}
 												onChange={(e) => handleCategoryChange(index, e.target.value)}
+												onFocus={() => setActiveCategoryIndex(index)}
 												placeholder={t.selectCategoryPlaceholder}
 												className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 											/>
@@ -359,6 +396,7 @@ export function PromptsListEditor({
 													{t.unclassifiedWarning}
 												</p>
 											)}
+											{categoryChips(index)}
 										</div>
 										<div className="flex-1">
 											<TagsInput
@@ -396,6 +434,7 @@ export function PromptsListEditor({
 											list="prompt-category-options"
 											value={promptCategory}
 											onChange={(e) => handleCategoryChange(index, e.target.value)}
+											onFocus={() => setActiveCategoryIndex(index)}
 											placeholder={t.selectCategoryPlaceholder}
 											className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 										/>
@@ -404,6 +443,7 @@ export function PromptsListEditor({
 												{t.unclassifiedWarning}
 											</p>
 										)}
+										{categoryChips(index)}
 									</div>
 									<TagsInput
 										value={customTags}

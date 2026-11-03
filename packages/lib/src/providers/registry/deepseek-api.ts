@@ -2,7 +2,7 @@
  * DeepSeek API provider — BUG-001 / B02 (平台内部 LLM 统一 DeepSeek)
  *
  * 官方 OpenAI 兼容端点：https://api.deepseek.com/chat/completions
- * 支持模型：deepseek-chat (DeepSeek-V3), deepseek-reasoner (DeepSeek-R1)
+ * 保留配置的官方模型名称，包括 deepseek-flash。
  *
  * 关键特性：
  * 1. 结构化输出：采用官方 response_format: { type: "json_object" }
@@ -59,8 +59,8 @@ export function getDeepSeekBaseUrl(): string {
 /** 获取默认模型 */
 export function getDeepSeekModel(): string {
 	const model = process.env.DEEPSEEK_MODEL || process.env.LLM_MODEL || DEFAULT_MODEL;
-	// 避免 python 侧的 mock 别名干扰，标准模型名为 deepseek-chat 或 deepseek-reasoner
-	if (model === "deepseek-flash" || model === "gpt-4o-mini") {
+	// 保留旧合成测试别名的兼容，不替换官方模型名称。
+	if (model === "gpt-4o-mini") {
 		return "deepseek-chat";
 	}
 	return model;

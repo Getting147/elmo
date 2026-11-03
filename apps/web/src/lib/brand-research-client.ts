@@ -5,6 +5,24 @@
  * 端点契约见 research/index.ts + drafts/$draftId.ts。
  */
 
+import type { TermAssessmentCheck, TermAssessmentsInput } from "@workspace/lib/onboarding";
+
+export interface SuggestedPromptsMeta {
+	generated: number;
+	kept: number;
+	filteredForBrandOrSku: number;
+	filteredForProprietary: number;
+	unconfirmed: number;
+	skippedDuplicateOrEmpty: number;
+	truncatedByCap: number;
+}
+
+export interface ExcludedSuggestedPrompt {
+	prompt: string;
+	targetReference: string | null;
+	reason: string;
+}
+
 export interface ResearchDraftPayload {
 	brandName: string;
 	website: string;
@@ -12,6 +30,11 @@ export interface ResearchDraftPayload {
 	aliases: string[];
 	competitors: Array<{ name: string; domains: string[]; aliases: string[] }>;
 	suggestedPrompts: Array<{ prompt: string; tags: string[] }>;
+	suggestedCategories?: string[];
+	suggestedPromptsMeta?: SuggestedPromptsMeta;
+	suggestedPromptsExcluded?: ExcludedSuggestedPrompt[];
+	termAssessments?: TermAssessmentsInput;
+	termAssessmentChecks?: TermAssessmentCheck[];
 	summary?: string;
 	description?: string;
 	productLines?: {

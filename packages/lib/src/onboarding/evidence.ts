@@ -17,6 +17,12 @@ export interface EvidenceCheckResult {
 	code?: EvidenceFailureCode;
 }
 
+export function getCrawledPageText(evidenceUrl: string, crawledPageTexts: Map<string, string>): string | undefined {
+	const normalized = cleanUrl(evidenceUrl);
+	if (!normalized) return undefined;
+	return crawledPageTexts.get(normalized) ?? crawledPageTexts.get(evidenceUrl);
+}
+
 /**
  * Levenshtein distance with cap (early termination).
  * Returns ≤ maxDist if edit distance within cap, else > maxDist.
@@ -72,7 +78,7 @@ export function validateEvidence(args: {
 	}
 	// crawledPageTexts key 通常是 normalized URL；若 key 与原 URL 共存
 	// （历史数据未 normalize），按归一化精确匹配优先 + 原 URL 兜底
-	const pageText = crawledPageTexts.get(normalized) ?? crawledPageTexts.get(evidenceUrl);
+	const pageText = getCrawledPageText(evidenceUrl, crawledPageTexts);
 	if (pageText === undefined) {
 		return { ok: false, code: "URL_NOT_IN_CRAWL" };
 	}
