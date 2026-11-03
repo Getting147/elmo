@@ -158,6 +158,11 @@ DataForSEO prompt text is limited to 500 characters. Country localization is int
 
 ## Direct model APIs
 
+Internal research uses the official DeepSeek API. Set `DEEPSEEK_MODEL=deepseek-flash`
+(or the compatible `LLM_MODEL` field) to send `deepseek-flash` unchanged in the
+request. `DEEPSEEK_MODEL` takes precedence when both fields are set. The model
+reported in the response is recorded separately from the requested model.
+
 These hit the provider API directly — cheaper per token than scrapers, but they don't represent the actual ChatGPT / Google AI Mode experience. Use them alongside a scraper when you want extra Claude or OSS model coverage.
 
 | Provider | Tracks | Cost per prompt/month* |

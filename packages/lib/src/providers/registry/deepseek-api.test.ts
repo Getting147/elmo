@@ -76,6 +76,14 @@ describe("deepseek-api isConfigured & credentials", () => {
 		process.env.DEEPSEEK_MODEL = "deepseek-reasoner";
 		expect(getDeepSeekModel()).toBe("deepseek-reasoner");
 	});
+
+	it("preserves the official Flash model from either supported configuration field", () => {
+		process.env.LLM_MODEL = "deepseek-flash";
+		expect(getDeepSeekModel()).toBe("deepseek-flash");
+		process.env.DEEPSEEK_MODEL = "deepseek-flash";
+		process.env.LLM_MODEL = "deepseek-chat";
+		expect(getDeepSeekModel()).toBe("deepseek-flash");
+	});
 });
 
 describe("deepseek-api stripThinkingBlocks", () => {
@@ -124,6 +132,24 @@ describe("deepseek-api normalizeDeepSeekOutput", () => {
 });
 
 describe("deepseek-api runStructuredResearch", () => {
+	it("sends configured deepseek-flash unchanged in the one-shot research request", async () => {
+		process.env.DEEPSEEK_MODEL = "deepseek-flash";
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+			model: "deepseek-flash",
+			choices: [{ message: { content: '{"brandName":"合成品牌"}' }, finish_reason: "stop" }],
+		}));
+		const result = await deepseekApi.runStructuredResearch?.({
+			prompt: "Synthetic research",
+			schema: z.object({ brandName: z.string() }),
+			maxRetries: 0,
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toBe("https://api.deepseek.com/chat/completions");
+		expect(JSON.parse(init.body).model).toBe("deepseek-flash");
+		expect(result?.modelVersion).toBe("deepseek-flash");
+	});
+
 	it("calls chat completions with json_object format and parses via Zod schema", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(200, {
