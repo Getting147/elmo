@@ -68,9 +68,7 @@ const promptSchema = z.object({
 		.array(z.string())
 		.describe(`1-3 tags per prompt (ideally 1-2), drawn from the shared brand-tailored vocabulary. ${TAG_GUIDANCE}`),
 	targetReference: z
-		.string()
-		.nullable()
-		.optional()
+		.unknown()
 		.describe(
 			"Where this prompt points: 'none' = contains no target brand/alias and does not point at the target's proprietary product, series or model (generic category, use-case, persona, feature, budget or purchase-decision questions are none); 'brand' = the prompt text contains the target brand or an alias (also use 'brand' when it contains both brand and proprietary product); 'proprietary' = no direct brand mention but clearly points at the target's proprietary product, series or model; 'uncertain' = cannot be determined reliably. Prefer 'none' prompts; never label a branded prompt as 'none' to fill the quota.",
 		),
@@ -635,9 +633,11 @@ function normalize(args: {
 			if (category) categoryTerms.add(category.toLowerCase());
 		}
 
-		// Trusted proprietary identifiers: only SKU names/models whose evidence
-		// passed validateEvidence against the crawled brand pages. A name the
-		// model merely placed in a SKU field is not proprietary proof.
+		// validateEvidence proves that a string exists on a crawled page, not
+		// that the string is proprietary: generic category words can appear in
+		// their own site copy. Only the explicit `model` field (defined by the
+		// schema as a model number distinct from the name) is a proprietary
+		// identifier; SKU names alone are never upgraded to proprietary proof.
 		const evidenceNeedles = new Set<string>();
 		if (args.crawledPageTexts) {
 			for (const line of raw.productLines ?? []) {
@@ -646,18 +646,13 @@ function normalize(args: {
 				if (!Array.isArray(lineObj.skus)) continue;
 				for (const sku of lineObj.skus) {
 					if (!sku || typeof sku !== "object") continue;
-					const skuObj = sku as { name?: unknown; model?: unknown; evidenceUrl?: unknown };
+					const skuObj = sku as { model?: unknown; evidenceUrl?: unknown };
 					const evidenceUrl = typeof skuObj.evidenceUrl === "string" ? skuObj.evidenceUrl : "";
 					if (!evidenceUrl.trim()) continue;
-					for (const candidate of [skuObj.name, skuObj.model]) {
-						const value = typeof candidate === "string" ? normalizeTag(candidate).toLowerCase() : "";
-						if (value.length <= 1) continue;
-						if (
-							validateEvidence({ skuName: value, evidenceUrl, crawledPageTexts: args.crawledPageTexts })
-								.ok
-						) {
-							evidenceNeedles.add(value);
-						}
+					const model = typeof skuObj.model === "string" ? normalizeTag(skuObj.model).toLowerCase() : "";
+					if (model.length <= 1) continue;
+					if (validateEvidence({ skuName: model, evidenceUrl, crawledPageTexts: args.crawledPageTexts }).ok) {
+						evidenceNeedles.add(model);
 					}
 				}
 			}

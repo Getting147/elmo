@@ -13,7 +13,7 @@ vi.mock("../website-excerpt", () => ({
 }));
 
 import { getWebsiteExcerpt } from "../website-excerpt";
-import { analyzeBrand, buildAnalysisContext } from "./analyze";
+import { analyzeBrand, buildAnalysisContext, normalizeAnalysisResult } from "./analyze";
 import { runStructuredResearchPrompt } from "./llm";
 
 afterEach(() => {
@@ -530,8 +530,10 @@ describe("analyzeBrand", () => {
 		]);
 	});
 
-	it("B14-B: evidence-confirmed proprietary names override a none label", async () => {
-		vi.mocked(getWebsiteExcerpt).mockResolvedValueOnce("华星设备官网：星澜系列与通用空调产品。");
+	it("B14-BPLAN-F01: only an evidence-confirmed model number is proprietary, not a name that merely exists", async () => {
+		vi.mocked(getWebsiteExcerpt).mockResolvedValueOnce(
+			"华星设备官网：星澜系列与通用空调产品，KFR-35GW 型号参数。",
+		);
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "华星设备",
 			additionalDomains: [],
@@ -540,21 +542,24 @@ describe("analyzeBrand", () => {
 			productLines: [
 				{
 					name: "设备",
-					skus: [{ name: "星澜", model: null, oneLiner: "", evidenceUrl: "https://example.invalid/" }],
+					skus: [
+						{ name: "星澜", model: "KFR-35GW", oneLiner: "", evidenceUrl: "https://example.invalid/" },
+					],
 				},
 			],
 			suggestedPrompts: [
-				{ prompt: "星澜怎么样", category: "设备", tags: [], targetReference: "none" },
+				{ prompt: "kfr-35gw 怎么样", category: "设备", tags: [], targetReference: "none" },
 				{ prompt: "空调哪个牌子好", category: "设备", tags: [], targetReference: "none" },
+				{ prompt: "星澜怎么样", category: "设备", tags: [], targetReference: "none" },
 			],
 		});
 
 		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
 
-		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好"]);
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好", "星澜怎么样"]);
 		expect(result.suggestedPromptsMeta).toEqual({
-			generated: 2,
-			kept: 1,
+			generated: 3,
+			kept: 2,
 			filteredForBrandOrSku: 0,
 			filteredForProprietary: 1,
 			unconfirmed: 0,
@@ -562,8 +567,55 @@ describe("analyzeBrand", () => {
 			truncatedByCap: 0,
 		});
 		expect(result.suggestedPromptsExcluded).toEqual([
-			{ prompt: "星澜怎么样", targetReference: "none", reason: "evidenceProprietary" },
+			{ prompt: "kfr-35gw 怎么样", targetReference: "none", reason: "evidenceProprietary" },
 		]);
+	});
+
+	it("B14-BPLAN-F01: a generic category name appearing on the official site is not proprietary proof", async () => {
+		vi.mocked(getWebsiteExcerpt).mockResolvedValueOnce(
+			"华星设备提供空调等通用品类。本文仅介绍通用空调的选购和使用，不声明任何专有系列或型号。",
+		);
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "华星设备",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			productLines: [
+				{
+					name: "设备",
+					skus: [{ name: "空调", model: null, oneLiner: "", evidenceUrl: "https://example.invalid/" }],
+				},
+			],
+			suggestedPrompts: [{ prompt: "空调哪个牌子好", category: "设备", tags: [], targetReference: "none" }],
+		});
+
+		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好"]);
+		expect(result.suggestedPromptsMeta?.filteredForProprietary).toBe(0);
+	});
+
+	it("B14-BPLAN-F03: non-string targetReference is isolated as one unconfirmed row at the schema boundary", async () => {
+		const ctx = await buildAnalysisContext({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+		for (const bad of [17, false, { value: "none" }]) {
+			const parsed = ctx.schema.parse({
+				brandName: "华星设备",
+				additionalDomains: [],
+				aliases: [],
+				competitors: [{ name: "合成竞品", domains: [], aliases: [] }],
+				summary: "合成品牌摘要",
+				description: "合成品牌研究",
+				productLines: [{ name: "设备", skus: [] }],
+				suggestedPrompts: [
+					{ prompt: "空调哪个牌子好", category: "设备", tags: [], targetReference: bad },
+					{ prompt: "适合老年人的洗衣机怎么选", category: "设备", tags: [], targetReference: "none" },
+				],
+			});
+			const result = normalizeAnalysisResult(parsed, ctx);
+			expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["适合老年人的洗衣机怎么选"]);
+			expect(result.suggestedPromptsMeta?.unconfirmed).toBe(1);
+			expect(result.competitors).toHaveLength(1);
+		}
 	});
 
 	it("B14-B: a direct brand hit filters even when the model labels the prompt none", async () => {
