@@ -92,7 +92,9 @@ describe("c3-job-fix5 processResearchJob — 4 态转移", () => {
 	});
 
 	it("① happy path: queued→running→analyze 成功→payload+done", async () => {
-		analyzeBrandMock.mockResolvedValue({ aliases: [], competitors: [] } as never);
+		const termAssessments = [{ term: "设备", kind: "generic", evidenceUrl: null, evidenceQuote: null }];
+		const termAssessmentChecks = [{ index: 0, term: "设备", status: "missingSource" }];
+		analyzeBrandMock.mockResolvedValue({ aliases: [], competitors: [], termAssessments, termAssessmentChecks });
 
 		await processResearchJob([makeJob()]);
 
@@ -102,6 +104,8 @@ describe("c3-job-fix5 processResearchJob — 4 态转移", () => {
 		expect(setMock.mock.calls[1][0]).toMatchObject({ researchStatus: "done" });
 		// payload 落库
 		expect(setMock.mock.calls[1][0].payload).toMatchObject({ aliases: [] });
+		expect(setMock.mock.calls[1][0].payload.termAssessments).toEqual(termAssessments);
+		expect(setMock.mock.calls[1][0].payload.termAssessmentChecks).toEqual(termAssessmentChecks);
 		expect(analyzeBrandMock).toHaveBeenCalledWith(
 			expect.objectContaining({
 				website: "https://x.com",

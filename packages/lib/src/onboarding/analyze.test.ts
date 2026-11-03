@@ -370,11 +370,15 @@ describe("analyzeBrand", () => {
 	});
 
 	it("B14-B: targetReference none keeps generic categories while brand/proprietary labels filter", async () => {
+		const source = "空调和冰箱在此都是通用品类。";
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "美的",
 			additionalDomains: [],
 			aliases: ["美的集团", "Midea"],
 			competitors: [{ name: "格力", domains: ["gree.com"], aliases: [] }],
+			termAssessments: ["空调", "冰箱"].map((term) => ({
+				term, kind: "generic", evidenceUrl: "https://midea.com/", evidenceQuote: source,
+			})),
 			productLines: [
 				{ name: "空调", skus: [{ name: "空调", model: "空调", oneLiner: "", evidenceUrl: null }] },
 				{ name: "冰箱", skus: [{ name: "冰箱", model: null, oneLiner: "", evidenceUrl: null }] },
@@ -390,7 +394,10 @@ describe("analyzeBrand", () => {
 			],
 		});
 
-		const result = await analyzeBrand({ website: "midea.com", brandName: "美的集团（中国）", language: "zh" });
+		const result = await analyzeBrand({
+			website: "midea.com", brandName: "美的集团（中国）", language: "zh",
+			crawledPageTexts: new Map([["https://midea.com/", source]]),
+		});
 
 		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好", "买冰箱选择什么品牌"]);
 		expect(result.suggestedCategories).toEqual(["空调", "冰箱"]);
@@ -453,11 +460,15 @@ describe("analyzeBrand", () => {
 	});
 
 	it("B14-B: generic SKU names with none labels stay, proprietary labels filter regardless of glyphs", async () => {
+		const source = "空调、3D打印机、USB集线器均为通用品类。";
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "华星设备",
 			additionalDomains: [],
 			aliases: [],
 			competitors: [],
+			termAssessments: ["空调", "3D打印机", "USB集线器"].map((term) => ({
+				term, kind: "generic", evidenceUrl: "https://example.invalid/", evidenceQuote: source,
+			})),
 			productLines: [
 				{
 					name: "设备",
@@ -479,7 +490,10 @@ describe("analyzeBrand", () => {
 			],
 		});
 
-		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+		const result = await analyzeBrand({
+			website: "example.invalid", brandName: "华星设备", language: "zh",
+			crawledPageTexts: new Map([["https://example.invalid/", source]]),
+		});
 
 		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual([
 			"空调哪个牌子好",
@@ -530,15 +544,19 @@ describe("analyzeBrand", () => {
 		]);
 	});
 
-	it("B14-BPLAN-F01: only an evidence-confirmed model number is proprietary, not a name that merely exists", async () => {
+	it("protects an assessed proprietary model and leaves an unassessed name unconfirmed", async () => {
 		vi.mocked(getWebsiteExcerpt).mockResolvedValueOnce(
-			"华星设备官网：星澜系列与通用空调产品，KFR-35GW 型号参数。",
+			"华星设备官网：星澜系列与通用空调产品。KFR-35GW 是华星设备的专有型号。",
 		);
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "华星设备",
 			additionalDomains: [],
 			aliases: [],
 			competitors: [],
+			termAssessments: [{
+				term: "KFR-35GW", kind: "proprietary", evidenceUrl: "https://example.invalid/",
+				evidenceQuote: "KFR-35GW 是华星设备的专有型号。",
+			}],
 			productLines: [
 				{
 					name: "设备",
@@ -556,18 +574,19 @@ describe("analyzeBrand", () => {
 
 		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
 
-		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好", "星澜怎么样"]);
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好"]);
 		expect(result.suggestedPromptsMeta).toEqual({
 			generated: 3,
-			kept: 2,
+			kept: 1,
 			filteredForBrandOrSku: 0,
 			filteredForProprietary: 1,
-			unconfirmed: 0,
+			unconfirmed: 1,
 			skippedDuplicateOrEmpty: 0,
 			truncatedByCap: 0,
 		});
 		expect(result.suggestedPromptsExcluded).toEqual([
 			{ prompt: "kfr-35gw 怎么样", targetReference: "none", reason: "evidenceProprietary" },
+			{ prompt: "星澜怎么样", targetReference: "none", reason: "unconfirmedTerm" },
 		]);
 	});
 
@@ -580,6 +599,10 @@ describe("analyzeBrand", () => {
 			additionalDomains: [],
 			aliases: [],
 			competitors: [],
+			termAssessments: [{
+				term: "空调", kind: "generic", evidenceUrl: "https://example.invalid/",
+				evidenceQuote: "华星设备提供空调等通用品类。",
+			}],
 			productLines: [
 				{
 					name: "设备",

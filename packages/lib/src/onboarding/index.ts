@@ -6,6 +6,8 @@ export {
 	type OnboardingCompetitor,
 	type OnboardingPrompt,
 	type OnboardingSuggestion,
+	type TermAssessmentCheck,
+	type TermAssessmentsInput,
 } from "./analyze";
 export {
 	computeExpiresAt,

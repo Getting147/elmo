@@ -49,6 +49,19 @@ Combining keywords, competitors, and personas, Elmo generates a set of tracking 
 
 Review the generated prompts and select the ones you want to track. You can also add custom prompts.
 
+Automatically included suggestions must be unbranded. Product, series and model
+terms are assessed in the same research response, regardless of which SKU field
+contains them. A judgement can be used only when its source URL belongs to the
+supplied crawled pages and its quote matches that page and names the term.
+Source verification confirms the quote, not proprietary rights or the accuracy
+of the model's semantic judgement.
+
+Suggestions containing unresolved terms or conflicting assessments remain
+unconfirmed rather than being silently accepted as generic. Original assessments
+and source-check results are retained in the research draft. Missing fields in
+older responses do not discard the rest of the research, rewrite saved prompts,
+or trigger another model call; review doubtful suggestions manually.
+
 ## After the Wizard
 
 Once you confirm the prompts, Elmo marks your brand as onboarded and you're taken to the main dashboard. The worker will begin querying AI models on the next scheduled run.

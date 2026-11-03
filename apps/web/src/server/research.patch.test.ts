@@ -123,6 +123,14 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 				suggestedPromptsExcluded: [
 					{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
 				],
+				termAssessments: [
+					{ term: "fridge", kind: "generic", evidenceUrl: null, evidenceQuote: null },
+					{ term: "unresolved", kind: false },
+				],
+				termAssessmentChecks: [
+					{ index: 0, term: "fridge", status: "missingSource" },
+					{ index: 1, term: "unresolved", status: "invalidStructure" },
+				],
 			},
 			{ prompts: [{ prompt: "buy fridge" }] },
 		);
@@ -131,6 +139,15 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 		expect(next.suggestedCategories).toEqual(["Refrigerators", "Robots"]);
 		expect(next.suggestedPromptsExcluded).toEqual([
 			{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
+		]);
+		const restored = JSON.parse(JSON.stringify(next));
+		expect(restored.termAssessments).toEqual([
+			{ term: "fridge", kind: "generic", evidenceUrl: null, evidenceQuote: null },
+			{ term: "unresolved", kind: false },
+		]);
+		expect(restored.termAssessmentChecks).toEqual([
+			{ index: 0, term: "fridge", status: "missingSource" },
+			{ index: 1, term: "unresolved", status: "invalidStructure" },
 		]);
 	});
 

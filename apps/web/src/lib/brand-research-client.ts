@@ -5,6 +5,8 @@
  * 端点契约见 research/index.ts + drafts/$draftId.ts。
  */
 
+import type { TermAssessmentCheck, TermAssessmentsInput } from "@workspace/lib/onboarding";
+
 export interface SuggestedPromptsMeta {
 	generated: number;
 	kept: number;
@@ -31,6 +33,8 @@ export interface ResearchDraftPayload {
 	suggestedCategories?: string[];
 	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	suggestedPromptsExcluded?: ExcludedSuggestedPrompt[];
+	termAssessments?: TermAssessmentsInput;
+	termAssessmentChecks?: TermAssessmentCheck[];
 	summary?: string;
 	description?: string;
 	productLines?: {
