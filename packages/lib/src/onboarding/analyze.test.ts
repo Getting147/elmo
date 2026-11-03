@@ -164,11 +164,11 @@ describe("analyzeBrand", () => {
 			suggestedPrompts: [
 				// Tags are now free-form / brand-tailored. Normalize step lowercases
 				// + kebab-cases + dedupes + caps at 3 per prompt.
-				{ prompt: "Best Widgets", tags: ["Industrial Supplies", "Manufacturing"] },
-				{ prompt: "best widgets", tags: ["industrial-supplies"] }, // duplicate after lowercasing
+				{ prompt: "Best Widgets", tags: ["Industrial Supplies", "Manufacturing"], targetReference: "none" },
+				{ prompt: "best widgets", tags: ["industrial-supplies"], targetReference: "none" }, // duplicate after lowercasing
 				// Owner 2026-09-08: branded prompts ("acme …") are dropped by the
 				// unbranded guard — keep the tag-cap case generic instead.
-				{ prompt: "widget alternatives", tags: ["alternatives", "industrial supplies", "buying guide", "extra-tag"] },
+				{ prompt: "widget alternatives", tags: ["alternatives", "industrial supplies", "buying guide", "extra-tag"], targetReference: "none" },
 			],
 		});
 
@@ -249,6 +249,7 @@ describe("analyzeBrand", () => {
 			suggestedPrompts: Array.from({ length: 50 }, (_, i) => ({
 				prompt: `prompt ${i}`,
 				tags: ["best-of"],
+				targetReference: "none",
 			})),
 		});
 
@@ -306,26 +307,31 @@ describe("analyzeBrand", () => {
 					prompt: "轻钢别墅造价多少钱一平米",
 					category: "轻钢房屋",
 					tags: ["造价预算", "选型指南"],
+					targetReference: "none",
 				},
 				{
 					prompt: "工程营地集装箱房定做厂家",
 					category: "集装箱房",
 					tags: ["dim:集装箱房", "厂家定制"],
+					targetReference: "none",
 				},
 				{
 					prompt: "装配式建筑政策补贴标准",
 					category: null,
 					tags: ["政策解读"],
+					targetReference: "none",
 				},
 				{
 					prompt: "太空舱民宿设计规范",
 					category: "dim:太空舱",
 					tags: ["设计"],
+					targetReference: "none",
 				},
 				{
 					prompt: "集装箱活动房二手交易平台",
 					category: "!!!",
 					tags: ["二手交易"],
+					targetReference: "none",
 				},
 			],
 		});
@@ -363,29 +369,24 @@ describe("analyzeBrand", () => {
 		expect(result.suggestedPrompts[4].tags).toEqual(["二手交易"]);
 	});
 
-	it("B14: generic SKU descriptors do not drop generic Chinese prompts; brand and model codes still filter", async () => {
+	it("B14-B: targetReference none keeps generic categories while brand/proprietary labels filter", async () => {
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "美的",
 			additionalDomains: [],
 			aliases: ["美的集团", "Midea"],
-			competitors: [
-				{ name: "格力", domains: ["gree.com"], aliases: [] },
-				{ name: "海尔", domains: ["haier.com"], aliases: [] },
-				{ name: "海信", domains: ["hisense.com"], aliases: [] },
-			],
+			competitors: [{ name: "格力", domains: ["gree.com"], aliases: [] }],
 			productLines: [
-				// DeepSeek records generic descriptors here when no model number is known.
 				{ name: "空调", skus: [{ name: "空调", model: "空调", oneLiner: "", evidenceUrl: null }] },
 				{ name: "冰箱", skus: [{ name: "冰箱", model: null, oneLiner: "", evidenceUrl: null }] },
 				{ name: "空调型号", skus: [{ name: "KFR-35GW", model: null, oneLiner: "", evidenceUrl: null }] },
 			],
 			suggestedPrompts: [
-				{ prompt: "空调哪个牌子好", category: "空调", tags: ["选购"] },
-				{ prompt: "买冰箱选择什么品牌", category: "冰箱", tags: [] },
-				{ prompt: "美的空调怎么样", category: "空调", tags: [] },
-				{ prompt: "KFR-35GW 适合多大面积", category: "空调", tags: [] },
-				{ prompt: "空调哪个牌子好", category: "空调", tags: [] },
-				{ prompt: "", category: "空调", tags: [] },
+				{ prompt: "空调哪个牌子好", category: "空调", tags: ["选购"], targetReference: "none" },
+				{ prompt: "买冰箱选择什么品牌", category: "冰箱", tags: [], targetReference: "none" },
+				{ prompt: "美的空调怎么样", category: "空调", tags: [], targetReference: "brand" },
+				{ prompt: "KFR-35GW 适合多大面积", category: "空调", tags: [], targetReference: "proprietary" },
+				{ prompt: "空调哪个牌子好", category: "空调", tags: [], targetReference: "none" },
+				{ prompt: "", category: "空调", tags: [], targetReference: "none" },
 			],
 		});
 
@@ -396,19 +397,26 @@ describe("analyzeBrand", () => {
 		expect(result.suggestedPromptsMeta).toEqual({
 			generated: 6,
 			kept: 2,
-			filteredForBrandOrSku: 2,
+			filteredForBrandOrSku: 1,
+			filteredForProprietary: 1,
+			unconfirmed: 0,
 			skippedDuplicateOrEmpty: 2,
+			truncatedByCap: 0,
 		});
+		expect(result.suggestedPromptsExcluded).toEqual([
+			{ prompt: "美的空调怎么样", targetReference: "brand", reason: "brandOrAlias" },
+			{ prompt: "kfr-35gw 适合多大面积", targetReference: "proprietary", reason: "proprietary" },
+		]);
 	});
 
-	it("B14: keeps the model's category even when every prompt is filtered, and reports an empty generation", async () => {
+	it("B14-B: keeps the model's category when every prompt is filtered, and reports an empty generation", async () => {
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "美的",
 			additionalDomains: [],
 			aliases: ["Midea"],
 			competitors: [{ name: "格力", domains: ["gree.com"], aliases: [] }],
 			productLines: [{ name: "空调", skus: [] }],
-			suggestedPrompts: [{ prompt: "美的空调推荐", category: "空调", tags: [] }],
+			suggestedPrompts: [{ prompt: "美的空调推荐", category: "空调", tags: [], targetReference: "brand" }],
 		});
 		const filtered = await analyzeBrand({ website: "midea.com", brandName: "美的", language: "zh" });
 		expect(filtered.suggestedPrompts).toEqual([]);
@@ -417,7 +425,10 @@ describe("analyzeBrand", () => {
 			generated: 1,
 			kept: 0,
 			filteredForBrandOrSku: 1,
+			filteredForProprietary: 0,
+			unconfirmed: 0,
 			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
 		});
 
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
@@ -434,11 +445,14 @@ describe("analyzeBrand", () => {
 			generated: 0,
 			kept: 0,
 			filteredForBrandOrSku: 0,
+			filteredForProprietary: 0,
+			unconfirmed: 0,
 			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
 		});
 	});
 
-	it("B14-R01-F01: category-seeking questions keep generic SKU names while proprietary names stay filtered", async () => {
+	it("B14-B: generic SKU names with none labels stay, proprietary labels filter regardless of glyphs", async () => {
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "华星设备",
 			additionalDomains: [],
@@ -457,11 +471,11 @@ describe("analyzeBrand", () => {
 				},
 			],
 			suggestedPrompts: [
-				{ prompt: "空调哪个牌子好", category: "设备", tags: [] },
-				{ prompt: "星澜设备怎么样", category: "设备", tags: [] },
-				{ prompt: "orion设备怎么样", category: "设备", tags: [] },
-				{ prompt: "3d打印机哪个牌子好", category: "设备", tags: [] },
-				{ prompt: "usb集线器哪个牌子好", category: "设备", tags: [] },
+				{ prompt: "空调哪个牌子好", category: "设备", tags: [], targetReference: "none" },
+				{ prompt: "星澜设备怎么样", category: "设备", tags: [], targetReference: "proprietary" },
+				{ prompt: "orion设备怎么样", category: "设备", tags: [], targetReference: "proprietary" },
+				{ prompt: "3d打印机哪个牌子好", category: "设备", tags: [], targetReference: "none" },
+				{ prompt: "usb集线器哪个牌子好", category: "设备", tags: [], targetReference: "none" },
 			],
 		});
 
@@ -475,22 +489,97 @@ describe("analyzeBrand", () => {
 		expect(result.suggestedPromptsMeta).toEqual({
 			generated: 5,
 			kept: 3,
-			filteredForBrandOrSku: 2,
+			filteredForBrandOrSku: 0,
+			filteredForProprietary: 2,
+			unconfirmed: 0,
 			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
 		});
 	});
 
-	it("B14-R01-F01: an SKU name equal to its business line is a category label, not a proprietary needle", async () => {
+	it("B14-B: missing or invalid targetReference stays unconfirmed instead of defaulting to none", async () => {
 		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
 			brandName: "华星设备",
 			additionalDomains: [],
 			aliases: [],
 			competitors: [],
-			productLines: [{ name: "空调", skus: [{ name: "空调", model: null, oneLiner: "", evidenceUrl: null }] }],
-			suggestedPrompts: [{ prompt: "空调怎么样", category: "空调", tags: [] }],
+			productLines: [{ name: "设备", skus: [] }],
+			suggestedPrompts: [
+				{ prompt: "空调哪个牌子好", category: "设备", tags: [] },
+				{ prompt: "冰箱怎么选", category: "设备", tags: [], targetReference: "sometimes" },
+				{ prompt: "洗衣机哪家好", category: "设备", tags: [], targetReference: "uncertain" },
+			],
 		});
 
 		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
-		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调怎么样"]);
+
+		expect(result.suggestedPrompts).toEqual([]);
+		expect(result.suggestedPromptsMeta).toEqual({
+			generated: 3,
+			kept: 0,
+			filteredForBrandOrSku: 0,
+			filteredForProprietary: 0,
+			unconfirmed: 3,
+			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
+		});
+		expect(result.suggestedPromptsExcluded?.map((e) => e.reason)).toEqual([
+			"missingOrInvalidTargetReference",
+			"missingOrInvalidTargetReference",
+			"uncertain",
+		]);
+	});
+
+	it("B14-B: evidence-confirmed proprietary names override a none label", async () => {
+		vi.mocked(getWebsiteExcerpt).mockResolvedValueOnce("华星设备官网：星澜系列与通用空调产品。");
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "华星设备",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			productLines: [
+				{
+					name: "设备",
+					skus: [{ name: "星澜", model: null, oneLiner: "", evidenceUrl: "https://example.invalid/" }],
+				},
+			],
+			suggestedPrompts: [
+				{ prompt: "星澜怎么样", category: "设备", tags: [], targetReference: "none" },
+				{ prompt: "空调哪个牌子好", category: "设备", tags: [], targetReference: "none" },
+			],
+		});
+
+		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+
+		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好"]);
+		expect(result.suggestedPromptsMeta).toEqual({
+			generated: 2,
+			kept: 1,
+			filteredForBrandOrSku: 0,
+			filteredForProprietary: 1,
+			unconfirmed: 0,
+			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
+		});
+		expect(result.suggestedPromptsExcluded).toEqual([
+			{ prompt: "星澜怎么样", targetReference: "none", reason: "evidenceProprietary" },
+		]);
+	});
+
+	it("B14-B: a direct brand hit filters even when the model labels the prompt none", async () => {
+		(runStructuredResearchPrompt as any).mockResolvedValueOnce({
+			brandName: "华星设备",
+			additionalDomains: [],
+			aliases: [],
+			competitors: [],
+			productLines: [{ name: "设备", skus: [] }],
+			suggestedPrompts: [{ prompt: "华星设备空调怎么样", category: "设备", tags: [], targetReference: "none" }],
+		});
+
+		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
+
+		expect(result.suggestedPrompts).toEqual([]);
+		expect(result.suggestedPromptsMeta?.filteredForBrandOrSku).toBe(1);
+		expect(result.suggestedPromptsExcluded?.[0]?.reason).toBe("brandOrAlias");
 	});
 });

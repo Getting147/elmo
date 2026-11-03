@@ -25,7 +25,10 @@ describe("B14 prompt suggestions and category candidates", () => {
 					generated: 2,
 					kept: 1,
 					filteredForBrandOrSku: 1,
+					filteredForProprietary: 0,
+					unconfirmed: 0,
 					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
 				},
 			}),
 			"美的",
@@ -37,7 +40,10 @@ describe("B14 prompt suggestions and category candidates", () => {
 			generated: 2,
 			kept: 1,
 			filteredForBrandOrSku: 1,
+			filteredForProprietary: 0,
+			unconfirmed: 0,
 			skippedDuplicateOrEmpty: 0,
+			truncatedByCap: 0,
 		});
 	});
 
@@ -59,7 +65,15 @@ describe("B14 prompt suggestions and category candidates", () => {
 			buildPromptNotice({
 				language: "zh",
 				promptCount: 0,
-				meta: { generated: 0, kept: 0, filteredForBrandOrSku: 0, skippedDuplicateOrEmpty: 0 },
+				meta: {
+					generated: 0,
+					kept: 0,
+					filteredForBrandOrSku: 0,
+					filteredForProprietary: 0,
+					unconfirmed: 0,
+					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
+				},
 			}),
 		).toContain("未返回建议问题");
 
@@ -67,7 +81,15 @@ describe("B14 prompt suggestions and category candidates", () => {
 			buildPromptNotice({
 				language: "zh",
 				promptCount: 0,
-				meta: { generated: 3, kept: 0, filteredForBrandOrSku: 3, skippedDuplicateOrEmpty: 0 },
+				meta: {
+					generated: 3,
+					kept: 0,
+					filteredForBrandOrSku: 3,
+					filteredForProprietary: 0,
+					unconfirmed: 0,
+					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
+				},
 			}),
 		).toContain("均因包含品牌名");
 
@@ -75,7 +97,15 @@ describe("B14 prompt suggestions and category candidates", () => {
 			buildPromptNotice({
 				language: "zh",
 				promptCount: 1,
-				meta: { generated: 3, kept: 2, filteredForBrandOrSku: 1, skippedDuplicateOrEmpty: 0 },
+				meta: {
+					generated: 3,
+					kept: 2,
+					filteredForBrandOrSku: 1,
+					filteredForProprietary: 0,
+					unconfirmed: 0,
+					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
+				},
 			}),
 		).toContain("过滤 1 条");
 	});
@@ -84,19 +114,70 @@ describe("B14 prompt suggestions and category candidates", () => {
 		const zh = buildPromptNotice({
 			language: "zh",
 			promptCount: 0,
-			meta: { generated: 2, kept: 0, filteredForBrandOrSku: 1, skippedDuplicateOrEmpty: 1 },
+			meta: {
+				generated: 2,
+				kept: 0,
+				filteredForBrandOrSku: 1,
+				filteredForProprietary: 0,
+				unconfirmed: 0,
+				skippedDuplicateOrEmpty: 1,
+				truncatedByCap: 0,
+			},
 		});
-		expect(zh).toContain("其中 1 条因包含品牌名");
+		expect(zh).toContain("1 条因包含品牌名或别名被防引导规则过滤");
 		expect(zh).toContain("1 条为空或重复");
 		expect(zh).not.toContain("均因");
 
 		const en = buildPromptNotice({
 			language: "en",
 			promptCount: 0,
-			meta: { generated: 2, kept: 0, filteredForBrandOrSku: 1, skippedDuplicateOrEmpty: 1 },
+			meta: {
+				generated: 2,
+				kept: 0,
+				filteredForBrandOrSku: 1,
+				filteredForProprietary: 0,
+				unconfirmed: 0,
+				skippedDuplicateOrEmpty: 1,
+				truncatedByCap: 0,
+			},
 		});
-		expect(en).toContain("1 were filtered");
+		expect(en).toContain("1 were filtered for naming the brand or an alias");
 		expect(en).toContain("1 were empty or duplicates");
 		expect(en).not.toContain("all were filtered");
+	});
+
+	it("B14-B: unconfirmed and proprietary counts are reported separately, never as brand filtering", () => {
+		const zh = buildPromptNotice({
+			language: "zh",
+			promptCount: 0,
+			meta: {
+				generated: 3,
+				kept: 0,
+				filteredForBrandOrSku: 0,
+				filteredForProprietary: 1,
+				unconfirmed: 2,
+				skippedDuplicateOrEmpty: 0,
+				truncatedByCap: 0,
+			},
+		});
+		expect(zh).toContain("1 条因指向专有产品、系列或型号被过滤");
+		expect(zh).toContain("2 条指向未确认");
+		expect(zh).not.toContain("均因包含品牌名");
+
+		const partial = buildPromptNotice({
+			language: "zh",
+			promptCount: 2,
+			meta: {
+				generated: 4,
+				kept: 2,
+				filteredForBrandOrSku: 1,
+				filteredForProprietary: 0,
+				unconfirmed: 1,
+				skippedDuplicateOrEmpty: 0,
+				truncatedByCap: 0,
+			},
+		});
+		expect(partial).toContain("已按防引导规则过滤 1 条");
+		expect(partial).toContain("另有 1 条指向未确认未自动纳入");
 	});
 });

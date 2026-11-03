@@ -67,6 +67,13 @@ const promptSchema = z.object({
 	tags: z
 		.array(z.string())
 		.describe(`1-3 tags per prompt (ideally 1-2), drawn from the shared brand-tailored vocabulary. ${TAG_GUIDANCE}`),
+	targetReference: z
+		.string()
+		.nullable()
+		.optional()
+		.describe(
+			"Where this prompt points: 'none' = contains no target brand/alias and does not point at the target's proprietary product, series or model (generic category, use-case, persona, feature, budget or purchase-decision questions are none); 'brand' = the prompt text contains the target brand or an alias (also use 'brand' when it contains both brand and proprietary product); 'proprietary' = no direct brand mention but clearly points at the target's proprietary product, series or model; 'uncertain' = cannot be determined reliably. Prefer 'none' prompts; never label a branded prompt as 'none' to fill the quota.",
+		),
 });
 
 // Epic A-2 (V1.0): SKU 防幻觉 — evidenceUrl 必填，validateEvidence 兜底校验
@@ -181,12 +188,24 @@ export interface OnboardingProductLines {
 export interface SuggestedPromptsMeta {
 	/** Number of prompt rows the model returned before post-processing. */
 	generated: number;
-	/** Number kept after brand/SKU filtering, de-duplication and the max cap. */
+	/** Number kept after target-reference checks, de-duplication and the max cap. */
 	kept: number;
-	/** Number dropped because they named the brand, an alias, or a proprietary SKU. */
+	/** Number dropped because they named the brand/alias or the model labelled them brand. */
 	filteredForBrandOrSku: number;
+	/** Number dropped because trusted evidence or the model labelled them proprietary. */
+	filteredForProprietary: number;
+	/** Number not auto-included because the target reference is uncertain or missing/invalid. */
+	unconfirmed: number;
 	/** Number skipped because they were empty or duplicates. */
 	skippedDuplicateOrEmpty: number;
+	/** Number of rows not processed because the max cap was reached first. */
+	truncatedByCap: number;
+}
+
+export interface OnboardingExcludedPrompt {
+	prompt: string;
+	targetReference: string | null;
+	reason: "brandOrAlias" | "evidenceProprietary" | "proprietary" | "uncertain" | "missingOrInvalidTargetReference";
 }
 
 export interface OnboardingSuggestion {
@@ -201,6 +220,9 @@ export interface OnboardingSuggestion {
 	suggestedCategories?: string[];
 	/** Generation/filter counts used to explain an empty review list honestly. */
 	suggestedPromptsMeta?: SuggestedPromptsMeta;
+	/** Rows the model suggested but that were not auto-included, kept with their
+	 *  target-reference label and reason so the draft preserves the judgement. */
+	suggestedPromptsExcluded?: OnboardingExcludedPrompt[];
 	// Epic A-2 (V1.0): 公司档案 + 产品线/SKU（按 evidence 校验分 confirmed/unverified）
 	summary?: string;
 	description?: string;
@@ -376,24 +398,15 @@ function normalizeTag(tag: string): string {
 }
 
 /**
- * Business-line names and the model's own prompt categories are category
- * vocabulary. An SKU whose name is exactly one of them ("空调" under line
- * "空调") is a category label, not a proprietary identifier, so it must not
- * drop generic category questions.
+ * The model labels each suggested prompt with a target reference
+ * (none/brand/proprietary/uncertain). Anything else — missing, null, or an
+ * unknown string — is not silently treated as "none"; it stays unconfirmed.
  */
-const CATEGORY_SEEKING_PHRASES =
-	/(哪个牌子|什么牌子|哪个品牌|什么品牌|哪些品牌|哪家好|哪个好|怎么选|如何选|选购|排行|排名|对比|which\s+brand|what\s+brand|best\s+brand|\bvs\b|comparison)/i;
+const TARGET_REFERENCE_LABELS = new Set(["none", "brand", "proprietary", "uncertain"]);
 
-/**
- * A prompt that names a term and immediately asks "which brand / how to
- * choose" is a category-seeking question and does not force a brand mention.
- * Naming a proprietary series as the subject ("星澜设备怎么样") is not, so the
- * anti-brand guard still applies there.
- */
-function seeksCategoryAfter(prompt: string, needle: string): boolean {
-	const at = prompt.indexOf(needle);
-	if (at < 0) return false;
-	return CATEGORY_SEEKING_PHRASES.test(prompt.slice(at + needle.length, at + needle.length + 10));
+function readTargetReference(value: unknown): string | null {
+	const label = typeof value === "string" ? value.trim().toLowerCase() : "";
+	return TARGET_REFERENCE_LABELS.has(label) ? label : null;
 }
 
 function promptCategoryCandidate(prompt: { category?: string | null; tags?: string[] }): string {
@@ -473,6 +486,20 @@ function buildPrompt(args: {
 For suggestedPrompts: All prompts must be in natural Simplified Chinese that real Chinese users query in AI models (e.g. "轻钢别墅造价多少钱一平米", "集成房屋厂家哪家好"). Each prompt MUST include a 'category' specifying its business line/dimension (e.g. "轻钢房屋", "集成建筑") matching one of the product lines, or null if cross-business/generic.\n`
 		: `\nOUTPUT LANGUAGE REQUIREMENT: All outputs must be in English. Each prompt should specify a 'category' indicating its business category or product line dimension, or null if generic.\n`;
 
+	const targetReferenceGuidance = isZh
+		? `\nFor suggestedPrompts, every row MUST include 'targetReference' with exactly one of "none" | "brand" | "proprietary" | "uncertain":
+- "none"：不含目标品牌/别名，也不指向目标品牌的专有产品、系列或型号；通用品类、用途、人群、功能、预算、采购决策问题均属于 none。
+- "brand"：题文包含目标品牌或其别名；同时包含品牌与专有产品时也标 "brand"。
+- "proprietary"：未直接包含品牌，但明确指向目标品牌的专有产品、系列或型号。
+- "uncertain"：无法可靠判断是否存在上述指向。
+优先生成 "none" 的问题；不得把含品牌/专名的题标成 "none" 来凑数量。\n`
+		: `\nFor suggestedPrompts, every row MUST include 'targetReference' with exactly one of "none" | "brand" | "proprietary" | "uncertain":
+- "none": contains no target brand/alias and does not point at the target's proprietary product, series or model; generic category, use-case, persona, feature, budget and purchase-decision questions are none.
+- "brand": the prompt text contains the target brand or an alias; also use "brand" when it contains both brand and proprietary product.
+- "proprietary": no direct brand mention, but clearly points at the target's proprietary product, series or model.
+- "uncertain": cannot be determined reliably.
+Prefer "none" prompts; never label a branded or proprietary prompt as "none" to fill the quota.\n`;
+
 	const skipNotes: string[] = [];
 	if (!args.includeCompetitors) skipNotes.push("Return an empty array for competitors.");
 	if (!args.includePrompts) skipNotes.push("Return an empty array for suggestedPrompts.");
@@ -502,7 +529,7 @@ Competitors and aliases are common-knowledge fields: list the brand's well-known
 
 PARTIAL ENTRIES ARE VALID: if you can name a real competitor but cannot confirm its domains or aliases, output the row with just the name (set domains and aliases to null) — never drop a real competitor row or empty the whole competitors array because one sub-field is unverifiable.
 
-You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}${productGuidance}`;
+You MUST return the structured JSON object — even if you can find nothing about this brand. In that case set brandName to the likely name above and return empty arrays for every other field. Refusing to produce JSON, or replying with prose explaining what you don't know, is a failure mode; an object with mostly-empty arrays is the correct answer when information is genuinely unavailable.${skipNotes.length > 0 ? `\n\n${skipNotes.join(" ")}` : ""}${productGuidance}${args.includePrompts ? targetReferenceGuidance : ""}`;
 }
 
 function normalize(args: {
@@ -591,6 +618,7 @@ function normalize(args: {
 
 	const suggestedPrompts: OnboardingPrompt[] = [];
 	const suggestedCategories = new Set<string>();
+	const excluded: OnboardingExcludedPrompt[] = [];
 	let promptMeta: SuggestedPromptsMeta | undefined;
 	if (includePrompts) {
 		// Owner 2026-09-08: prompt 含品牌名/别名/专有产品名 → AI 回答必提品牌 →
@@ -602,38 +630,39 @@ function normalize(args: {
 				.filter(Boolean),
 		);
 		const categoryTerms = new Set<string>();
-		for (const line of raw.productLines ?? []) {
-			const lineName =
-				line && typeof line === "object" && typeof (line as { name?: unknown }).name === "string"
-					? normalizeTag((line as { name: string }).name).toLowerCase()
-					: "";
-			if (lineName) categoryTerms.add(lineName);
-		}
 		for (const p of raw.suggestedPrompts ?? []) {
 			const category = promptCategoryCandidate(p);
 			if (category) categoryTerms.add(category.toLowerCase());
 		}
 
-		const modelNeedles = new Set<string>();
-		const nameNeedles = new Set<string>();
-		for (const line of raw.productLines ?? []) {
-			if (line && typeof line === "object") {
-				const lineObj = line as { name?: unknown; skus?: unknown };
-				// lineObj.name 是通用品类/业务线名称（如"Refrigerators"或"轻钢房屋"），而非专有专名；
-				// 仅非品类词的 SKU 专名/型号加入检测，防止通用品类搜索词被误杀
-				if (Array.isArray(lineObj.skus)) {
-					for (const sku of lineObj.skus) {
-						if (!sku || typeof sku !== "object") continue;
-						const skuObj = sku as { name?: unknown; model?: unknown };
-						const model = typeof skuObj.model === "string" ? normalizeTag(skuObj.model).toLowerCase() : "";
-						if (model.length > 1 && !categoryTerms.has(model)) modelNeedles.add(model);
-						const name = typeof skuObj.name === "string" ? normalizeTag(skuObj.name).toLowerCase() : "";
-						if (name.length > 1 && !categoryTerms.has(name)) nameNeedles.add(name);
+		// Trusted proprietary identifiers: only SKU names/models whose evidence
+		// passed validateEvidence against the crawled brand pages. A name the
+		// model merely placed in a SKU field is not proprietary proof.
+		const evidenceNeedles = new Set<string>();
+		if (args.crawledPageTexts) {
+			for (const line of raw.productLines ?? []) {
+				if (!line || typeof line !== "object") continue;
+				const lineObj = line as { skus?: unknown };
+				if (!Array.isArray(lineObj.skus)) continue;
+				for (const sku of lineObj.skus) {
+					if (!sku || typeof sku !== "object") continue;
+					const skuObj = sku as { name?: unknown; model?: unknown; evidenceUrl?: unknown };
+					const evidenceUrl = typeof skuObj.evidenceUrl === "string" ? skuObj.evidenceUrl : "";
+					if (!evidenceUrl.trim()) continue;
+					for (const candidate of [skuObj.name, skuObj.model]) {
+						const value = typeof candidate === "string" ? normalizeTag(candidate).toLowerCase() : "";
+						if (value.length <= 1) continue;
+						if (
+							validateEvidence({ skuName: value, evidenceUrl, crawledPageTexts: args.crawledPageTexts })
+								.ok
+						) {
+							evidenceNeedles.add(value);
+						}
 					}
 				}
 			}
 		}
-		const allNeedles = [...brandNeedles, ...modelNeedles, ...nameNeedles].filter((n) => n.length > 1);
+		const allNeedles = [...brandNeedles, ...evidenceNeedles].filter((n) => n.length > 1);
 
 		// Collect category suggestions from every raw prompt first: a filtered
 		// question must not take the model's real business category with it.
@@ -646,20 +675,32 @@ function normalize(args: {
 
 		const seen = new Set<string>();
 		let filteredForBrandOrSku = 0;
+		let filteredForProprietary = 0;
+		let unconfirmed = 0;
 		let skippedDuplicateOrEmpty = 0;
-		for (const p of raw.suggestedPrompts ?? []) {
+		let processed = 0;
+		const rawPromptRows = raw.suggestedPrompts ?? [];
+		for (const p of rawPromptRows) {
 			if (suggestedPrompts.length >= maxPrompts) break;
+			processed++;
 			const value = p.prompt.trim().toLowerCase();
 			if (!value || seen.has(value)) {
 				skippedDuplicateOrEmpty++;
 				continue;
 			}
-			const contaminated =
-				[...brandNeedles].some((n) => value.includes(n)) ||
-				[...modelNeedles].some((n) => value.includes(n)) ||
-				[...nameNeedles].some((n) => value.includes(n) && !seeksCategoryAfter(value, n));
-			if (contaminated) {
-				filteredForBrandOrSku++;
+			const label = readTargetReference(p.targetReference);
+			const brandHit = [...brandNeedles].some((n) => value.includes(n));
+			const evidenceHit = [...evidenceNeedles].some((n) => value.includes(n));
+			let reason: OnboardingExcludedPrompt["reason"] | null = null;
+			if (label === null) reason = "missingOrInvalidTargetReference";
+			else if (brandHit || label === "brand") reason = "brandOrAlias";
+			else if (evidenceHit || label === "proprietary") reason = evidenceHit ? "evidenceProprietary" : "proprietary";
+			else if (label === "uncertain") reason = "uncertain";
+			if (reason) {
+				if (reason === "brandOrAlias") filteredForBrandOrSku++;
+				else if (reason === "evidenceProprietary" || reason === "proprietary") filteredForProprietary++;
+				else unconfirmed++;
+				excluded.push({ prompt: value, targetReference: label, reason });
 				continue;
 			}
 			seen.add(value);
@@ -672,10 +713,13 @@ function normalize(args: {
 			suggestedPrompts.push({ prompt: value, tags });
 		}
 		promptMeta = {
-			generated: (raw.suggestedPrompts ?? []).length,
+			generated: rawPromptRows.length,
 			kept: suggestedPrompts.length,
 			filteredForBrandOrSku,
+			filteredForProprietary,
+			unconfirmed,
 			skippedDuplicateOrEmpty,
+			truncatedByCap: Math.max(0, rawPromptRows.length - processed),
 		};
 	}
 
@@ -690,6 +734,7 @@ function normalize(args: {
 	if (includePrompts) {
 		result.suggestedCategories = [...suggestedCategories].slice(0, Math.min(Math.max(maxPrompts, 0), 30));
 		if (promptMeta) result.suggestedPromptsMeta = promptMeta;
+		if (excluded.length > 0) result.suggestedPromptsExcluded = excluded;
 	}
 
 	// Epic A-2 (V1.0): 公司档案 summary / description + 产品线/SKU (按 evidence 校验分 confirmed/unverified)

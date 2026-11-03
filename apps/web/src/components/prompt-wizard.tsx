@@ -99,35 +99,54 @@ export function buildPromptNotice(args: {
 }): string | null {
 	const { language, promptCount, meta } = args;
 	const isZh = language === "zh";
+	if (!meta) {
+		return promptCount === 0
+			? isZh
+				? "暂无建议问题，可手动添加。"
+				: "No suggested prompts yet — add one manually."
+			: null;
+	}
+	const brand = meta.filteredForBrandOrSku;
+	const proprietary = meta.filteredForProprietary;
+	const unconfirmed = meta.unconfirmed;
+	const skipped = meta.skippedDuplicateOrEmpty;
+	const truncated = meta.truncatedByCap;
+	const filteredTotal = brand + proprietary;
+	const reasonParts = (zh: boolean): string[] => {
+		const parts: string[] = [];
+		if (brand > 0)
+			parts.push(zh ? `${brand} 条因包含品牌名或别名被防引导规则过滤` : `${brand} were filtered for naming the brand or an alias`);
+		if (proprietary > 0)
+			parts.push(zh ? `${proprietary} 条因指向专有产品、系列或型号被过滤` : `${proprietary} were filtered for pointing at a proprietary product, series or model`);
+		if (unconfirmed > 0)
+			parts.push(zh ? `${unconfirmed} 条指向未确认，未自动纳入、待人工确认` : `${unconfirmed} have an unconfirmed target reference and were not auto-included`);
+		if (skipped > 0) parts.push(zh ? `${skipped} 条为空或重复` : `${skipped} were empty or duplicates`);
+		if (truncated > 0) parts.push(zh ? `${truncated} 条因数量上限未处理` : `${truncated} were not processed due to the prompt cap`);
+		return parts;
+	};
 	if (promptCount === 0) {
-		if (!meta) {
-			return isZh ? "暂无建议问题，可手动添加。" : "No suggested prompts yet — add one manually.";
-		}
 		if (meta.generated === 0) {
 			return isZh
 				? "模型本次未返回建议问题，可手动添加或稍后重新调研。"
 				: "The model returned no suggested prompts. Add one manually or run research again later.";
 		}
-		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0 && meta.skippedDuplicateOrEmpty === 0) {
-			return isZh
-				? `模型生成了 ${meta.generated} 条建议，均因包含品牌名、别名或专有型号被现有防引导规则过滤；可手动添加不带品牌名的问题。`
-				: `The model returned ${meta.generated} suggestions, but all were filtered because they named the brand, an alias, or a proprietary model. Add an unbranded question manually.`;
-		}
-		if (meta.kept === 0 && meta.filteredForBrandOrSku > 0) {
-			return isZh
-				? `模型生成了 ${meta.generated} 条建议，其中 ${meta.filteredForBrandOrSku} 条因包含品牌名、别名或专有型号被防引导规则过滤，${meta.skippedDuplicateOrEmpty} 条为空或重复，未得到可用问题；可手动添加。`
-				: `The model returned ${meta.generated} suggestions: ${meta.filteredForBrandOrSku} were filtered for naming the brand, an alias, or a proprietary model and ${meta.skippedDuplicateOrEmpty} were empty or duplicates, so no usable question remained. Add one manually.`;
-		}
 		if (meta.kept === 0) {
+			if (brand > 0 && proprietary === 0 && unconfirmed === 0 && skipped === 0 && truncated === 0) {
+				return isZh
+					? `模型生成了 ${meta.generated} 条建议，均因包含品牌名、别名或专有型号被现有防引导规则过滤；可手动添加不带品牌名的问题。`
+					: `The model returned ${meta.generated} suggestions, but all were filtered because they named the brand, an alias, or a proprietary model. Add an unbranded question manually.`;
+			}
+			const parts = reasonParts(isZh).join(isZh ? "，" : "; ");
 			return isZh
-				? `模型生成的 ${meta.generated} 条建议为空或重复，未得到可用问题；可手动添加。`
-				: `The model returned ${meta.generated} suggestions, but they were empty or duplicates. Add a question manually.`;
+				? `模型生成了 ${meta.generated} 条建议，${parts}，未得到可用问题；可手动添加。`
+				: `The model returned ${meta.generated} suggestions: ${parts}; no usable question remained. Add one manually.`;
 		}
 	}
-	if (meta && meta.filteredForBrandOrSku > 0) {
+	if (filteredTotal > 0 || unconfirmed > 0) {
+		const extra = unconfirmed > 0 ? (isZh ? `，另有 ${unconfirmed} 条指向未确认未自动纳入` : `, and ${unconfirmed} more with an unconfirmed target reference were not auto-included`) : "";
 		return isZh
-			? `已按防引导规则过滤 ${meta.filteredForBrandOrSku} 条含品牌名、别名或专有型号的建议。`
-			: `${meta.filteredForBrandOrSku} suggestions were filtered because they named the brand, an alias, or a proprietary model.`;
+			? `已按防引导规则过滤 ${filteredTotal} 条含品牌名、别名或专有型号的建议${extra}。`
+			: `${filteredTotal} suggestions were filtered because they named the brand, an alias, or a proprietary model${extra}.`;
 	}
 	return null;
 }

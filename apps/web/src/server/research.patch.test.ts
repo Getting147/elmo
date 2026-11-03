@@ -106,7 +106,7 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 		expect(next.summary).toBe("old summary"); // 未传字段保留
 	});
 
-	it("B14: prompts patch clears stale generation metadata but keeps model categories", () => {
+	it("B14: prompts patch clears stale generation metadata but keeps model categories and exclusion record", () => {
 		const next = applyDraftPayloadPatch(
 			{
 				...BASE_PAYLOAD,
@@ -114,15 +114,24 @@ describe("applyDraftPayloadPatch 纯 merge", () => {
 				suggestedPromptsMeta: {
 					generated: 5,
 					kept: 2,
-					filteredForBrandOrSku: 3,
+					filteredForBrandOrSku: 1,
+					filteredForProprietary: 1,
+					unconfirmed: 1,
 					skippedDuplicateOrEmpty: 0,
+					truncatedByCap: 0,
 				},
+				suggestedPromptsExcluded: [
+					{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
+				],
 			},
 			{ prompts: [{ prompt: "buy fridge" }] },
 		);
 
 		expect(next.suggestedPromptsMeta).toBeUndefined();
 		expect(next.suggestedCategories).toEqual(["Refrigerators", "Robots"]);
+		expect(next.suggestedPromptsExcluded).toEqual([
+			{ prompt: "acme fridge review", targetReference: "brand", reason: "brandOrAlias" },
+		]);
 	});
 
 	it("productLines：confirmed 替换 + evidence→sourceEvidenceChecked 默认 0 + unverified 保留", () => {

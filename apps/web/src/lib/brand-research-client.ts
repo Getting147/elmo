@@ -9,7 +9,16 @@ export interface SuggestedPromptsMeta {
 	generated: number;
 	kept: number;
 	filteredForBrandOrSku: number;
+	filteredForProprietary: number;
+	unconfirmed: number;
 	skippedDuplicateOrEmpty: number;
+	truncatedByCap: number;
+}
+
+export interface ExcludedSuggestedPrompt {
+	prompt: string;
+	targetReference: string | null;
+	reason: string;
 }
 
 export interface ResearchDraftPayload {
@@ -21,6 +30,7 @@ export interface ResearchDraftPayload {
 	suggestedPrompts: Array<{ prompt: string; tags: string[] }>;
 	suggestedCategories?: string[];
 	suggestedPromptsMeta?: SuggestedPromptsMeta;
+	suggestedPromptsExcluded?: ExcludedSuggestedPrompt[];
 	summary?: string;
 	description?: string;
 	productLines?: {
