@@ -287,6 +287,7 @@ interface AutoBoundRealRunRecord {
 	idempotencyKey: string;
 	modelName?: string;
 	webSearch?: boolean;
+	maxOutputTokens?: number;
 	requestBudget: number;
 	maxRetries: number;
 	rawRequestedBudget: number;
@@ -314,7 +315,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 			idempotencyKey: z.string().optional(),
 			modelName: z.string().optional(),
 			webSearch: z.boolean().optional(),
-			maxOutputTokens: z.number().int().optional(),
+			maxOutputTokens: z.number().int().positive().optional(),
 			maxToolCalls: z.number().int().optional(),
 		}),
 	)
@@ -332,6 +333,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		let runId = data.runId;
 		let modelName = data.modelName;
 		let webSearch = data.webSearch;
+		let maxOutputTokens = data.maxOutputTokens;
 		let requestBudget = data.requestBudget;
 		let maxRetries = data.maxRetries;
 		let idempotencyKey = data.idempotencyKey;
@@ -380,6 +382,9 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 					if (webSearch === undefined && authRes.authorization.web_search !== undefined) {
 						webSearch = Boolean(authRes.authorization.web_search);
 					}
+					if (maxOutputTokens === undefined && authRes.authorization.max_output_tokens !== undefined) {
+						maxOutputTokens = authRes.authorization.max_output_tokens;
+					}
 					// 严格遵循更低限制：实际执行预算与重试不得超过授权上限，也不得抬高请求方指定的更严格限制 (E6-R02)
 					if (authRes.authorization.request_limit) {
 						requestBudget = Math.min(requestBudget, authRes.authorization.request_limit);
@@ -396,6 +401,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 						idempotencyKey,
 						modelName,
 						webSearch,
+						maxOutputTokens,
 						requestBudget,
 						maxRetries,
 						rawRequestedBudget: data.requestBudget,
@@ -461,6 +467,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 										detail.idempotency_key || `idemp_${/^[a-zA-Z0-9_-]+$/.test(brand.id) ? `${brand.id.toLowerCase()}_` : ""}${detail.run_id}`,
 									modelName: boundModel,
 									webSearch: boundWebSearch,
+									maxOutputTokens: detail.max_output_tokens ?? undefined,
 									requestBudget: detail.request_budget,
 									maxRetries: detail.max_retries,
 									rawRequestedBudget: detail.request_budget,
@@ -483,6 +490,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 						if (webSearch === undefined && remembered.webSearch !== undefined) {
 							webSearch = remembered.webSearch;
 						}
+						if (maxOutputTokens === undefined) maxOutputTokens = remembered.maxOutputTokens;
 						// 区分原始请求与首次收紧后的有效限制 (E8-R01):
 						// 1. 若授权存在 request_limit/retry_limit，按相同的收紧逻辑重新计算有效值：Math.min(data.requestBudget, authLimit)
 						// 2. 若原始请求值与记录的 rawRequested 一致，或计算出的有效值与已保存有效限制一致，则恢复原有效参数；若请求者真正更改了预算，则保留更改值交由 D 进行 409 冲突拒绝
@@ -539,7 +547,7 @@ export const createBaselineRunFn = createServerFn({ method: "POST" })
 		};
 		if (modelName) payload.model_name = modelName;
 		if (webSearch !== undefined) payload.web_search = webSearch;
-		if (data.maxOutputTokens !== undefined) payload.max_output_tokens = data.maxOutputTokens;
+		if (maxOutputTokens !== undefined) payload.max_output_tokens = maxOutputTokens;
 		if (data.maxToolCalls !== undefined) payload.max_tool_calls = data.maxToolCalls;
 
 		return callBaselineBackend({
@@ -561,7 +569,7 @@ export const registerBaselineServerAuthFn = createServerFn({ method: "POST" })
 			snapshotHash: z.string().min(1, "snapshotHash 必须明确指定"),
 			modelName: z.string().default("doubao-seed-2-1-pro-260628"),
 			webSearch: z.boolean().default(true),
-			maxOutputTokens: z.number().int().optional(),
+			maxOutputTokens: z.number().int().positive(),
 			maxToolCalls: z.number().int().optional(),
 			requestLimit: z.number().int().min(1).max(500).default(30),
 			retryLimit: z.number().int().min(0).max(3).default(0),
