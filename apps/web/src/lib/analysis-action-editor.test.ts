@@ -44,4 +44,47 @@ describe("action editor evidence preservation", () => {
 	it("reports malformed fields instead of silently shifting evidence", () => {
 		expect(() => parseActionPlan("Q01 | a | P1 | b | c | d | e | f")).toThrow("第 1 项");
 	});
+
+	it("supports B18-UI card-based item additions, edits, and removals", () => {
+		// 1. Initial state with 1 action
+		let currentItems: (typeof action | { action: string; priority: string; priority_rationale: string; deliverable: string; verification_method: string; finding: string; evidence_refs: string[] })[] = [action];
+		let formatted = formatActionPlan(currentItems);
+
+		// 2. Add an action card
+		const newItem = {
+			action: "新增建议行动",
+			priority: "P1",
+			priority_rationale: "理由",
+			deliverable: "交付物",
+			verification_method: "验证",
+			finding: "发现",
+			evidence_refs: [],
+		};
+		currentItems = [...currentItems, newItem];
+		formatted = formatActionPlan(currentItems);
+		let parsed = parseActionPlan(formatted, [action]);
+		expect(parsed.length).toBe(2);
+		expect(parsed[1].action).toBe("新增建议行动");
+		expect(parsed[1].priority).toBe("P1");
+
+		// 3. Edit fields individually
+		currentItems = currentItems.map((item, idx) => idx === 1 ? { ...item, action: "修改后的行动 | 含竖线\n换行", priority: "P0" } : item);
+		formatted = formatActionPlan(currentItems);
+		parsed = parseActionPlan(formatted, [action]);
+		expect(parsed[1].action).toBe("修改后的行动 | 含竖线\n换行");
+		expect(parsed[1].priority).toBe("P0");
+
+		// 4. Update evidence refs (toggle checkbox)
+		currentItems = currentItems.map((item, idx) => idx === 1 ? { ...item, evidence_refs: ["Q01", "Q05"] } : item);
+		formatted = formatActionPlan(currentItems);
+		parsed = parseActionPlan(formatted, [action]);
+		expect(parsed[1].evidence_refs).toEqual(["Q01", "Q05"]);
+
+		// 5. Remove first action
+		currentItems = currentItems.filter((_, idx) => idx !== 0);
+		formatted = formatActionPlan(currentItems);
+		parsed = parseActionPlan(formatted, [action]);
+		expect(parsed.length).toBe(1);
+		expect(parsed[0].action).toBe("修改后的行动 | 含竖线\n换行");
+	});
 });

@@ -50,6 +50,8 @@ import {
 	IconShieldCheck,
 	IconChevronDown,
 	IconChevronUp,
+	IconPlus,
+	IconTrash,
 } from "@tabler/icons-react";
 
 export const Route = createFileRoute("/_authed/app/$brand/reports")({
@@ -143,8 +145,18 @@ function BrandReportsWorkspace() {
 
 	// 题库分类人工补齐状态 (E-R04)
 
-	// 逐题回答展开状态 (E-R06)
+	const brandIdRef = useRef(brandId);
+	brandIdRef.current = brandId;
+
+	// 逐题回答展开状态 (E-R06 / B18-UI Task A)
 	const [expandedQuestions, setExpandedQuestions] = useState<Record<string, boolean>>({});
+	// 逐条建议依据展开状态 (B18-UI Task D)
+	const [expandedActionEvidences, setExpandedActionEvidences] = useState<Record<number, boolean>>({});
+
+	useEffect(() => {
+		setExpandedQuestions({});
+		setExpandedActionEvidences({});
+	}, [activeRunId, brandId]);
 
 	// 人工分析表单状态 (E-R05: 移除一切预填伪造数据，全部默认空或显式占位)
 	const [analystName, setAnalystName] = useState<string>("");
@@ -155,6 +167,29 @@ function BrandReportsWorkspace() {
 	const [contentGapsInput, setContentGapsInput] = useState<string>("");
 	const [actionPlanInput, setActionPlanInput] = useState<string>("");
 	const [rawActionPlan, setRawActionPlan] = useState<AnalysisAction[]>([]);
+
+	const currentAnalysisFormRef = useRef<UnsavedAnalysisDraft>({
+		activeAnalysisId,
+		analystName,
+		executiveConclusion,
+		keyFindings,
+		rawBrandIdentityAudit,
+		brandIdentityAudit,
+		contentGapsInput,
+		actionPlanInput,
+		rawActionPlan,
+	});
+	currentAnalysisFormRef.current = {
+		activeAnalysisId,
+		analystName,
+		executiveConclusion,
+		keyFindings,
+		rawBrandIdentityAudit,
+		brandIdentityAudit,
+		contentGapsInput,
+		actionPlanInput,
+		rawActionPlan,
+	};
 
 	const brandName = brand?.name || brandId || "";
 	const markAnalysisDirty = () => {
@@ -411,8 +446,7 @@ function BrandReportsWorkspace() {
 		const previousRunId = activeRunIdRef.current;
 		if (previousRunId && analysisDirtyRef.current) {
 			unsavedAnalysisDraftsRef.current.set(previousRunId, {
-				activeAnalysisId, analystName, executiveConclusion, keyFindings,
-				rawBrandIdentityAudit, brandIdentityAudit, contentGapsInput, actionPlanInput, rawActionPlan,
+				...currentAnalysisFormRef.current,
 			});
 		} else if (previousRunId) {
 			unsavedAnalysisDraftsRef.current.delete(previousRunId);
@@ -438,7 +472,7 @@ function BrandReportsWorkspace() {
 		setActionError(null);
 		setReviewNotice(null);
 		setReviewFeedback(null);
-	}, [activeAnalysisId, analystName, executiveConclusion, keyFindings, rawBrandIdentityAudit, brandIdentityAudit, contentGapsInput, actionPlanInput, rawActionPlan]);
+	}, []);
 
 	const requestTaskFocus = useCallback((runId: string) => {
 		handleSelectRun(runId);
@@ -446,12 +480,29 @@ function BrandReportsWorkspace() {
 		setFocusRequest((previous) => ({ runId, sequence: (previous?.sequence ?? 0) + 1 }));
 	}, [handleSelectRun]);
 
-	useEffect(() => { if (draft.runId && !requestedRunId) requestTaskFocus(draft.runId); }, [draft.runId, requestedRunId, requestTaskFocus]);
-	useEffect(() => { if (requestedRunId) requestTaskFocus(requestedRunId); }, [requestedRunId, requestTaskFocus]);
+	const lastRequestedRunIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (requestedRunId && requestedRunId !== lastRequestedRunIdRef.current) {
+			lastRequestedRunIdRef.current = requestedRunId;
+			requestTaskFocus(requestedRunId);
+		}
+	}, [requestedRunId, requestTaskFocus]);
+
+	const lastDraftRunIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (draft.runId && !requestedRunId && draft.runId !== lastDraftRunIdRef.current) {
+			lastDraftRunIdRef.current = draft.runId;
+			requestTaskFocus(draft.runId);
+		}
+	}, [draft.runId, requestedRunId, requestTaskFocus]);
 
 	// Restore the persisted task when returning from overview or reloading; never create work on mount.
 	useEffect(() => {
-		if (!activeRunId && !requestedRunId && runsListData?.items?.[0]?.run_id) requestTaskFocus(draft.runId ?? runsListData.items[0].run_id);
+		if (!activeRunId && !requestedRunId && runsListData?.items?.[0]?.run_id) {
+			const targetRunId = draft.runId ?? runsListData.items[0].run_id;
+			lastRequestedRunIdRef.current = targetRunId;
+			requestTaskFocus(targetRunId);
+		}
 	}, [runsListData, activeRunId, requestedRunId, draft.runId, requestTaskFocus]);
 
 	// 5.3. 查询当前快照的有效服务端预授权 (E5-R01)
@@ -845,6 +896,90 @@ function BrandReportsWorkspace() {
 	const evidenceQuestions = evidenceData?.run_id === activeRunId
 		? [...(evidenceData.formal_questions ?? []), ...(evidenceData.probe_questions ?? [])]
 		: [];
+	const handleCollapseQuestion = useCallback((questionCode: string, isProbe = false) => {
+		const currentRunId = activeRunIdRef.current;
+		const currentBrandId = brandIdRef.current;
+		setExpandedQuestions((prev) => ({ ...prev, [questionCode]: false }));
+		requestAnimationFrame(() => {
+			if (activeRunIdRef.current !== currentRunId || brandIdRef.current !== currentBrandId) return;
+			const prefix = isProbe ? "probe" : "question";
+			const cardEl = document.getElementById(`${prefix}-card-${currentRunId}-${questionCode}`);
+			const toggleBtn = document.getElementById(`${prefix}-toggle-btn-${currentRunId}-${questionCode}`);
+			if (cardEl) {
+				cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+			}
+			if (toggleBtn) {
+				toggleBtn.focus({ preventScroll: true });
+			}
+		});
+	}, []);
+
+	const handleCollapseActionEvidence = useCallback((actionIndex: number) => {
+		const currentRunId = activeRunIdRef.current;
+		const currentBrandId = brandIdRef.current;
+		setExpandedActionEvidences((prev) => ({ ...prev, [actionIndex]: false }));
+		requestAnimationFrame(() => {
+			if (activeRunIdRef.current !== currentRunId || brandIdRef.current !== currentBrandId) return;
+			const cardEl = document.getElementById(`action-card-${currentRunId}-${actionIndex}`);
+			const toggleBtn = document.getElementById(`action-evidence-toggle-${currentRunId}-${actionIndex}`);
+			if (cardEl) {
+				cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+			}
+			if (toggleBtn) {
+				toggleBtn.focus({ preventScroll: true });
+			}
+		});
+	}, []);
+
+	const handleAddAction = useCallback(() => {
+		const currentItems = editedActions.items ?? [];
+		const newItem: AnalysisAction = {
+			action: "",
+			priority: "P1",
+			priority_rationale: "",
+			deliverable: "",
+			verification_method: "",
+			finding: "",
+			evidence_refs: [],
+		};
+		const nextItems = [...currentItems, newItem];
+		markAnalysisDirty();
+		setActionPlanInput(formatActionPlan(nextItems));
+	}, [editedActions.items]);
+
+	const handleRemoveAction = useCallback((index: number) => {
+		const currentItems = editedActions.items ?? [];
+		const nextItems = currentItems.filter((_, i) => i !== index);
+		markAnalysisDirty();
+		setActionPlanInput(formatActionPlan(nextItems));
+		setExpandedActionEvidences((prev) => {
+			const next: Record<number, boolean> = {};
+			Object.entries(prev).forEach(([key, val]) => {
+				const numKey = Number(key);
+				if (numKey < index) next[numKey] = val;
+				else if (numKey > index) next[numKey - 1] = val;
+			});
+			return next;
+		});
+	}, [editedActions.items]);
+
+	const handleUpdateActionField = useCallback((index: number, field: keyof AnalysisAction, val: string) => {
+		if (editedActions.error) {
+			setActionError(editedActions.error);
+			return;
+		}
+		const currentItems = editedActions.items ?? [];
+		const nextItems = currentItems.map((item, i) => {
+			if (i !== index) return item;
+			return {
+				...item,
+				[field]: val,
+			};
+		});
+		markAnalysisDirty();
+		setActionPlanInput(formatActionPlan(nextItems));
+	}, [editedActions]);
+
 	const updateActionRefs = (index: number, code: string, checked: boolean) => {
 		if (editedActions.error) { setActionError(editedActions.error); return; }
 		const items = editedActions.items.map((item, i) => i !== index ? item : {
@@ -1542,8 +1677,9 @@ function BrandReportsWorkspace() {
 											const isExpanded = !!expandedQuestions[q.question_code];
 											return (
 												<div
+													id={`question-card-${activeRunId}-${q.question_code}`}
 													key={q.question_code}
-													className="border rounded-lg p-3 text-xs flex flex-col gap-2 bg-muted/10"
+													className="scroll-mt-24 border rounded-lg p-3 text-xs flex flex-col gap-2 bg-muted/10"
 												>
 													<div className="flex items-center justify-between font-semibold">
 														<span className="text-foreground">
@@ -1554,11 +1690,15 @@ function BrandReportsWorkspace() {
 																{q.dimension_name}
 															</span>
 															<button
+																id={`question-toggle-btn-${activeRunId}-${q.question_code}`}
+																type="button"
+																aria-expanded={isExpanded}
+																aria-label={isExpanded ? `收起 ${q.question_code} 回答` : `展开 ${q.question_code} 回答`}
 																onClick={() =>
-																	setExpandedQuestions({
-																		...expandedQuestions,
+																	setExpandedQuestions((prev) => ({
+																		...prev,
 																		[q.question_code]: !isExpanded,
-																	})
+																	}))
 																}
 																className="p-1 hover:bg-muted rounded text-muted-foreground"
 															>
@@ -1598,6 +1738,19 @@ function BrandReportsWorkspace() {
 															⚡ 总 Token: {samplingUsageCount(q.raw_usage?.total_tokens)}
 														</span>
 													</div>
+
+													{isExpanded && (
+														<div className="flex justify-end pt-1 border-t border-border/40">
+															<button
+																type="button"
+																onClick={() => handleCollapseQuestion(q.question_code, false)}
+																className="inline-flex items-center gap-1 text-xs text-primary hover:text-primary/80 font-medium py-1 px-2 hover:bg-muted/50 rounded transition-colors"
+															>
+																<IconChevronUp size={14} />
+																<span>收起回答明细</span>
+															</button>
+														</div>
+													)}
 												</div>
 											);
 										})}
@@ -1613,8 +1766,9 @@ function BrandReportsWorkspace() {
 												const isExpanded = !!expandedQuestions[q.question_code];
 												return (
 													<div
+														id={`probe-card-${activeRunId}-${q.question_code}`}
 														key={q.question_code}
-														className="border rounded-lg p-3 text-xs flex flex-col gap-2 bg-purple-50/20 dark:bg-purple-950/10 border-purple-200 dark:border-purple-800/40"
+														className="scroll-mt-24 border rounded-lg p-3 text-xs flex flex-col gap-2 bg-purple-50/20 dark:bg-purple-950/10 border-purple-200 dark:border-purple-800/40"
 													>
 														<div className="flex items-center justify-between font-semibold text-purple-950 dark:text-purple-200">
 															<span>
@@ -1625,11 +1779,15 @@ function BrandReportsWorkspace() {
 																	探针 · {q.dimension_name}
 																</span>
 																<button
+																	id={`probe-toggle-btn-${activeRunId}-${q.question_code}`}
+																	type="button"
+																	aria-expanded={isExpanded}
+																	aria-label={isExpanded ? `收起探针 ${q.question_code} 回答` : `展开探针 ${q.question_code} 回答`}
 																	onClick={() =>
-																		setExpandedQuestions({
-																			...expandedQuestions,
+																		setExpandedQuestions((prev) => ({
+																			...prev,
 																			[q.question_code]: !isExpanded,
-																		})
+																		}))
 																	}
 																	className="p-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 rounded text-purple-700"
 																>
@@ -1668,6 +1826,19 @@ function BrandReportsWorkspace() {
 																⚡ 总 Token: {samplingUsageCount(q.raw_usage?.total_tokens)}
 															</span>
 														</div>
+
+														{isExpanded && (
+															<div className="flex justify-end pt-1 border-t border-purple-200/50 dark:border-purple-800/30">
+																<button
+																	type="button"
+																	onClick={() => handleCollapseQuestion(q.question_code, true)}
+																	className="inline-flex items-center gap-1 text-xs text-purple-700 dark:text-purple-300 hover:text-purple-900 dark:hover:text-purple-100 font-medium py-1 px-2 hover:bg-purple-100/50 rounded transition-colors"
+																>
+																	<IconChevronUp size={14} />
+																	<span>收起回答明细</span>
+																</button>
+															</div>
+														)}
 													</div>
 												);
 											})}
@@ -1759,12 +1930,12 @@ function BrandReportsWorkspace() {
 								</div>
 								<div className="flex flex-col gap-1.5">
 									<label className="font-semibold">核心执行结论 *</label>
-									<input
-										type="text"
+									<textarea
+										rows={3}
 										placeholder="输入本轮诊断总体结论..."
 										value={executiveConclusion}
 										onChange={(e) => { markAnalysisDirty(); setExecutiveConclusion(e.target.value); }}
-										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
+										className="border rounded-md p-2 bg-background font-mono resize-y min-h-[72px] disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground w-full"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5">
@@ -1779,51 +1950,238 @@ function BrandReportsWorkspace() {
 								</div>
 								<div className="flex flex-col gap-1.5">
 									<label className="font-semibold">主体识别审核结论</label>
-									<input
-										type="text"
+									<textarea
+										rows={3}
 										placeholder="主体识别清晰，无同名企业混淆（若未填显示待核）"
 										value={brandIdentityAudit}
 										onChange={(e) => { markAnalysisDirty(); setBrandIdentityAudit(e.target.value); }}
-										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
+										className="border rounded-md p-2 bg-background font-mono resize-y min-h-[72px] disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground w-full"
 									/>
 								</div>
 								<div className="flex flex-col gap-1.5 md:col-span-2">
 									<label className="font-semibold">内容资产缺口分析</label>
-									<input
-										type="text"
+									<textarea
+										rows={3}
 										placeholder="输入官方公开内容资产或索引缺口..."
 										value={contentGapsInput}
 										onChange={(e) => { markAnalysisDirty(); setContentGapsInput(e.target.value); }}
-										className="border rounded-md px-3 py-1.5 bg-background disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
+										className="border rounded-md p-2 bg-background font-mono resize-y min-h-[72px] disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground w-full"
 									/>
 								</div>
-								<div className="flex flex-col gap-1.5 md:col-span-2">
-									<label className="font-semibold">
-										优先行动建议清单 * (格式: 题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式 | 实测发现)
-									</label>
-									<textarea
-										rows={3}
-										placeholder="Q01 | 在海外官网增设标杆案例专页 | P0 | 契合主流寻源问法 | 官方技术专题 | 次月复测"
-										value={actionPlanInput}
-										onChange={(e) => { markAnalysisDirty(); setActionPlanInput(e.target.value); }}
-										className="border rounded-md p-2 bg-background font-mono disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
-									/>
-									<p className="text-muted-foreground">正文竖线使用 \|，换行使用 \n。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。</p>
-									{editedActions.error && <p role="alert" className="text-red-700">{editedActions.error}</p>}
-									{editedActions.items.map((item, index) => <details key={index} className="border rounded p-2">
-										<summary>第 {index + 1} 条建议：查看与关联题目依据{!item.evidence_refs?.length ? "（尚未关联支持这条建议的题目依据）" : ""}</summary>
-										{!item.action?.trim() && <p role="status">第 {index + 1} 条尚未填写具体举措。</p>}
-										<p className="text-muted-foreground">仅选择确实支持此建议的原文。未完成题只支持采样局限；关联题码不代表已经通过语义审核。</p>
-										{evidenceQuestions.map((q) => <label key={q.question_code} className="block border-t py-2">
-											<input type="checkbox" aria-label={`第${index + 1}条关联${q.question_code}`} checked={item.evidence_refs?.includes(q.question_code) ?? false} onChange={(e) => updateActionRefs(index, q.question_code, e.target.checked)} />
-											<span> [{q.question_code}] {q.question_text}</span>
-											{q.effective_status === "effective" && q.answer_text
-												? <AnswerMarkdown text={q.answer_text} />
-												: <p className="whitespace-pre-wrap">{questionObservationMessage(q)}</p>}
-										</label>)}
-										{!evidenceQuestions.length && <p role="status">当前题目依据未读取到，请先只读刷新结果。</p>}
-										<button type="button" className="underline" onClick={() => { markAnalysisDirty(); setActionPlanInput(formatActionPlan(editedActions.items.filter((_, i) => i !== index))); }}>移除第{index + 1}条建议</button>
-									</details>)}
+								<div className="flex flex-col gap-3 md:col-span-2">
+									<div className="flex items-center justify-between">
+										<label className="font-semibold text-foreground">
+											优先行动建议清单 *
+										</label>
+										<span className="text-xs text-muted-foreground font-normal">
+											共 {editedActions.items.length} 条建议
+										</span>
+									</div>
+									<p className="text-muted-foreground text-xs">
+										每条建议独立编号并分开编辑。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。
+									</p>
+									{editedActions.error && (
+										<div role="alert" className="p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 rounded-md border border-red-200 dark:border-red-800 text-xs">
+											<p className="font-semibold">行动建议格式解析异常：</p>
+											<p>{editedActions.error}</p>
+										</div>
+									)}
+									{editedActions.items.length === 0 ? (
+										<div className="text-center p-6 border border-dashed rounded-lg text-muted-foreground text-xs space-y-2">
+											<p>暂无行动建议。点击下方“添加一条行动建议”开始制定。</p>
+										</div>
+									) : (
+										<div className="flex flex-col gap-4">
+											{editedActions.items.map((item, index) => {
+												const isEvidenceExpanded = !!expandedActionEvidences[index];
+												const actionNumber = String(index + 1).padStart(2, "0");
+												const hasRefs = Boolean(item.evidence_refs && item.evidence_refs.length > 0);
+												return (
+													<div
+														key={index}
+														id={`action-card-${activeRunId}-${index}`}
+														className="scroll-mt-24 border rounded-xl p-4 bg-muted/10 flex flex-col gap-3 border-border/80 shadow-xs"
+													>
+														{/* 卡片顶栏：编号、优先级、关联题码摘要、移除按钮 */}
+														<div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2.5">
+															<div className="flex items-center gap-2 flex-wrap">
+																<span className="px-2 py-0.5 rounded text-xs font-bold bg-primary/10 text-primary border border-primary/20">
+																	建议 {actionNumber}
+																</span>
+																<div className="flex items-center gap-1 text-xs">
+																	<span className="text-muted-foreground">优先级:</span>
+																	<select
+																		value={item.priority || "P1"}
+																		onChange={(e) => handleUpdateActionField(index, "priority", e.target.value)}
+																		className="border rounded px-1.5 py-0.5 bg-background text-xs font-semibold"
+																		aria-label={`建议 ${actionNumber} 优先级`}
+																	>
+																		<option value="P0">P0（最高）</option>
+																		<option value="P1">P1（高）</option>
+																		<option value="P2">P2（中）</option>
+																		<option value="P3">P3（低）</option>
+																	</select>
+																</div>
+																<span className={`text-[11px] px-2 py-0.5 rounded ${hasRefs ? "bg-muted text-muted-foreground" : "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"}`}>
+																	{hasRefs ? `关联题码: ${item.evidence_refs?.join(", ")}` : "尚未关联题目依据"}
+																</span>
+															</div>
+															<button
+																type="button"
+																onClick={() => handleRemoveAction(index)}
+																className="inline-flex items-center gap-1 text-xs text-destructive hover:text-destructive/80 font-medium px-2 py-1 hover:bg-destructive/10 rounded transition-colors"
+																aria-label={`移除建议 ${actionNumber}`}
+															>
+																<IconTrash size={14} />
+																<span>移除建议</span>
+															</button>
+														</div>
+
+														{/* 表单字段编辑 */}
+														<div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+															<div className="flex flex-col gap-1 md:col-span-2">
+																<label className="font-semibold text-foreground">建议行动 *</label>
+																<textarea
+																	rows={2}
+																	placeholder="例如: 在海外官网增设标杆案例专页，强化技术细节与测评..."
+																	value={item.action ?? ""}
+																	onChange={(e) => handleUpdateActionField(index, "action", e.target.value)}
+																	className="border rounded-md p-2 bg-background font-sans resize-y min-h-[48px] w-full disabled:cursor-not-allowed disabled:bg-muted/50"
+																/>
+															</div>
+															<div className="flex flex-col gap-1 md:col-span-2">
+																<label className="font-semibold text-foreground">决策依据 / 优先级说明</label>
+																<textarea
+																	rows={2}
+																	placeholder="说明为何定为该优先级及具体决策考量..."
+																	value={item.priority_rationale ?? ""}
+																	onChange={(e) => handleUpdateActionField(index, "priority_rationale", e.target.value)}
+																	className="border rounded-md p-2 bg-background font-sans resize-y min-h-[48px] w-full disabled:cursor-not-allowed disabled:bg-muted/50"
+																/>
+															</div>
+															<div className="flex flex-col gap-1">
+																<label className="font-semibold text-foreground">预期交付物</label>
+																<input
+																	type="text"
+																	placeholder="如: 官方技术专题页面、白皮书..."
+																	value={item.deliverable ?? ""}
+																	onChange={(e) => handleUpdateActionField(index, "deliverable", e.target.value)}
+																	className="border rounded-md px-2.5 py-1.5 bg-background w-full disabled:cursor-not-allowed disabled:bg-muted/50"
+																/>
+															</div>
+															<div className="flex flex-col gap-1">
+																<label className="font-semibold text-foreground">验证方式</label>
+																<input
+																	type="text"
+																	placeholder="如: 次月首周复测、特定提示词检索..."
+																	value={item.verification_method ?? ""}
+																	onChange={(e) => handleUpdateActionField(index, "verification_method", e.target.value)}
+																	className="border rounded-md px-2.5 py-1.5 bg-background w-full disabled:cursor-not-allowed disabled:bg-muted/50"
+																/>
+															</div>
+															<div className="flex flex-col gap-1 md:col-span-2">
+																<label className="font-semibold text-foreground">实测发现</label>
+																<textarea
+																	rows={2}
+																	placeholder="实测中观察到的具体现象或短板..."
+																	value={item.finding ?? ""}
+																	onChange={(e) => handleUpdateActionField(index, "finding", e.target.value)}
+																	className="border rounded-md p-2 bg-background font-sans resize-y min-h-[48px] w-full disabled:cursor-not-allowed disabled:bg-muted/50"
+																/>
+															</div>
+														</div>
+
+														{/* 依据展开区（Task D） */}
+														<div className="mt-1 flex flex-col">
+															<button
+																type="button"
+																id={`action-evidence-toggle-${activeRunId}-${index}`}
+																aria-expanded={isEvidenceExpanded}
+																onClick={() => setExpandedActionEvidences((prev) => ({ ...prev, [index]: !isEvidenceExpanded }))}
+																className={`flex items-center justify-between p-2.5 text-xs font-semibold rounded-t border transition-colors ${
+																	isEvidenceExpanded ? "bg-muted/60 border-b-0" : "bg-muted/30 hover:bg-muted/50 rounded-b"
+																}`}
+															>
+																<span className="text-foreground text-left">
+																	建议 {actionNumber} 依据：{item.action?.trim() || "（尚未填写具体行动）"}
+																	<span className="font-normal text-muted-foreground ml-1.5">
+																		(已关联 {item.evidence_refs?.length ?? 0} 道题)
+																		{!hasRefs && "（尚未关联支持此建议的题目依据）"}
+																	</span>
+																</span>
+																<span className="text-muted-foreground ml-2 shrink-0">
+																	{isEvidenceExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
+																</span>
+															</button>
+															{isEvidenceExpanded && (
+																<div className="border border-t-0 rounded-b p-3 bg-background border-l-4 border-l-primary/60 flex flex-col gap-2.5 text-xs shadow-inner">
+																	<p className="text-muted-foreground text-[11px] leading-relaxed">
+																		仅选择确实支持此建议的原文。未完成题只支持采样局限；关联题码不代表已经通过语义审核。
+																	</p>
+																	{!item.action?.trim() && (
+																		<p role="status" className="text-amber-700 dark:text-amber-300 text-[11px]">
+																			本条建议尚未填写具体举措。
+																		</p>
+																	)}
+																	{evidenceQuestions.length === 0 ? (
+																		<p role="status" className="text-muted-foreground text-xs py-2">
+																			当前题目依据未读取到，请先只读刷新结果。
+																		</p>
+																	) : (
+																		<div className="flex flex-col gap-2 max-h-[360px] overflow-y-auto pr-1">
+																			{evidenceQuestions.map((q) => (
+																				<label key={q.question_code} className="block border-t border-border/50 pt-2 pb-1 hover:bg-muted/20 px-1 rounded transition-colors cursor-pointer">
+																					<div className="flex items-center gap-2 mb-1">
+																						<input
+																							type="checkbox"
+																							aria-label={`建议${actionNumber}关联${q.question_code}`}
+																							checked={item.evidence_refs?.includes(q.question_code) ?? false}
+																							onChange={(e) => updateActionRefs(index, q.question_code, e.target.checked)}
+																							className="rounded text-primary focus:ring-primary"
+																						/>
+																						<span className="font-semibold text-foreground">[{q.question_code}] {q.question_text}</span>
+																						<span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{q.dimension_name}</span>
+																					</div>
+																					<div className="pl-6 text-muted-foreground text-[11px]">
+																						{q.effective_status === "effective" && q.answer_text ? (
+																							<AnswerMarkdown text={q.answer_text} />
+																						) : (
+																							<p className="whitespace-pre-wrap">{questionObservationMessage(q)}</p>
+																						)}
+																					</div>
+																				</label>
+																			))}
+																		</div>
+																	)}
+																	<div className="flex justify-end pt-2 border-t border-border/40">
+																		<button
+																			type="button"
+																			id={`action-collapse-bottom-${activeRunId}-${index}`}
+																			onClick={() => handleCollapseActionEvidence(index)}
+																			className="inline-flex items-center gap-1 text-xs text-primary hover:text-primary/80 font-medium py-1 px-2 hover:bg-muted/50 rounded transition-colors"
+																		>
+																			<IconChevronUp size={14} />
+																			<span>收起本条建议依据</span>
+																		</button>
+																	</div>
+																</div>
+															)}
+														</div>
+													</div>
+												);
+											})}
+										</div>
+									)}
+									<div>
+										<button
+											type="button"
+											onClick={handleAddAction}
+											className="inline-flex items-center gap-1.5 border border-dashed border-primary/50 text-primary hover:bg-primary/5 rounded-lg py-2 px-3 text-xs font-semibold transition-colors"
+										>
+											<IconPlus size={15} />
+											<span>添加一条行动建议</span>
+										</button>
+									</div>
 								</div>
 							</div>
 
