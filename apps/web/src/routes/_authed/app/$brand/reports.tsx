@@ -9,6 +9,8 @@ import { DiagnosisDimensionInput } from "@/components/diagnosis-dimension-input"
 import { DefaultErrorComponent } from "@/router-default-components";
 import { useDiagnosisDraft } from "@/hooks/use-diagnosis-draft";
 import { DiagnosisStages } from "@/components/diagnosis-stages";
+import { AnswerMarkdown } from "@/components/answer-markdown";
+import { DEFAULT_SAMPLING_OUTPUT_TOKENS, samplingOutputTokens, samplingUsageCount } from "@/lib/baseline-sampling";
 import { diagnosisStages } from "@/lib/baseline-stages";
 import { questionObservationMessage, diagnosisAnalysisFailureMessage, diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, diagnosisTaskSection, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
 import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
@@ -77,6 +79,17 @@ type GenerateRevisionArgs = {
 };
 type SaveAnalysisArgs = { runId: string; nextRevisionId: string };
 type ReviewArgs = { action: "approve" | "reject"; reason: string; revisionId: string; runId: string };
+type UnsavedAnalysisDraft = {
+	activeAnalysisId: string;
+	analystName: string;
+	executiveConclusion: string;
+	keyFindings: string;
+	rawBrandIdentityAudit: unknown;
+	brandIdentityAudit: string;
+	contentGapsInput: string;
+	actionPlanInput: string;
+	rawActionPlan: AnalysisAction[];
+};
 
 function revisionStatusLabel(status: string | undefined): string {
 	if (status === "ready") return "已就绪";
@@ -114,6 +127,7 @@ function BrandReportsWorkspace() {
 	const [saveWorkflowRunId, setSaveWorkflowRunId] = useState<string>("");
 	const saveWorkflowRef = useRef(false);
 	const analysisDirtyRef = useRef(false);
+	const unsavedAnalysisDraftsRef = useRef(new Map<string, UnsavedAnalysisDraft>());
 	const loadedAnalysisIdentityRef = useRef("");
 	const progressPanelRef = useRef<HTMLElement | null>(null);
 	const analysisPanelRef = useRef<HTMLElement | null>(null);
@@ -390,32 +404,41 @@ function BrandReportsWorkspace() {
 		}
 	}, [runData?.current_step, runData?.status]);
 
-	// 切换 run 时的彻底清理与新 run 恢复 (E2-R04)
+	// 未保存表单按 run 隔离，返回原任务时恢复，不混入另一任务。
 	const handleSelectRun = useCallback((runId: string) => {
 		// 路由与选择器可能在同一轮渲染中重复选中同一 run；保留已恢复的分析与未保存修改。
 		if (runId === activeRunIdRef.current) return;
+		const previousRunId = activeRunIdRef.current;
+		if (previousRunId && analysisDirtyRef.current) {
+			unsavedAnalysisDraftsRef.current.set(previousRunId, {
+				activeAnalysisId, analystName, executiveConclusion, keyFindings,
+				rawBrandIdentityAudit, brandIdentityAudit, contentGapsInput, actionPlanInput, rawActionPlan,
+			});
+		} else if (previousRunId) {
+			unsavedAnalysisDraftsRef.current.delete(previousRunId);
+		}
+		const unsaved = unsavedAnalysisDraftsRef.current.get(runId);
 		setFocusRequest(null);
 		setLocationNotice(null);
 		activeRunIdRef.current = runId;
 		setActiveRunId(runId);
-		// 切换 run 时清空所有表单项，防止旧任务数据串入新任务
-		setActiveAnalysisId("");
-		setAnalystName("");
-		setExecutiveConclusion("");
-		setKeyFindings("");
-		setRawBrandIdentityAudit(null);
-		setBrandIdentityAudit("");
-		setContentGapsInput("");
-		setActionPlanInput("");
-		setRawActionPlan([]);
+		setActiveAnalysisId(unsaved?.activeAnalysisId ?? "");
+		setAnalystName(unsaved?.analystName ?? "");
+		setExecutiveConclusion(unsaved?.executiveConclusion ?? "");
+		setKeyFindings(unsaved?.keyFindings ?? "");
+		setRawBrandIdentityAudit(unsaved?.rawBrandIdentityAudit ?? null);
+		setBrandIdentityAudit(unsaved?.brandIdentityAudit ?? "");
+		setContentGapsInput(unsaved?.contentGapsInput ?? "");
+		setActionPlanInput(unsaved?.actionPlanInput ?? "");
+		setRawActionPlan(unsaved?.rawActionPlan ?? []);
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
-		analysisDirtyRef.current = false;
+		analysisDirtyRef.current = unsaved !== undefined;
 		loadedAnalysisIdentityRef.current = "";
 		setActionError(null);
 		setReviewNotice(null);
 		setReviewFeedback(null);
-	}, []);
+	}, [activeAnalysisId, analystName, executiveConclusion, keyFindings, rawBrandIdentityAudit, brandIdentityAudit, contentGapsInput, actionPlanInput, rawActionPlan]);
 
 	const requestTaskFocus = useCallback((runId: string) => {
 		handleSelectRun(runId);
@@ -473,7 +496,7 @@ function BrandReportsWorkspace() {
 			if (current.submitted) throw new Error("本轮已经发起，请查看本次任务；下一轮需重新准备并授权。");
 			const runId = current.authorizedRunId ?? `run_${crypto.randomUUID()}`;
 			save({ ...current, authorizedRunId: runId });
-			await registerBaselineServerAuthFn({ data: { brandId, snapshotId: current.snapshot.snapshot_id, runId, snapshotHash: current.snapshot.content_sha256, requestLimit: current.snapshot.question_count, retryLimit: 0 } });
+			await registerBaselineServerAuthFn({ data: { brandId, snapshotId: current.snapshot.snapshot_id, runId, snapshotHash: current.snapshot.content_sha256, requestLimit: current.snapshot.question_count, retryLimit: 0, maxOutputTokens: samplingOutputTokens(current.parameters?.maxOutputTokens) } });
 			return { ...current, authorizedRunId: runId };
 		}),
 		onSuccess: () => { setActionError(null); refetchActiveAuth(); },
@@ -492,14 +515,18 @@ function BrandReportsWorkspace() {
 			if (current.mode === "real" && !auth?.authorization && !current.runId) throw new Error("尚未授权本次真实诊断，请先核对费用并明确授权。");
 			const activeAuth = auth?.authorization;
 			const runId = current.runId ?? activeAuth?.run_id ?? `run_${crypto.randomUUID()}`;
-			const parameters = current.parameters ?? { modelName: activeAuth?.model_name, webSearch: activeAuth?.web_search === undefined ? undefined : Boolean(activeAuth.web_search) };
-			const prepared = { ...current, runId, parameters };
+			const parameters = current.parameters ?? { modelName: activeAuth?.model_name, webSearch: activeAuth?.web_search === undefined ? undefined : Boolean(activeAuth.web_search), maxOutputTokens: undefined };
+			const resolvedParameters = {
+				...parameters,
+				maxOutputTokens: samplingOutputTokens(parameters.maxOutputTokens, activeAuth ? activeAuth.max_output_tokens ?? null : undefined),
+			};
+			const prepared = { ...current, runId, parameters: resolvedParameters };
 			// Keep the same request identity if its response is lost or another tab repeats the action.
 			save(prepared);
 			const result = await createBaselineRunFn({ data: {
 				brandId, snapshotId: current.snapshot.snapshot_id, mode: current.mode, runId,
 				idempotencyKey: `idemp_${runId}`, requestBudget: current.snapshot.question_count, maxRetries: 0,
-				...parameters,
+				...resolvedParameters,
 			} });
 			return { ...prepared, runId: result.run_id, submitted: true };
 		}),
@@ -1215,6 +1242,9 @@ function BrandReportsWorkspace() {
 								</div>
 							</div>
 							<p className="text-xs text-muted-foreground">
+								下一轮单题输出上限：{activeAuthData?.authorization?.max_output_tokens ?? draft.parameters?.maxOutputTokens ?? DEFAULT_SAMPLING_OUTPUT_TOKENS} Token（包含回答与推理，旧授权及显式更小值不扩大）。
+							</p>
+							<p className="text-xs text-muted-foreground">
 								模式选择本身不会发起授权、采集或模型调用；真实执行仍需本章节费用确认后手动启动。
 							</p>
 							{executionMode === "real" && (
@@ -1243,15 +1273,16 @@ function BrandReportsWorkspace() {
 												{activeAuthData.authorization.retry_limit} 次
 											</div>
 											<div>联网检索: {activeAuthData.authorization.web_search ? "开启" : "关闭"}</div>
+											<div>单题输出上限: {activeAuthData.authorization.max_output_tokens ?? "未明确，需重新确认"} Token（包含回答与推理）</div>
 										</div>
 									)}
 								</div>
 							)}
 							{executionMode === "real" && frozenSnapshot && !activeAuthData?.authorization && (
 								<div className="space-y-2">
-									<p className="text-xs">本次仅授权这 {frozenSnapshot.question_count} 道题，采集上限 {frozenSnapshot.question_count} 次、重试 0 次，分析沿用本页所示范围。需要组织管理员或 owner 确认。</p>
+									<p className="text-xs">本次仅授权这 {frozenSnapshot.question_count} 道题，采集上限 {frozenSnapshot.question_count} 次、重试 0 次，单题输出上限 {draft.parameters?.maxOutputTokens ?? DEFAULT_SAMPLING_OUTPUT_TOKENS} Token（包含回答与推理）；提高上限可能增加费用，不保证回答必完整。分析沿用本页所示范围。需要组织管理员或 owner 确认。</p>
 									<button type="button" disabled={preparationBusy || draft.submitted} className="border rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => {
-										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，另含本页所示的 Negency-Agent 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
+										if (window.confirm(`确认授权本次 ${frozenSnapshot.question_count} 题真实豆包诊断？采集最多 ${frozenSnapshot.question_count} 次、重试 0 次，单题输出上限 ${draft.parameters?.maxOutputTokens ?? DEFAULT_SAMPLING_OUTPUT_TOKENS} Token（包含回答与推理，可能增加费用，不保证必完整），另含本页所示的 Negency-Agent 分析。仅本轮有效，不自动续采。`)) authorizeMutation.mutate();
 									}}>确认本次费用范围并授权</button>
 								</div>
 							)}
@@ -1534,7 +1565,7 @@ function BrandReportsWorkspace() {
 														{q.effective_status !== "effective" && <p className="text-amber-700 mb-2">{questionObservationMessage(q)}</p>}
 														<span className="font-semibold text-foreground">{q.effective_status === "in_progress" ? "正在等待本题回答：" : q.effective_status === "effective" ? "💬 模型实测回答：" : "💬 部分内容（如有，未完成／非有效样本）："}</span>
 														{isExpanded
-															? q.answer_text || (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
+															? q.answer_text ? <AnswerMarkdown text={q.answer_text} /> : (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
 															: q.answer_text
 																? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
 																: q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答"}
@@ -1557,8 +1588,8 @@ function BrandReportsWorkspace() {
 													<div className="flex items-center gap-4 text-muted-foreground text-[11px]">
 														<span>🔍 检索词记录: {q.search_queries?.join(", ") || "未提供／未知"}</span>
 														<span>🔗 引用数: {q.citations?.length ?? 0}</span>
-														<span>
-															⚡ Token: {q.raw_usage?.total_tokens !== undefined && q.raw_usage?.total_tokens !== null ? q.raw_usage.total_tokens : "未知"}
+														<span title={`原始 input_tokens：${samplingUsageCount(q.raw_usage?.input_tokens)}；output_tokens（含推理）：${samplingUsageCount(q.raw_usage?.output_tokens)}；其中 output_tokens_details.reasoning_tokens：${samplingUsageCount(q.raw_usage?.output_tokens_details?.reasoning_tokens)}。总用量不等于输出上限，联网多轮聚合用量不能用于精确推算正文截断。`}>
+															⚡ 总 Token: {samplingUsageCount(q.raw_usage?.total_tokens)}
 														</span>
 													</div>
 												</div>
@@ -1605,7 +1636,7 @@ function BrandReportsWorkspace() {
 															{q.effective_status !== "effective" && <p className="text-amber-700">{questionObservationMessage(q)}</p>}
 															<span className="font-semibold text-foreground">💬 探针回答：</span>
 															{isExpanded
-																? q.answer_text || (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
+																? q.answer_text ? <AnswerMarkdown text={q.answer_text} /> : (q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答")
 																: q.answer_text
 																	? q.answer_text.slice(0, 150) + (q.answer_text.length > 150 ? "..." : "")
 																	: q.effective_status === "in_progress" ? "采样进行中，请耐心等待" : "无有效回答"}
@@ -1627,8 +1658,8 @@ function BrandReportsWorkspace() {
 														<div className="flex items-center gap-4 text-muted-foreground text-[11px]">
 															<span>🔍 检索词: {q.search_queries?.join(", ") || "无"}</span>
 															<span>🔗 引用数: {q.citations?.length ?? 0}</span>
-															<span>
-																⚡ Token: {q.raw_usage?.total_tokens !== undefined && q.raw_usage?.total_tokens !== null ? q.raw_usage.total_tokens : "未知"}
+															<span title={`原始 input_tokens：${samplingUsageCount(q.raw_usage?.input_tokens)}；output_tokens（含推理）：${samplingUsageCount(q.raw_usage?.output_tokens)}；其中 output_tokens_details.reasoning_tokens：${samplingUsageCount(q.raw_usage?.output_tokens_details?.reasoning_tokens)}。总用量不等于输出上限，联网多轮聚合用量不能用于精确推算正文截断。`}>
+																⚡ 总 Token: {samplingUsageCount(q.raw_usage?.total_tokens)}
 															</span>
 														</div>
 													</div>
@@ -1780,7 +1811,9 @@ function BrandReportsWorkspace() {
 										{evidenceQuestions.map((q) => <label key={q.question_code} className="block border-t py-2">
 											<input type="checkbox" aria-label={`第${index + 1}条关联${q.question_code}`} checked={item.evidence_refs?.includes(q.question_code) ?? false} onChange={(e) => updateActionRefs(index, q.question_code, e.target.checked)} />
 											<span> [{q.question_code}] {q.question_text}</span>
-											<p className="whitespace-pre-wrap">{q.effective_status === "effective" ? q.answer_text : questionObservationMessage(q)}</p>
+											{q.effective_status === "effective" && q.answer_text
+												? <AnswerMarkdown text={q.answer_text} />
+												: <p className="whitespace-pre-wrap">{questionObservationMessage(q)}</p>}
 										</label>)}
 										{!evidenceQuestions.length && <p role="status">当前题目依据未读取到，请先只读刷新结果。</p>}
 										<button type="button" className="underline" onClick={() => { markAnalysisDirty(); setActionPlanInput(formatActionPlan(editedActions.items.filter((_, i) => i !== index))); }}>移除第{index + 1}条建议</button>

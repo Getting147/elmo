@@ -13,7 +13,7 @@ const draftSchema = z.object({
 	snapshot: snapshotSchema.nullable(),
 	authorizedRunId: z.string().optional(),
 	runId: z.string().optional(),
-	parameters: z.object({ modelName: z.string().optional(), webSearch: z.boolean().optional() }).optional(),
+	parameters: z.object({ modelName: z.string().optional(), webSearch: z.boolean().optional(), maxOutputTokens: z.number().int().positive().optional() }).optional(),
 	submitted: z.boolean(),
 });
 type Draft = z.infer<typeof draftSchema>;
