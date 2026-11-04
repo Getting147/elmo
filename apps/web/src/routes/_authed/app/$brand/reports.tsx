@@ -2006,8 +2006,15 @@ function BrandReportsWorkspace() {
 									</p>
 									{actionError && (
 										<div role="alert" className="p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 rounded-md border border-red-200 dark:border-red-800 text-xs">
-											<p className="font-semibold">行动建议格式解析异常：</p>
+											<p className="font-semibold">
+												{actionError.startsWith("生成报告修订失败") ? "报告修订装配提示：" : "行动建议格式解析异常："}
+											</p>
 											<p>{actionError}</p>
+											{actionError.startsWith("生成报告修订失败") && (
+												<p className="mt-1 text-muted-foreground text-[11px]">
+													注：人工分析表单（含行动建议清单）已成功保存入库；上述信息属于自动装配报告修订阶段的后端门禁/环境反馈。
+												</p>
+											)}
 										</div>
 									)}
 									{actionItems.length === 0 ? (
