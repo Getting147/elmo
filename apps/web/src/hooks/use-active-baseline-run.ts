@@ -257,6 +257,7 @@ export function useActiveBaselineRun(brandId: string | undefined): ActiveBaselin
 		queryFn: () => getBaselineEvidenceFn({ data: { brandId: brandId!, runId: activeRunId! } }),
 		enabled: isRunReady,
 		staleTime: 30_000,
+		retry: false,
 	});
 
 	// 6. Query analysis (for opportunities)

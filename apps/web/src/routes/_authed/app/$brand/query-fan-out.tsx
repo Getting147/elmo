@@ -123,6 +123,17 @@ function QueryFanoutPage() {
 	const baselineData = useMemo(() => {
 		if (!activeBaseline.hasBaselineRuns) return null;
 		const { runData, metricsData, evidenceData } = activeBaseline;
+
+		// 若 evidence 读取出错且当前没有 evidenceData，返回 null 触发错误态展示，避免派生出空统计对象误报为“无评测任务”
+		if ((activeBaseline.isError || activeBaseline.errors.evidenceError) && !evidenceData) {
+			return null;
+		}
+
+		// 若 evidence 仍在加载且尚无数据，返回 null 避免提前派生出 totalRuns: 0 闪现空态
+		if (!evidenceData) {
+			return null;
+		}
+
 		const modelName = runData?.model_name?.trim() || "";
 
 		// Model filter check
@@ -283,10 +294,14 @@ function QueryFanoutPage() {
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
 	const effectiveModelAliases = activeBaseline.hasBaselineRuns ? baselineModelAliases : undefined;
+	const isEvidenceFailed = activeBaseline.hasBaselineRuns && Boolean(activeBaseline.errors.evidenceError || activeBaseline.isError) && !activeBaseline.evidenceData;
+	const isEvidenceLoading = activeBaseline.hasBaselineRuns && !isEvidenceFailed && !activeBaseline.isRequestedRunMissing && (activeBaseline.isLoading || !activeBaseline.evidenceData);
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
-		? activeBaseline.isLoading && !activeBaseline.runData
+		? isEvidenceLoading
 		: isLoading && !data);
-	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : isError;
+	const effectiveError = activeBaseline.hasBaselineRuns
+		? Boolean(activeBaseline.isError || activeBaseline.errors.evidenceError)
+		: isError;
 
 	const infoContent = (
 		<p>
@@ -340,13 +355,13 @@ function QueryFanoutPage() {
 		content = <UnsupportedModelNotice />;
 	} else if (effectiveLoading) {
 		content = <LoadingState />;
-	} else if (effectiveError && !effectiveData) {
+	} else if (isEvidenceFailed || (effectiveError && !effectiveData)) {
 		content = (
 			<EmptyState
 				message={
 					isZh
-						? "无法加载检索发散数据，请刷新页面重试。"
-						: "Couldn't load query fan-out right now. Reload the page to try again."
+						? "读取本轮检索词归档失败，请刷新页面重试。"
+						: "Failed to load query fan-out archive. Please reload the page to try again."
 				}
 			/>
 		);
@@ -378,7 +393,7 @@ function QueryFanoutPage() {
 				}
 			/>
 		);
-	} else if (effectiveData.totalQueries === 0) {
+	} else if (!activeBaseline.hasBaselineRuns && effectiveData.totalQueries === 0) {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
@@ -397,7 +412,29 @@ function QueryFanoutPage() {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
+					{/* 后台刷新失败但当前保留有有效缓存记录时的警示条 */}
+					{effectiveError && effectiveData && (
+						<div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2" role="alert">
+							<IconAlertCircle className="size-4 shrink-0" />
+							<span>
+								{isZh
+									? "后台刷新检索词归档失败，当前展示为本地缓存记录；请刷新重试。"
+									: "Failed to refresh query archive in background; currently displaying cached data. Please reload the page."}
+							</span>
+						</div>
+					)}
 					<StatRow data={effectiveData as any} baseline={activeBaseline.hasBaselineRuns} />
+					{/* Baseline 模式下，若全部有效题均未提供检索词，展示全局未知说明，不阻断下方题目列表 */}
+					{activeBaseline.hasBaselineRuns && effectiveData.totalQueries === 0 && (
+						<div className="rounded-lg border border-border/80 bg-muted/40 p-3 text-xs text-muted-foreground flex items-center gap-2">
+							<IconAlertCircle className="size-4 shrink-0 text-muted-foreground" />
+							<span>
+								{isZh
+									? "当前有效正式题未提供可观测检索词记录；检索次数及平均值未知，不代表未搜索或免费。"
+									: "No observable query records for the effective formal samples; search counts and averages are unknown, not zero or free."}
+							</span>
+						</div>
+					)}
 					<Tabs value={tab} onValueChange={(v) => setTab(v as FanoutTab)} className="gap-4">
 						<TabsList>
 							<TabsTrigger value="fanout">{isZh ? "问题发散明细 (Prompt Fan-Out)" : "Prompt Fan-Out"}</TabsTrigger>
@@ -977,6 +1014,8 @@ function QueryFanoutDetailDialog({
 
 	let body: React.ReactNode;
 
+	const isEvidenceError = Boolean(isError || errors.evidenceError);
+
 	if (isRequestedRunMissing) {
 		body = (
 			<div className="py-6 text-center text-sm text-destructive" role="alert">
@@ -989,7 +1028,7 @@ function QueryFanoutDetailDialog({
 				{isZh ? "正在读取本轮检索词归档..." : "Loading query records..."}
 			</div>
 		);
-	} else if ((isError || errors.evidenceError) && !evidenceData) {
+	} else if (isEvidenceError && !evidenceData) {
 		body = (
 			<div className="py-6 text-center text-sm text-destructive" role="alert">
 				{isZh ? "读取本轮检索词归档失败，请刷新重试。" : "Failed to load query records. Please refresh to try again."}
@@ -1004,6 +1043,18 @@ function QueryFanoutDetailDialog({
 	} else {
 		body = (
 			<div className="space-y-4">
+				{/* 刷新失败但保留有效缓存记录时的警示条 */}
+				{isEvidenceError && (
+					<div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2" role="alert">
+						<IconAlertCircle className="size-4 shrink-0" />
+						<span>
+							{isZh
+								? "后台刷新检索词归档失败，当前展示为本地缓存记录；请稍后重试。"
+								: "Failed to refresh query archive in background; currently displaying cached data. Please try again later."}
+						</span>
+					</div>
+				)}
+
 				{/* 题目与任务元信息 */}
 				<div className="bg-muted/40 p-3 rounded-lg text-xs space-y-1.5 border">
 					<div className="flex justify-between items-center text-muted-foreground">

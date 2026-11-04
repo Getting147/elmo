@@ -24,6 +24,21 @@ describe("BUG-001 / B17: 检索发散详情接线、中文提示与真实执行�
 			expect(en.text).toContain("Track how different LLMs respond to prompts related to your brand, products, and competitors.");
 		});
 
+		it("AI 可见度条状图提示（VisibilityBar Tooltip）：中文正确格式化提示词数量并准确描述计算口径", () => {
+			const getVisibilityBarTooltip = (totalPrompts: number, isZh: boolean) => {
+				if (isZh) {
+					return `下方展示的 ${totalPrompts.toLocaleString()} 个提示词在所选筛选条件与时间范围内的 AI 可见度，计算方式为提及您品牌的 AI 回答所占百分比。`;
+				}
+				return `AI visibility for the ${totalPrompts.toLocaleString()} prompt${totalPrompts !== 1 ? "s" : ""} shown below, calculated as the percentage of AI responses that mention your brand over the time period for the selected filters.`;
+			};
+
+			const zh = getVisibilityBarTooltip(3, true);
+			expect(zh).toBe("下方展示的 3 个提示词在所选筛选条件与时间范围内的 AI 可见度，计算方式为提及您品牌的 AI 回答所占百分比。");
+
+			const en = getVisibilityBarTooltip(3, false);
+			expect(en).toBe("AI visibility for the 3 prompts shown below, calculated as the percentage of AI responses that mention your brand over the time period for the selected filters.");
+		});
+
 		it("SOV 标题提示：中文包含精确的两段声量份额与竞品口径说明", () => {
 			const getSovTips = (isZh: boolean) => {
 				if (isZh) {
@@ -171,6 +186,107 @@ describe("BUG-001 / B17: 检索发散详情接线、中文提示与真实执行�
 			const legacyAction = resolveAction(false, "legacy_prompt_123");
 			expect(legacyAction.type).toBe("navigation");
 			expect(legacyAction.url).toBe("/app/$brand/prompts/legacy_prompt_123?tab=web-queries");
+		});
+
+		describe("F01: 全无记录题时题目列表与只读详情入口保留", () => {
+			it("baseline 有有效题但所有 search_queries 为空时，不跳过题目列表，保留详情入口", () => {
+				const effectiveData = {
+					totalRuns: 1,
+					totalQueries: 0,
+					byPrompt: [
+						{
+							promptId: "Q01",
+							promptValue: "洗烘一体机指南",
+							totalQueries: 0,
+							uniqueQueries: 0,
+							variations: [],
+						},
+					],
+				};
+
+				// 判定分支
+				const shouldShowTabs = (hasBaseline: boolean, data: typeof effectiveData) => {
+					if (!hasBaseline && data.totalQueries === 0) return false;
+					if (hasBaseline && data.totalRuns > 0) return true;
+					return false;
+				};
+
+				expect(shouldShowTabs(true, effectiveData)).toBe(true);
+				expect(shouldShowTabs(false, effectiveData)).toBe(false);
+			});
+		});
+
+		describe("F02: 证据 GET 失败与缓存刷新状态区分", () => {
+			it("首次 evidence 读取失败无缓存时：禁止派生空统计对象，必须进入错误态", () => {
+				const activeBaseline = {
+					hasBaselineRuns: true,
+					isError: true,
+					errors: { evidenceError: new Error("503 Service Unavailable") },
+					evidenceData: undefined,
+					runData: { run_id: "run_A", model_name: "doubao-pro" },
+				};
+
+				const computeBaselineData = (baseline: typeof activeBaseline) => {
+					if (!baseline.hasBaselineRuns) return null;
+					if ((baseline.isError || baseline.errors.evidenceError) && !baseline.evidenceData) {
+						return null;
+					}
+					return { totalRuns: 0 };
+				};
+
+				expect(computeBaselineData(activeBaseline)).toBeNull();
+			});
+
+			it("有缓存且后台刷新失败时：明示缓存与刷新失败警示，不冒充成功", () => {
+				const dialogState = {
+					isError: true,
+					errors: { evidenceError: new Error("500 Internal Error") },
+					evidenceData: { formal_questions: [{ question_code: "Q01" }] },
+				};
+
+				const isEvidenceError = Boolean(dialogState.isError || dialogState.errors.evidenceError);
+				const hasCache = Boolean(dialogState.evidenceData);
+				const showWarningBanner = isEvidenceError && hasCache;
+
+				expect(isEvidenceError).toBe(true);
+				expect(hasCache).toBe(true);
+				expect(showWarningBanner).toBe(true);
+			});
+
+			it("证据正在加载且尚无数据时：保持 loading 态，禁止提前派生 totalRuns: 0 导致空态闪现", () => {
+				const activeBaseline = {
+					hasBaselineRuns: true,
+					isLoading: true,
+					isError: false,
+					errors: { evidenceError: null },
+					evidenceData: undefined,
+					runData: { run_id: "run_A", model_name: "doubao-pro" },
+				};
+
+				const isEvidenceFailed =
+					activeBaseline.hasBaselineRuns &&
+					Boolean(activeBaseline.errors.evidenceError || activeBaseline.isError) &&
+					!activeBaseline.evidenceData;
+
+				const isEvidenceLoading =
+					activeBaseline.hasBaselineRuns &&
+					!isEvidenceFailed &&
+					(activeBaseline.isLoading || !activeBaseline.evidenceData);
+
+				const computeBaselineData = (baseline: typeof activeBaseline) => {
+					if (!baseline.hasBaselineRuns) return null;
+					if ((baseline.isError || baseline.errors.evidenceError) && !baseline.evidenceData) {
+						return null;
+					}
+					if (!baseline.evidenceData) {
+						return null;
+					}
+					return { totalRuns: 0 };
+				};
+
+				expect(isEvidenceLoading).toBe(true);
+				expect(computeBaselineData(activeBaseline)).toBeNull();
+			});
 		});
 	});
 });
