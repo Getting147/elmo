@@ -91,6 +91,7 @@ type UnsavedAnalysisDraft = {
 	contentGapsInput: string;
 	actionPlanInput: string;
 	rawActionPlan: AnalysisAction[];
+	actionItems: AnalysisAction[];
 };
 
 function revisionStatusLabel(status: string | undefined): string {
@@ -167,6 +168,7 @@ function BrandReportsWorkspace() {
 	const [contentGapsInput, setContentGapsInput] = useState<string>("");
 	const [actionPlanInput, setActionPlanInput] = useState<string>("");
 	const [rawActionPlan, setRawActionPlan] = useState<AnalysisAction[]>([]);
+	const [actionItems, setActionItems] = useState<AnalysisAction[]>([]);
 
 	const currentAnalysisFormRef = useRef<UnsavedAnalysisDraft>({
 		activeAnalysisId,
@@ -178,6 +180,7 @@ function BrandReportsWorkspace() {
 		contentGapsInput,
 		actionPlanInput,
 		rawActionPlan,
+		actionItems,
 	});
 	currentAnalysisFormRef.current = {
 		activeAnalysisId,
@@ -189,6 +192,7 @@ function BrandReportsWorkspace() {
 		contentGapsInput,
 		actionPlanInput,
 		rawActionPlan,
+		actionItems,
 	};
 
 	const brandName = brand?.name || brandId || "";
@@ -365,6 +369,7 @@ function BrandReportsWorkspace() {
 		);
 		if (Array.isArray(analysisData.payload?.action_plan)) {
 			setRawActionPlan(analysisData.payload.action_plan);
+			setActionItems(analysisData.payload.action_plan);
 			setActionPlanInput(formatActionPlan(analysisData.payload.action_plan));
 		}
 		loadedAnalysisIdentityRef.current = identity;
@@ -465,6 +470,7 @@ function BrandReportsWorkspace() {
 		setContentGapsInput(unsaved?.contentGapsInput ?? "");
 		setActionPlanInput(unsaved?.actionPlanInput ?? "");
 		setRawActionPlan(unsaved?.rawActionPlan ?? []);
+		setActionItems(unsaved?.actionItems ?? (unsaved?.actionPlanInput ? inspectActionPlan(unsaved.actionPlanInput, unsaved.rawActionPlan).items : []));
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
 		analysisDirtyRef.current = unsaved !== undefined;
@@ -643,12 +649,26 @@ function BrandReportsWorkspace() {
 
 	const saveAnalysisMutation = useMutation({
 		mutationFn: (args: SaveAnalysisArgs) => {
-			const lines = actionPlanInput.split("\n").filter((l) => l.trim().length > 0);
-			if (lines.length === 0) {
+			if (actionItems.length === 0) {
 				throw new Error("请至少录入一条行动建议，格式：题码 | 建议行动 | 优先级(P0/P1/P2) | 决策依据 | 交付物 | 验证方式");
 			}
 
-			const actionPlan = parseActionPlan(actionPlanInput, rawActionPlan);
+			const actionPlan = actionItems.map((item, index) => {
+				const priority = (item.priority ?? "P1").trim().toUpperCase();
+				if (!["P0", "P1", "P2", "P3"].includes(priority)) {
+					throw new Error(`行动建议第 ${index + 1} 项优先级无效，请填写 P0/P1/P2/P3。`);
+				}
+				return {
+					...item,
+					priority: priority as "P0" | "P1" | "P2" | "P3",
+					evidence_refs: item.evidence_refs ?? [],
+					action: item.action ?? "",
+					priority_rationale: item.priority_rationale ?? "",
+					deliverable: item.deliverable ?? "",
+					verification_method: item.verification_method ?? "",
+					finding: item.finding ?? "",
+				};
+			});
 
 			let finalBrandIdentityAudit: any = brandIdentityAudit.trim() || "待人工核实与完善";
 			if (rawBrandIdentityAudit && typeof rawBrandIdentityAudit === "object") {
@@ -892,7 +912,6 @@ function BrandReportsWorkspace() {
 		readFailed: Boolean(runError || analysisQueryError),
 		hasAnalysis: hasCurrentAnalysis,
 	}) : null;
-	const editedActions = inspectActionPlan(actionPlanInput, rawActionPlan);
 	const evidenceQuestions = evidenceData?.run_id === activeRunId
 		? [...(evidenceData.formal_questions ?? []), ...(evidenceData.probe_questions ?? [])]
 		: [];
@@ -932,7 +951,6 @@ function BrandReportsWorkspace() {
 	}, []);
 
 	const handleAddAction = useCallback(() => {
-		const currentItems = editedActions.items ?? [];
 		const newItem: AnalysisAction = {
 			action: "",
 			priority: "P1",
@@ -942,16 +960,21 @@ function BrandReportsWorkspace() {
 			finding: "",
 			evidence_refs: [],
 		};
-		const nextItems = [...currentItems, newItem];
+		setActionItems((prev) => {
+			const next = [...prev, newItem];
+			setActionPlanInput(formatActionPlan(next));
+			return next;
+		});
 		markAnalysisDirty();
-		setActionPlanInput(formatActionPlan(nextItems));
-	}, [editedActions.items]);
+	}, []);
 
 	const handleRemoveAction = useCallback((index: number) => {
-		const currentItems = editedActions.items ?? [];
-		const nextItems = currentItems.filter((_, i) => i !== index);
+		setActionItems((prev) => {
+			const next = prev.filter((_, i) => i !== index);
+			setActionPlanInput(formatActionPlan(next));
+			return next;
+		});
 		markAnalysisDirty();
-		setActionPlanInput(formatActionPlan(nextItems));
 		setExpandedActionEvidences((prev) => {
 			const next: Record<number, boolean> = {};
 			Object.entries(prev).forEach(([key, val]) => {
@@ -961,33 +984,34 @@ function BrandReportsWorkspace() {
 			});
 			return next;
 		});
-	}, [editedActions.items]);
+	}, []);
 
 	const handleUpdateActionField = useCallback((index: number, field: keyof AnalysisAction, val: string) => {
-		if (editedActions.error) {
-			setActionError(editedActions.error);
-			return;
-		}
-		const currentItems = editedActions.items ?? [];
-		const nextItems = currentItems.map((item, i) => {
-			if (i !== index) return item;
-			return {
-				...item,
-				[field]: val,
-			};
+		setActionItems((prev) => {
+			const next = prev.map((item, i) => (i === index ? { ...item, [field]: val } : item));
+			setActionPlanInput(formatActionPlan(next));
+			return next;
 		});
 		markAnalysisDirty();
-		setActionPlanInput(formatActionPlan(nextItems));
-	}, [editedActions]);
+	}, []);
 
-	const updateActionRefs = (index: number, code: string, checked: boolean) => {
-		if (editedActions.error) { setActionError(editedActions.error); return; }
-		const items = editedActions.items.map((item, i) => i !== index ? item : {
-			...item, evidence_refs: checked ? [...(item.evidence_refs ?? []), code] : (item.evidence_refs ?? []).filter((ref) => ref !== code),
+	const updateActionRefs = useCallback((index: number, code: string, checked: boolean) => {
+		setActionItems((prev) => {
+			const next = prev.map((item, i) =>
+				i !== index
+					? item
+					: {
+							...item,
+							evidence_refs: checked
+								? [...(item.evidence_refs ?? []), code]
+								: (item.evidence_refs ?? []).filter((ref) => ref !== code),
+					  },
+			);
+			setActionPlanInput(formatActionPlan(next));
+			return next;
 		});
 		markAnalysisDirty();
-		setActionPlanInput(formatActionPlan(items));
-	};
+	}, []);
 	const analysisForm = diagnosisAnalysisFormStatus(runData, {
 		hasAnalysis: hasCurrentAnalysis,
 		analysisLoading: analysisQueryLoading,
@@ -1974,25 +1998,25 @@ function BrandReportsWorkspace() {
 											优先行动建议清单 *
 										</label>
 										<span className="text-xs text-muted-foreground font-normal">
-											共 {editedActions.items.length} 条建议
+											共 {actionItems.length} 条建议
 										</span>
 									</div>
 									<p className="text-muted-foreground text-xs">
 										每条建议独立编号并分开编辑。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。
 									</p>
-									{editedActions.error && (
+									{actionError && (
 										<div role="alert" className="p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 rounded-md border border-red-200 dark:border-red-800 text-xs">
 											<p className="font-semibold">行动建议格式解析异常：</p>
-											<p>{editedActions.error}</p>
+											<p>{actionError}</p>
 										</div>
 									)}
-									{editedActions.items.length === 0 ? (
+									{actionItems.length === 0 ? (
 										<div className="text-center p-6 border border-dashed rounded-lg text-muted-foreground text-xs space-y-2">
 											<p>暂无行动建议。点击下方“添加一条行动建议”开始制定。</p>
 										</div>
 									) : (
 										<div className="flex flex-col gap-4">
-											{editedActions.items.map((item, index) => {
+											{actionItems.map((item, index) => {
 												const isEvidenceExpanded = !!expandedActionEvidences[index];
 												const actionNumber = String(index + 1).padStart(2, "0");
 												const hasRefs = Boolean(item.evidence_refs && item.evidence_refs.length > 0);
@@ -2206,7 +2230,7 @@ function BrandReportsWorkspace() {
 										!analystName.trim() ||
 										!executiveConclusion.trim() ||
 										!keyFindings.trim() ||
-										!actionPlanInput.trim()
+										actionItems.length === 0
 									}
 									className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-xs hover:bg-blue-700 transition-colors disabled:opacity-50 self-end sm:self-auto"
 								>

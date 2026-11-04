@@ -87,4 +87,34 @@ describe("action editor evidence preservation", () => {
 		expect(parsed.length).toBe(1);
 		expect(parsed[0].action).toBe("修改后的行动 | 含竖线\n换行");
 	});
+
+	it("preserves trailing spaces and newlines during incremental typing simulation", () => {
+		// Simulating typing "New plan" keystroke by keystroke
+		let text = "";
+		const chars = "New plan".split("");
+		for (const char of chars) {
+			text += char;
+			// At "New ", trailing space must be intact
+			const formatted = formatActionPlan([{ action: text, priority: "P1" }]);
+			const parsed = parseActionPlan(formatted);
+			expect(parsed[0].action).toBe(text);
+		}
+		expect(text).toBe("New plan");
+
+		// Simulating multiline typing: "第一行\n第二行"
+		let multiline = "第一行";
+		let formatted = formatActionPlan([{ action: multiline, priority: "P1" }]);
+		let parsed = parseActionPlan(formatted);
+		expect(parsed[0].action).toBe("第一行");
+
+		multiline += "\n";
+		formatted = formatActionPlan([{ action: multiline, priority: "P1" }]);
+		parsed = parseActionPlan(formatted);
+		expect(parsed[0].action).toBe("第一行\n");
+
+		multiline += "第二行";
+		formatted = formatActionPlan([{ action: multiline, priority: "P1" }]);
+		parsed = parseActionPlan(formatted);
+		expect(parsed[0].action).toBe("第一行\n第二行");
+	});
 });

@@ -34,25 +34,47 @@ export function formatActionPlan(items: AnalysisAction[]): string {
 }
 
 function splitFields(line: string): string[] {
-	const fields: string[] = [];
-	let field = "";
+	const rawFields: string[] = [];
+	let current = "";
 	let escaped = false;
 	for (const char of line) {
 		if (escaped) {
-			field += char === "n" ? "\n" : char === "r" ? "\r" : char;
+			current += "\\" + char;
 			escaped = false;
 		} else if (char === "\\") {
 			escaped = true;
 		} else if (char === "|") {
-			fields.push(field.trim());
-			field = "";
+			rawFields.push(current);
+			current = "";
 		} else {
-			field += char;
+			current += char;
 		}
 	}
 	if (escaped) throw new Error("行动建议末尾的反斜线未转义，请使用 \\\\。");
-	fields.push(field.trim());
-	return fields;
+	rawFields.push(current);
+
+	return rawFields.map((raw, index, all) => {
+		let trimmed = raw;
+		if (index > 0 && trimmed.startsWith(" ")) {
+			trimmed = trimmed.slice(1);
+		}
+		if (index < all.length - 1 && trimmed.endsWith(" ")) {
+			trimmed = trimmed.slice(0, -1);
+		}
+		let field = "";
+		let esc = false;
+		for (const char of trimmed) {
+			if (esc) {
+				field += char === "n" ? "\n" : char === "r" ? "\r" : char;
+				esc = false;
+			} else if (char === "\\") {
+				esc = true;
+			} else {
+				field += char;
+			}
+		}
+		return field;
+	});
 }
 
 export function parseActionPlan(text: string, originals: AnalysisAction[] = []) {
@@ -68,7 +90,7 @@ export function parseActionPlan(text: string, originals: AnalysisAction[] = []) 
 			}) : [];
 			const origin = original ?? (matches.length === 1 ? matches[0] : undefined);
 			if (parts.length > 7) throw new Error(`行动建议第 ${index + 1} 项字段过多；正文竖线请写成 \\|。`);
-			const rawPriority = (original?.priority ?? parts[2] ?? "").toUpperCase();
+			const rawPriority = (original?.priority ?? parts[2] ?? "").trim().toUpperCase();
 			if (!["P0", "P1", "P2", "P3"].includes(rawPriority)) {
 				throw new Error(`行动建议第 ${index + 1} 项优先级无效，请填写 P0/P1/P2/P3。`);
 			}
