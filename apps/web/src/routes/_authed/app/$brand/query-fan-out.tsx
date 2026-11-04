@@ -11,7 +11,7 @@
  * searches contribute runs but no queries. See `server/query-fanout.ts` and
  * `lib/fanout-analysis.ts`.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { cn } from "@workspace/ui/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
@@ -47,6 +47,16 @@ import { BaselineModelMismatchNotice } from "@/components/baseline-model-mismatc
 import { effectiveQueryQuestions } from "@/lib/baseline-query-observations";
 import { IconAlertCircle } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+	DialogFooter,
+} from "@workspace/ui/components/dialog";
+import { GoStack } from "react-icons/go";
+import { formatBeijingTime } from "@/lib/baseline-task-name";
 
 /** The active tab lives in `?tab=` so each tab is directly linkable. */
 const FANOUT_TABS = ["fanout", "top-queries", "words"] as const;
@@ -93,6 +103,13 @@ function QueryFanoutPage() {
 	const availableModels = getAvailableModels(brand?.effectiveModels ?? []);
 	const modelParam = model === ALL_MODELS_VALUE ? undefined : model;
 
+	const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+
+	// 切换 run 或 brand 时立即重置详情选择，防止跨任务数据串用
+	useEffect(() => {
+		setSelectedPromptId(null);
+	}, [activeBaseline.activeRunId, brandId]);
+
 	const { promptsSummary } = usePromptsSummary(brandId, { lookback, model: modelParam });
 	const availableTags = promptsSummary?.availableTags ?? [];
 
@@ -106,6 +123,17 @@ function QueryFanoutPage() {
 	const baselineData = useMemo(() => {
 		if (!activeBaseline.hasBaselineRuns) return null;
 		const { runData, metricsData, evidenceData } = activeBaseline;
+
+		// 若 evidence 读取出错且当前没有 evidenceData，返回 null 触发错误态展示，避免派生出空统计对象误报为“无评测任务”
+		if ((activeBaseline.isError || activeBaseline.errors.evidenceError) && !evidenceData) {
+			return null;
+		}
+
+		// 若 evidence 仍在加载且尚无数据，返回 null 避免提前派生出 totalRuns: 0 闪现空态
+		if (!evidenceData) {
+			return null;
+		}
+
 		const modelName = runData?.model_name?.trim() || "";
 
 		// Model filter check
@@ -266,10 +294,14 @@ function QueryFanoutPage() {
 	const effectiveTags = activeBaseline.hasBaselineRuns ? baselineTags : availableTags;
 	const effectiveModels = activeBaseline.hasBaselineRuns ? baselineModels : availableModels;
 	const effectiveModelAliases = activeBaseline.hasBaselineRuns ? baselineModelAliases : undefined;
+	const isEvidenceFailed = activeBaseline.hasBaselineRuns && Boolean(activeBaseline.errors.evidenceError || activeBaseline.isError) && !activeBaseline.evidenceData;
+	const isEvidenceLoading = activeBaseline.hasBaselineRuns && !isEvidenceFailed && !activeBaseline.isRequestedRunMissing && (activeBaseline.isLoading || !activeBaseline.evidenceData);
 	const effectiveLoading = activeBaseline.isLoadingRunsList || (activeBaseline.hasBaselineRuns
-		? activeBaseline.isLoading && !activeBaseline.runData
+		? isEvidenceLoading
 		: isLoading && !data);
-	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : isError;
+	const effectiveError = activeBaseline.hasBaselineRuns
+		? Boolean(activeBaseline.isError || activeBaseline.errors.evidenceError)
+		: isError;
 
 	const infoContent = (
 		<p>
@@ -323,13 +355,13 @@ function QueryFanoutPage() {
 		content = <UnsupportedModelNotice />;
 	} else if (effectiveLoading) {
 		content = <LoadingState />;
-	} else if (effectiveError && !effectiveData) {
+	} else if (isEvidenceFailed || (effectiveError && !effectiveData)) {
 		content = (
 			<EmptyState
 				message={
 					isZh
-						? "无法加载检索发散数据，请刷新页面重试。"
-						: "Couldn't load query fan-out right now. Reload the page to try again."
+						? "读取本轮检索词归档失败，请刷新页面重试。"
+						: "Failed to load query fan-out archive. Please reload the page to try again."
 				}
 			/>
 		);
@@ -361,7 +393,7 @@ function QueryFanoutPage() {
 				}
 			/>
 		);
-	} else if (effectiveData.totalQueries === 0) {
+	} else if (!activeBaseline.hasBaselineRuns && effectiveData.totalQueries === 0) {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
@@ -380,7 +412,29 @@ function QueryFanoutPage() {
 		content = (
 			<TooltipProvider delayDuration={150}>
 				<div className="space-y-6">
+					{/* 后台刷新失败但当前保留有有效缓存记录时的警示条 */}
+					{effectiveError && effectiveData && (
+						<div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2" role="alert">
+							<IconAlertCircle className="size-4 shrink-0" />
+							<span>
+								{isZh
+									? "后台刷新检索词归档失败，当前展示为本地缓存记录；请刷新重试。"
+									: "Failed to refresh query archive in background; currently displaying cached data. Please reload the page."}
+							</span>
+						</div>
+					)}
 					<StatRow data={effectiveData as any} baseline={activeBaseline.hasBaselineRuns} />
+					{/* Baseline 模式下，若全部有效题均未提供检索词，展示全局未知说明，不阻断下方题目列表 */}
+					{activeBaseline.hasBaselineRuns && effectiveData.totalQueries === 0 && (
+						<div className="rounded-lg border border-border/80 bg-muted/40 p-3 text-xs text-muted-foreground flex items-center gap-2">
+							<IconAlertCircle className="size-4 shrink-0 text-muted-foreground" />
+							<span>
+								{isZh
+									? "当前有效正式题未提供可观测检索词记录；检索次数及平均值未知，不代表未搜索或免费。"
+									: "No observable query records for the effective formal samples; search counts and averages are unknown, not zero or free."}
+							</span>
+						</div>
+					)}
 					<Tabs value={tab} onValueChange={(v) => setTab(v as FanoutTab)} className="gap-4">
 						<TabsList>
 							<TabsTrigger value="fanout">{isZh ? "问题发散明细 (Prompt Fan-Out)" : "Prompt Fan-Out"}</TabsTrigger>
@@ -388,10 +442,20 @@ function QueryFanoutPage() {
 							{!activeBaseline.hasBaselineRuns && <TabsTrigger value="words">Query Words</TabsTrigger>}
 						</TabsList>
 						<TabsContent value="fanout">
-							<Prompts prompts={effectiveData.byPrompt} brandId={brandId} />
+							<Prompts
+								prompts={effectiveData.byPrompt}
+								brandId={brandId}
+								hasBaselineRuns={activeBaseline.hasBaselineRuns}
+								onOpenDetail={setSelectedPromptId}
+							/>
 						</TabsContent>
 						<TabsContent value="top-queries">
-							<TopQueries data={effectiveData as any} brandId={brandId} />
+							<TopQueries
+								data={effectiveData as any}
+								brandId={brandId}
+								hasBaselineRuns={activeBaseline.hasBaselineRuns}
+								onOpenDetail={setSelectedPromptId}
+							/>
 						</TabsContent>
 						{!activeBaseline.hasBaselineRuns && (
 							<TabsContent value="words">
@@ -407,7 +471,11 @@ function QueryFanoutPage() {
 	return (
 		<PageHeader
 			title={isZh ? "联网检索发散" : "Query Fan-Out"}
-			subtitle={isZh ? "展示原始响应中可观测的检索词记录，每个搜索块的查询文本计一条，不等于供应商计费次数。" : "Observable query records: one query text per search block, not provider billable tool calls."}
+			subtitle={
+				isZh
+					? "查看 AI 回答问题时可观测到的联网检索词，为内容选题提供线索；不代表完整检索过程或计费次数。"
+					: "Observable query records: one query text per search block, not provider billable tool calls."
+			}
 			infoContent={activeBaseline.hasBaselineRuns ? (isZh ? "仅统计当前任务的有效正式题；失败题与探针不参与。未提供检索词不代表未搜索，分号文本保持原样。" : "Only effective formal samples in this run. Failed samples and probes are excluded. Missing queries do not imply no search; semicolons are preserved.") : infoContent}
 		>
 			<div className="space-y-6">
@@ -432,6 +500,17 @@ function QueryFanoutPage() {
 					/>
 				</FilterSection>
 				{content}
+				{activeBaseline.hasBaselineRuns && (
+					<QueryFanoutDetailDialog
+						brandId={brandId}
+						brandName={brand?.name}
+						promptId={selectedPromptId}
+						isOpen={selectedPromptId !== null}
+						onClose={() => setSelectedPromptId(null)}
+						activeBaseline={activeBaseline}
+						isZh={isZh}
+					/>
+				)}
 			</div>
 		</PageHeader>
 	);
@@ -609,7 +688,17 @@ function SortHead<K extends string>({
 
 const GRID = "grid grid-cols-[1.25rem_1fr_4.5rem_7rem] items-center gap-3";
 
-function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: string }) {
+function Prompts({
+	prompts,
+	brandId,
+	hasBaselineRuns = false,
+	onOpenDetail,
+}: {
+	prompts: PromptFanoutStat[];
+	brandId: string;
+	hasBaselineRuns?: boolean;
+	onOpenDetail?: (promptId: string) => void;
+}) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 	const [expanded, setExpanded] = useState<Set<string>>(
@@ -694,7 +783,11 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 										<span className="block truncate text-sm font-medium" title={p.promptValue}>
 											{p.promptValue || "(untitled prompt)"}
 										</span>
-										<span className="text-muted-foreground text-xs">{p.uniqueQueries.toLocaleString()} variations</span>
+										<span className="text-muted-foreground text-xs">
+											{isZh
+												? `${p.uniqueQueries.toLocaleString()} 种检索词记录`
+												: `${p.uniqueQueries.toLocaleString()} ${p.uniqueQueries === 1 ? "variation" : "variations"}`}
+										</span>
 									</span>
 									<span className="text-right text-sm tabular-nums">{p.totalQueries.toLocaleString()}</span>
 									<span className="text-right text-sm tabular-nums">{p.totalQueries ? p.avgPerExecution.toLocaleString() : "—"}</span>
@@ -712,12 +805,25 @@ function Prompts({ prompts, brandId }: { prompts: PromptFanoutStat[]; brandId: s
 											</div>
 										)}
 										<div className="pt-1">
-											<HistoryButton
-												brandId={brandId}
-												promptId={p.promptId}
-												promptName={p.promptValue}
-												tab="web-queries"
-											/>
+											{hasBaselineRuns ? (
+												<Button
+													size="sm"
+													variant="secondary"
+													className="text-xs cursor-pointer h-6 flex items-center px-2"
+													onClick={() => onOpenDetail?.(p.promptId)}
+													data-testid={`view-detail-${p.promptId}`}
+												>
+													<GoStack className="size-3 mr-0.5" />
+													<span className="text-xs font-normal">{isZh ? "查看详情" : "View Details"}</span>
+												</Button>
+											) : (
+												<HistoryButton
+													brandId={brandId}
+													promptId={p.promptId}
+													promptName={p.promptValue}
+													tab="web-queries"
+												/>
+											)}
 										</div>
 									</div>
 								)}
@@ -743,7 +849,17 @@ type TopSort = "prompts" | "runs";
 
 const TOP_GRID = "grid grid-cols-[1.25rem_1fr_5rem_5.5rem] items-center gap-3";
 
-function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
+function TopQueries({
+	data,
+	brandId,
+	hasBaselineRuns = false,
+	onOpenDetail,
+}: {
+	data: FanoutData;
+	brandId: string;
+	hasBaselineRuns?: boolean;
+	onOpenDetail?: (promptId: string) => void;
+}) {
 	const { language } = useLanguage();
 	const isZh = language === "zh";
 	const [sort, setSort] = useState<TopSort>("prompts");
@@ -809,15 +925,27 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 									<div className="border-border mb-3 ml-8 mr-2 space-y-1.5 border-l pl-4">
 										{q.promptRefs.map((p) => (
 											<div key={p.promptId} className="flex items-baseline justify-between gap-4">
-												<Link
-													to="/app/$brand/prompts/$promptId"
-													params={{ brand: brandId, promptId: p.promptId }}
-													search={{ tab: "web-queries" }}
-													className="min-w-0 truncate text-sm hover:underline"
-													title={p.promptValue}
-												>
-													{p.promptValue || "(untitled prompt)"}
-												</Link>
+												{hasBaselineRuns ? (
+													<button
+														type="button"
+														onClick={() => onOpenDetail?.(p.promptId)}
+														className="min-w-0 truncate text-sm hover:underline text-left cursor-pointer font-medium"
+														title={p.promptValue}
+														data-testid={`query-ref-${p.promptId}`}
+													>
+														{p.promptValue || "(untitled prompt)"}
+													</button>
+												) : (
+													<Link
+														to="/app/$brand/prompts/$promptId"
+														params={{ brand: brandId, promptId: p.promptId }}
+														search={{ tab: "web-queries" }}
+														className="min-w-0 truncate text-sm hover:underline"
+														title={p.promptValue}
+													>
+														{p.promptValue || "(untitled prompt)"}
+													</Link>
+												)}
 												<span
 													className="text-muted-foreground shrink-0 text-sm tabular-nums"
 													title={isZh ? "触发该检索词的评测次数" : "Runs of this prompt that issued the search"}
@@ -839,5 +967,182 @@ function TopQueries({ data, brandId }: { data: FanoutData; brandId: string }) {
 				</div>
 			</CardContent>
 		</Card>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Query Fan-Out Detail Dialog — In-place read-only evidence viewer for active baseline run
+// ---------------------------------------------------------------------------
+
+function QueryFanoutDetailDialog({
+	brandId,
+	brandName,
+	promptId,
+	isOpen,
+	onClose,
+	activeBaseline,
+	isZh,
+}: {
+	brandId: string;
+	brandName?: string;
+	promptId: string | null;
+	isOpen: boolean;
+	onClose: () => void;
+	activeBaseline: ReturnType<typeof useActiveBaselineRun>;
+	isZh: boolean;
+}) {
+	if (!isOpen || !promptId) return null;
+
+	const {
+		isRequestedRunMissing,
+		isLoading,
+		isError,
+		errors,
+		activeRunId,
+		runData,
+		evidenceData,
+	} = activeBaseline;
+
+	const formalQuestions: any[] = evidenceData?.formal_questions || [];
+	const question = formalQuestions.find(
+		(q: any) => (q.question_code || q.question_id || q.question_text) === promptId,
+	);
+
+	const platform = runData?.model_name?.trim() || (isZh ? "未知平台" : "Unknown Engine");
+	const sampleTime = formatBeijingTime(runData?.completed_at || runData?.created_at, isZh);
+	const queries: string[] = Array.isArray(question?.search_queries) ? question.search_queries : [];
+
+	let body: React.ReactNode;
+
+	const isEvidenceError = Boolean(isError || errors.evidenceError);
+
+	if (isRequestedRunMissing) {
+		body = (
+			<div className="py-6 text-center text-sm text-destructive" role="alert">
+				{isZh ? "指定的诊断任务不存在或无权访问" : "Diagnostic Run Not Found or Access Denied"}
+			</div>
+		);
+	} else if (isLoading && !evidenceData) {
+		body = (
+			<div className="py-8 text-center text-sm text-muted-foreground">
+				{isZh ? "正在读取本轮检索词归档..." : "Loading query records..."}
+			</div>
+		);
+	} else if (isEvidenceError && !evidenceData) {
+		body = (
+			<div className="py-6 text-center text-sm text-destructive" role="alert">
+				{isZh ? "读取本轮检索词归档失败，请刷新重试。" : "Failed to load query records. Please refresh to try again."}
+			</div>
+		);
+	} else if (!question) {
+		body = (
+			<div className="py-6 text-center text-sm text-muted-foreground">
+				{isZh ? "未在当前诊断任务中找到该题目记录。" : "Prompt record not found in the current diagnostic run."}
+			</div>
+		);
+	} else {
+		body = (
+			<div className="space-y-4">
+				{/* 刷新失败但保留有效缓存记录时的警示条 */}
+				{isEvidenceError && (
+					<div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2" role="alert">
+						<IconAlertCircle className="size-4 shrink-0" />
+						<span>
+							{isZh
+								? "后台刷新检索词归档失败，当前展示为本地缓存记录；请稍后重试。"
+								: "Failed to refresh query archive in background; currently displaying cached data. Please try again later."}
+						</span>
+					</div>
+				)}
+
+				{/* 题目与任务元信息 */}
+				<div className="bg-muted/40 p-3 rounded-lg text-xs space-y-1.5 border">
+					<div className="flex justify-between items-center text-muted-foreground">
+						<span>{isZh ? "当前品牌" : "Brand"}: <strong className="text-foreground">{brandName || brandId}</strong></span>
+						<span>{isZh ? "任务编号" : "Run"}: <span className="font-mono text-foreground">{activeRunId || "—"}</span></span>
+					</div>
+					<div className="flex justify-between items-center text-muted-foreground">
+						<span>{isZh ? "评测平台" : "Engine"}: <span className="text-foreground">{platform}</span></span>
+						<span>{isZh ? "采样时间" : "Time"}: <span className="text-foreground">{sampleTime}</span></span>
+					</div>
+					<div className="pt-1 border-t text-muted-foreground">
+						<span className="font-semibold text-foreground mr-1.5">[{question.question_code || promptId}]</span>
+						<span className="text-foreground">{question.question_text || question.text || promptId}</span>
+					</div>
+				</div>
+
+				{/* 检索词记录 */}
+				<div className="space-y-2">
+					<div className="flex items-center justify-between text-xs text-muted-foreground">
+						<span className="font-medium text-foreground">
+							{isZh ? "可观测检索词记录" : "Observable Web Queries"}
+						</span>
+						{queries.length > 0 && (
+							<span>
+								{isZh
+									? `共 ${queries.length} 条记录（每搜索块计一条）`
+									: `${queries.length} record(s)`}
+							</span>
+						)}
+					</div>
+
+					{queries.length === 0 ? (
+						<div className="p-4 rounded-lg border bg-muted/20 text-center text-sm text-muted-foreground">
+							{isZh
+								? "本题暂无可观测检索词记录，不能据此确认未联网"
+								: "No observable query records for this prompt; this does not confirm web search was unused."}
+						</div>
+					) : (
+						<div className="max-h-[260px] overflow-y-auto space-y-2 pr-1">
+							{queries.map((q, idx) => (
+								<div
+									key={`${idx}-${q}`}
+									className="p-3 bg-muted/30 border rounded-md text-xs font-mono break-words whitespace-pre-wrap leading-relaxed"
+								>
+									{q}
+								</div>
+							))}
+						</div>
+					)}
+				</div>
+
+				{/* 原回答证据只读参考（如有） */}
+				{question.answer_text && (
+					<div className="space-y-1.5 pt-2 border-t text-xs">
+						<span className="font-medium text-muted-foreground">
+							{isZh ? "原始回答节选" : "Response Excerpt"}
+						</span>
+						<div className="p-2.5 bg-muted/20 border rounded text-xs text-muted-foreground line-clamp-3 break-words whitespace-pre-wrap">
+							{question.answer_text}
+						</div>
+					</div>
+				)}
+			</div>
+		);
+	}
+
+	return (
+		<Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+			<DialogContent className="sm:max-w-lg">
+				<DialogHeader>
+					<DialogTitle className="text-base font-semibold">
+						{isZh ? "联网检索详情" : "Web Query Fan-Out Details"}
+					</DialogTitle>
+					<DialogDescription className="text-xs">
+						{isZh
+							? "查看 AI 回答此题时可观测到的联网检索词记录；不代表完整检索过程或计费次数。"
+							: "Observable search queries triggered by the AI when responding to this prompt."}
+					</DialogDescription>
+				</DialogHeader>
+
+				{body}
+
+				<DialogFooter className="pt-2">
+					<Button variant="outline" size="sm" onClick={onClose}>
+						{isZh ? "关闭" : "Close"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }

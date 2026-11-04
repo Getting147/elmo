@@ -2,6 +2,7 @@ import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip";
 import { IconInfoCircle } from "@tabler/icons-react";
+import { useLanguage } from "@/lib/language-context";
 
 interface VisibilityTimeSeriesPoint {
 	date: string;
@@ -58,6 +59,9 @@ export function VisibilityBar({
 	lookback,
 	isLoading = false,
 }: VisibilityBarProps) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
 	if (isLoading) {
 		return <VisibilityBarSkeleton />;
 	}
@@ -83,7 +87,7 @@ export function VisibilityBar({
 			{/* Left side: visibility + chart + info */}
 			<div className="flex items-center gap-2 min-w-0 shrink-0">
 				<span className={`text-base sm:text-lg font-semibold whitespace-nowrap ${colors.text}`}>
-					{currentVisibility}% <span className="font-normal">Visibility</span>
+					{currentVisibility}% <span className="font-normal">{isZh ? "AI 可见度" : "Visibility"}</span>
 				</span>
 
 				{showChart && (
@@ -112,9 +116,9 @@ export function VisibilityBar({
 						<IconInfoCircle className={`h-3.5 w-3.5 shrink-0 ${colors.muted} cursor-help`} />
 					</TooltipTrigger>
 					<TooltipContent side="bottom" className="max-w-xs text-sm">
-						AI visibility for the {totalPrompts.toLocaleString()} prompt{totalPrompts !== 1 ? "s" : ""} shown below,
-						calculated as the percentage of AI responses that mention your brand over the time period for the selected
-						filters.
+						{isZh
+							? `下方展示的 ${totalPrompts.toLocaleString()} 个提示词在所选筛选条件与时间范围内的 AI 可见度，计算方式为提及您品牌的 AI 回答所占百分比。`
+							: `AI visibility for the ${totalPrompts.toLocaleString()} prompt${totalPrompts !== 1 ? "s" : ""} shown below, calculated as the percentage of AI responses that mention your brand over the time period for the selected filters.`}
 					</TooltipContent>
 				</Tooltip>
 			</div>
@@ -122,13 +126,13 @@ export function VisibilityBar({
 			{/* Right side: stats */}
 			<div className={`flex items-center gap-x-3 text-xs sm:text-sm ${colors.muted}`}>
 				<span>
-					<span className="font-medium">{totalPrompts.toLocaleString()}</span> prompts
+					<span className="font-medium">{totalPrompts.toLocaleString()}</span> {isZh ? "个提示词" : "prompts"}
 				</span>
 				<span>
-					<span className="font-medium">{totalRuns.toLocaleString()}</span> runs
+					<span className="font-medium">{totalRuns.toLocaleString()}</span> {isZh ? "次评测" : "runs"}
 				</span>
 				<span>
-					<span className="font-medium">{totalCitations.toLocaleString()}</span> citations
+					<span className="font-medium">{totalCitations.toLocaleString()}</span> {isZh ? "次引用" : "citations"}
 				</span>
 			</div>
 		</div>
@@ -152,10 +156,13 @@ export function VisibilityBarSkeleton() {
 }
 
 export function VisibilityBarEmpty({ message }: { message?: string }) {
+	const { language } = useLanguage();
+	const isZh = language === "zh";
+
 	return (
 		<div className="flex items-center min-h-10 px-3 py-2 rounded-lg border border-border/60 bg-muted/20">
 			<span className="text-sm text-muted-foreground">
-				{message || "当前时间范围与筛选条件下暂无可见度数据 / No visibility data for the selected time range and filters."}
+				{message || (isZh ? "当前时间范围与筛选条件下暂无可见度数据" : "No visibility data for the selected time range and filters.")}
 			</span>
 		</div>
 	);

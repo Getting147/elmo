@@ -221,7 +221,14 @@ function ShareOfVoicePage() {
 		: isLoading && !data);
 	const effectiveError = activeBaseline.hasBaselineRuns ? activeBaseline.isError : false;
 
-	const infoContent = (
+	const infoContent = isZh ? (
+		<>
+			<p className="mb-2">
+				声量份额反映在当前筛选范围内，你的品牌和纳入对比的竞品分别占全部品牌提及的比例。提及按每次回答计数，同一回答中同一品牌出现多次不重复累加，便于按相同口径比较。
+			</p>
+			<p>竞品范围以当前页面使用的数据为准；可结合标签、时间范围及可用的引擎筛选查看结果。</p>
+		</>
+	) : (
 		<>
 			<p className="mb-2">
 				Share of voice is how often each brand is mentioned in the AI answers to your prompts. Mentions are counted per

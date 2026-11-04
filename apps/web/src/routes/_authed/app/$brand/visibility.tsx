@@ -9,6 +9,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PromptsDisplay } from "@/components/prompts-display";
 import { getAppName, getBrandName, buildTitle } from "@/lib/route-head";
 import { coercePromptOrder, DEFAULT_PROMPT_ORDER, type PromptOrder } from "@/lib/prompt-order";
+import { useLanguage } from "@/lib/language-context";
 
 export const Route = createFileRoute("/_authed/app/$brand/visibility")({
 	// The prompts list's sort order (#60) is this route's own search key, on top
@@ -33,8 +34,18 @@ export const Route = createFileRoute("/_authed/app/$brand/visibility")({
 
 function VisibilityPage() {
 	const { brand: brandId } = Route.useParams();
+	const { language } = useLanguage();
+	const isZh = language === "zh";
 
-	const infoContent = (
+	const infoContent = isZh ? (
+		<>
+			查看 AI 对与你的品牌、产品及
+			<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
+				竞品
+			</Link>
+			相关问题的实际回答与品牌提及情况。
+		</>
+	) : (
 		<>
 			Track how different LLMs respond to prompts related to your brand, products, and{" "}
 			<Link to="/app/$brand/settings/competitors" params={{ brand: brandId }} className="underline">
