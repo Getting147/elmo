@@ -1393,7 +1393,13 @@ function BrandReportsWorkspace() {
 								</div>
 								<div className="border p-3 rounded-lg bg-muted/20">
 									<span className="text-xs text-muted-foreground">当前任务来源</span>
-									<div className="text-sm font-bold mt-0.5 text-muted-foreground">
+									<div
+										className={`text-sm font-bold mt-0.5 ${
+											runData?.mode === "real"
+												? "text-emerald-600 dark:text-emerald-400"
+												: "text-muted-foreground"
+										}`}
+									>
 										{runData
 											? runData.mode === "real"
 												? "真实执行"
