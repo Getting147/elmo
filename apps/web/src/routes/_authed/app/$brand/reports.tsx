@@ -105,6 +105,7 @@ type AutoEvidenceAuditEntry = {
 	evidenceReady: boolean;
 	audited: number;
 	verdicts: Map<string, string> | null;
+	filteredUnsupported: Map<string, number>;
 };
 
 type ActionFilterProvenance = {
@@ -381,8 +382,8 @@ function BrandReportsWorkspace() {
 	const auditVerdictKey = (action: unknown, refs: unknown) =>
 		JSON.stringify([action ?? "", Array.isArray(refs) ? refs : []]);
 
-	const computeAuditItems = (items: AnalysisAction[], entry: AutoEvidenceAuditEntry) => {
-		let unsupported = 0;
+	const applyAuditToItems = (items: AnalysisAction[], entry: AutoEvidenceAuditEntry) => {
+		const removed = new Map<string, number>();
 		let unverified = 0;
 		const next: AnalysisAction[] = [];
 		for (const item of items) {
@@ -400,7 +401,8 @@ function BrandReportsWorkspace() {
 				? entry.verdicts.get(auditVerdictKey(item.action, item.evidence_refs))
 				: undefined;
 			if (status === "unsupported") {
-				unsupported += 1;
+				const key = auditVerdictKey(item.action, item.evidence_refs);
+				removed.set(key, (removed.get(key) ?? 0) + 1);
 				continue;
 			}
 			if (status === "unverified") {
@@ -410,11 +412,17 @@ function BrandReportsWorkspace() {
 			}
 			next.push(item);
 		}
-		return { items: next, unsupported, unverified };
+		// 已移除的行动不再出现在草稿中；按核验身份保留事实，重复应用不归零或重复累计。
+		for (const [key, count] of removed) {
+			entry.filteredUnsupported.set(key, Math.max(entry.filteredUnsupported.get(key) ?? 0, count));
+		}
+		entry.unsupported = [...entry.filteredUnsupported.values()].reduce((total, count) => total + count, 0);
+		entry.unverified = unverified;
+		return { items: next, unsupported: entry.unsupported, unverified };
 	};
 
-	const applyAuditToCurrentItems = (entry: AutoEvidenceAuditEntry) => {
-		const result = computeAuditItems(currentAnalysisFormRef.current.actionItems, entry);
+	const applyAuditToCurrentItems = (entry: AutoEvidenceAuditEntry, items = currentAnalysisFormRef.current.actionItems) => {
+		const result = applyAuditToItems(items, entry);
 		setActionItems(result.items);
 		setRawActionPlan(result.items);
 		setActionPlanInput(formatActionPlan(result.items));
@@ -428,7 +436,7 @@ function BrandReportsWorkspace() {
 		const provenance = entry.runId === activeRunIdRef.current
 			? actionFilterProvenanceRef.current
 			: actionFilterProvenanceByRunRef.current.get(entry.runId) ?? null;
-		if (!provenance) return;
+		if (!provenance || provenance.sourceAnalysisId !== entry.analysisId) return;
 		const next = {
 			...provenance,
 			audited: entry.audited,
@@ -445,6 +453,7 @@ function BrandReportsWorkspace() {
 		analysisId: string;
 		identity: string;
 		loadedCount: number;
+		loadedItems?: AnalysisAction[];
 	}) => {
 		const auditKey = `${args.runId}:${args.analysisId}`;
 		const active = () =>
@@ -455,7 +464,7 @@ function BrandReportsWorkspace() {
 		const cached = auditStateCacheRef.current.get(auditKey);
 		if (cached && cached.state !== "pending" && !auditInFlightRef.current.has(auditKey)) {
 			if (!active()) return;
-			const counts = applyAuditToCurrentItems(cached);
+			const counts = applyAuditToCurrentItems(cached, args.loadedItems);
 			setAutoEvidenceAudit({ ...cached, ...counts });
 			updateAuditProvenance(cached, counts);
 			return;
@@ -471,6 +480,7 @@ function BrandReportsWorkspace() {
 			evidenceReady: true,
 			audited: args.loadedCount,
 			verdicts: null,
+			filteredUnsupported: new Map(),
 		});
 		try {
 			const res: any = await auditBaselineAnalysisEvidenceFn({
@@ -495,6 +505,7 @@ function BrandReportsWorkspace() {
 				evidenceReady: res?.evidence_ready !== false,
 				audited: args.loadedCount,
 				verdicts,
+				filteredUnsupported: new Map(),
 			};
 			auditStateCacheRef.current.set(auditKey, entry);
 			if (!active()) return;
@@ -513,6 +524,7 @@ function BrandReportsWorkspace() {
 				evidenceReady: false,
 				audited: args.loadedCount,
 				verdicts: null,
+				filteredUnsupported: new Map(),
 			};
 			auditStateCacheRef.current.set(auditKey, entry);
 			if (!active()) return;
@@ -532,6 +544,7 @@ function BrandReportsWorkspace() {
 		if (!activeRunId || analysisData?.run_id !== activeRunId || analysisDirtyRef.current) return;
 		const identity = `${analysisData.analysis_id}:${analysisData.version ?? ""}`;
 		if (loadedAnalysisIdentityRef.current === identity) return;
+		loadedAnalysisIdentityRef.current = identity;
 		setActiveAnalysisId(analysisData.analysis_id || "");
 		const analyst = analysisData.analyst_name;
 		setAnalystName(
@@ -606,12 +619,14 @@ function BrandReportsWorkspace() {
 						evidenceReady: true,
 						audited: keptItems.length,
 						verdicts: null,
+						filteredUnsupported: new Map(),
 					});
 					void runHistoryEvidenceAudit({
 						runId: activeRunId,
 						analysisId: analysisData.analysis_id,
 						identity,
 						loadedCount: keptItems.length,
+						loadedItems: keptItems,
 					});
 				} else {
 					setAutoEvidenceAudit(null);
@@ -630,7 +645,6 @@ function BrandReportsWorkspace() {
 			autoActionFilterByRunRef.current.delete(activeRunId);
 			actionFilterProvenanceByRunRef.current.delete(activeRunId);
 		}
-		loadedAnalysisIdentityRef.current = identity;
 	}, [analysisData, activeRunId]);
 
 	// 恢复报告修订版本列表及建议下一修订编号 (E2-R04 / E3-R04: 避免旧 reportData effect 覆盖刚生成或明确选择的新修订)
@@ -777,7 +791,7 @@ function BrandReportsWorkspace() {
 			});
 		} else {
 			// 离开期间已完成/失败：在恢复的草稿副本上应用结论，保留人工输入
-			const applied = computeAuditItems(restoredItems, cachedAudit);
+			const applied = applyAuditToItems(restoredItems, cachedAudit);
 			setActionItems(applied.items);
 			setRawActionPlan(applied.items);
 			setActionPlanInput(formatActionPlan(applied.items));
