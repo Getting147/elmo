@@ -96,6 +96,28 @@ type UnsavedAnalysisDraft = {
 	actionItems: AnalysisAction[];
 };
 
+type AutoEvidenceAuditEntry = {
+	runId: string;
+	analysisId: string;
+	state: "pending" | "done" | "failed";
+	unsupported: number;
+	unverified: number;
+	evidenceReady: boolean;
+	audited: number;
+	verdicts: Map<string, string> | null;
+};
+
+type ActionFilterProvenance = {
+	sourceAnalysisId: string;
+	sourceVersion: number | null;
+	filteredNoRef: number;
+	backendFiltered: number;
+	audited: number;
+	unsupported: number;
+	unverified: number;
+	evidenceReady: boolean | null;
+};
+
 function revisionStatusLabel(status: string | undefined): string {
 	if (status === "ready") return "已就绪";
 	if (status === "rendering") return "生成中";
@@ -133,23 +155,13 @@ function BrandReportsWorkspace() {
 	// AI 自动分析载入编辑副本时的无依据建议过滤提示 (B18-CORE)
 	const [autoActionFilter, setAutoActionFilter] = useState<{ runId: string; filteredCount: number; sourceVersion: number | null } | null>(null);
 	// 历史自动建议依据核验状态（R01-F01）：pending 时禁止保存，避免未核验项混入新产物
-	const [autoEvidenceAudit, setAutoEvidenceAudit] = useState<{
-		runId: string;
-		state: "pending" | "done" | "failed";
-		unsupported: number;
-		unverified: number;
-		evidenceReady: boolean;
-	} | null>(null);
-	const actionFilterProvenanceRef = useRef<{
-		sourceAnalysisId: string;
-		sourceVersion: number | null;
-		filteredNoRef: number;
-		backendFiltered: number;
-		audited: number;
-		unsupported: number;
-		unverified: number;
-		evidenceReady: boolean | null;
-	} | null>(null);
+	const [autoEvidenceAudit, setAutoEvidenceAudit] = useState<AutoEvidenceAuditEntry | null>(null);
+	// 核验结果按 run+analysis 缓存：切任务返回后恢复完成结果或接续只读核验 (R02-F01-b)
+	const auditStateCacheRef = useRef(new Map<string, AutoEvidenceAuditEntry>());
+	const auditInFlightRef = useRef(new Set<string>());
+	const autoActionFilterByRunRef = useRef(new Map<string, { runId: string; filteredCount: number; sourceVersion: number | null }>());
+	const actionFilterProvenanceRef = useRef<ActionFilterProvenance | null>(null);
+	const actionFilterProvenanceByRunRef = useRef(new Map<string, ActionFilterProvenance>());
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [downloadError, setDownloadError] = useState<string | null>(null);
 	const [saveWorkflowPhase, setSaveWorkflowPhase] = useState<"idle" | "saving" | "assembling">("idle");
@@ -363,98 +375,157 @@ function BrandReportsWorkspace() {
 		enabled: !!brandId && activeTab === "legacy",
 	});
 
-	// 历史自动建议依据核验（R01-F01）：按每条建议自身 refs+action 匹配后端结论，
+	// 历史自动建议依据核验（R01-F01 / R02-F01）：按每条建议自身 refs+action 匹配后端结论，
 	// 不按数组下标套用其他条目的核验信息；资料不足/读取失败保留并标记“尚未核实”。
+	// 核验状态按 run+analysis 缓存，切任务回来后恢复结果或接续只读核验 (R02-F01-b)。
+	const auditVerdictKey = (action: unknown, refs: unknown) =>
+		JSON.stringify([action ?? "", Array.isArray(refs) ? refs : []]);
+
+	const computeAuditItems = (items: AnalysisAction[], entry: AutoEvidenceAuditEntry) => {
+		let unsupported = 0;
+		let unverified = 0;
+		const next: AnalysisAction[] = [];
+		for (const item of items) {
+			const hasRefs = Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0;
+			if (entry.state === "failed" || !entry.evidenceReady) {
+				if (hasRefs) {
+					next.push({ ...item, audit_status: "unverified" as const });
+					unverified += 1;
+				} else {
+					next.push(item);
+				}
+				continue;
+			}
+			const status = hasRefs && entry.verdicts
+				? entry.verdicts.get(auditVerdictKey(item.action, item.evidence_refs))
+				: undefined;
+			if (status === "unsupported") {
+				unsupported += 1;
+				continue;
+			}
+			if (status === "unverified") {
+				unverified += 1;
+				next.push({ ...item, audit_status: "unverified" as const });
+				continue;
+			}
+			next.push(item);
+		}
+		return { items: next, unsupported, unverified };
+	};
+
+	const applyAuditToCurrentItems = (entry: AutoEvidenceAuditEntry) => {
+		const result = computeAuditItems(currentAnalysisFormRef.current.actionItems, entry);
+		setActionItems(result.items);
+		setRawActionPlan(result.items);
+		setActionPlanInput(formatActionPlan(result.items));
+		return { unsupported: result.unsupported, unverified: result.unverified };
+	};
+
+	const updateAuditProvenance = (
+		entry: AutoEvidenceAuditEntry,
+		counts: { unsupported: number; unverified: number },
+	) => {
+		const provenance = entry.runId === activeRunIdRef.current
+			? actionFilterProvenanceRef.current
+			: actionFilterProvenanceByRunRef.current.get(entry.runId) ?? null;
+		if (!provenance) return;
+		const next = {
+			...provenance,
+			audited: entry.audited,
+			unsupported: counts.unsupported,
+			unverified: counts.unverified,
+			evidenceReady: entry.evidenceReady,
+		};
+		actionFilterProvenanceByRunRef.current.set(entry.runId, next);
+		if (entry.runId === activeRunIdRef.current) actionFilterProvenanceRef.current = next;
+	};
+
 	const runHistoryEvidenceAudit = async (args: {
 		runId: string;
 		analysisId: string;
 		identity: string;
 		loadedCount: number;
 	}) => {
+		const auditKey = `${args.runId}:${args.analysisId}`;
 		const active = () =>
-			loadedAnalysisIdentityRef.current === args.identity && activeRunIdRef.current === args.runId;
-		const applyItems = (next: AnalysisAction[]) => {
-			setActionItems(next);
-			setRawActionPlan(next);
-			setActionPlanInput(formatActionPlan(next));
-		};
-		const markAllUnverified = (state: "failed") => {
+			activeRunIdRef.current === args.runId &&
+			(loadedAnalysisIdentityRef.current === args.identity ||
+				currentAnalysisFormRef.current.activeAnalysisId === args.analysisId);
+
+		const cached = auditStateCacheRef.current.get(auditKey);
+		if (cached && cached.state !== "pending" && !auditInFlightRef.current.has(auditKey)) {
 			if (!active()) return;
-			const next = currentAnalysisFormRef.current.actionItems.map((item) =>
-				Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0
-					? { ...item, audit_status: "unverified" as const }
-					: item,
-			);
-			const unverified = next.filter((item) => item.audit_status === "unverified").length;
-			applyItems(next);
-			setAutoEvidenceAudit({ runId: args.runId, state, unsupported: 0, unverified, evidenceReady: false });
-			if (actionFilterProvenanceRef.current) {
-				actionFilterProvenanceRef.current = {
-					...actionFilterProvenanceRef.current,
-					audited: args.loadedCount,
-					unsupported: 0,
-					unverified,
-					evidenceReady: false,
-				};
-			}
-		};
+			const counts = applyAuditToCurrentItems(cached);
+			setAutoEvidenceAudit({ ...cached, ...counts });
+			updateAuditProvenance(cached, counts);
+			return;
+		}
+		if (auditInFlightRef.current.has(auditKey)) return;
+		auditInFlightRef.current.add(auditKey);
+		auditStateCacheRef.current.set(auditKey, {
+			runId: args.runId,
+			analysisId: args.analysisId,
+			state: "pending",
+			unsupported: 0,
+			unverified: 0,
+			evidenceReady: true,
+			audited: args.loadedCount,
+			verdicts: null,
+		});
 		try {
 			const res: any = await auditBaselineAnalysisEvidenceFn({
 				data: { brandId: brandId!, runId: args.runId, analysisId: args.analysisId },
 			});
-			if (!active()) return;
-			const verdicts: any[] = Array.isArray(res?.items) ? res.items : [];
-			const evidenceReady = res?.evidence_ready !== false;
-			const keyOf = (action: unknown, refs: unknown) =>
-				JSON.stringify([action ?? "", Array.isArray(refs) ? refs : []]);
 			const rank: Record<string, number> = { unsupported: 3, unverified: 2, supported: 1, no_refs: 0 };
-			const verdictByKey = new Map<string, string>();
-			for (const verdict of verdicts) {
+			const verdicts = new Map<string, string>();
+			for (const verdict of Array.isArray(res?.items) ? res.items : []) {
 				const status = String(verdict?.status || "");
 				if (!(status in rank)) continue;
-				const key = keyOf(verdict.action, verdict.evidence_refs);
-				const previous = verdictByKey.get(key);
-				if (!previous || rank[status] > rank[previous]) verdictByKey.set(key, status);
+				const key = auditVerdictKey(verdict.action, verdict.evidence_refs);
+				const previous = verdicts.get(key);
+				// 同一条建议出现多个结论时取更保守的结果，避免把不确定项当成已支持
+				if (!previous || rank[status] > rank[previous]) verdicts.set(key, status);
 			}
-			let unsupported = 0;
-			let unverified = 0;
-			const next: AnalysisAction[] = [];
-			for (const item of currentAnalysisFormRef.current.actionItems) {
-				const hasRefs = Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0;
-				const status = hasRefs
-					? verdictByKey.get(keyOf(item.action, item.evidence_refs))
-					: undefined;
-				if (!evidenceReady) {
-					next.push(hasRefs ? { ...item, audit_status: "unverified" as const } : item);
-					if (hasRefs) unverified += 1;
-					continue;
-				}
-				if (status === "unsupported") {
-					unsupported += 1;
-					continue;
-				}
-				if (status === "unverified") {
-					unverified += 1;
-					next.push({ ...item, audit_status: "unverified" as const });
-					continue;
-				}
-				next.push(item);
-			}
-			applyItems(next);
-			setAutoEvidenceAudit({ runId: args.runId, state: "done", unsupported, unverified, evidenceReady });
-			if (actionFilterProvenanceRef.current) {
-				actionFilterProvenanceRef.current = {
-					...actionFilterProvenanceRef.current,
-					audited: args.loadedCount,
-					unsupported,
-					unverified,
-					evidenceReady,
-				};
-			}
+			const entry: AutoEvidenceAuditEntry = {
+				runId: args.runId,
+				analysisId: args.analysisId,
+				state: "done",
+				unsupported: 0,
+				unverified: 0,
+				evidenceReady: res?.evidence_ready !== false,
+				audited: args.loadedCount,
+				verdicts,
+			};
+			auditStateCacheRef.current.set(auditKey, entry);
+			if (!active()) return;
+			const counts = applyAuditToCurrentItems(entry);
+			entry.unsupported = counts.unsupported;
+			entry.unverified = counts.unverified;
+			setAutoEvidenceAudit({ ...entry });
+			updateAuditProvenance(entry, counts);
 		} catch {
-			markAllUnverified("failed");
+			const entry: AutoEvidenceAuditEntry = {
+				runId: args.runId,
+				analysisId: args.analysisId,
+				state: "failed",
+				unsupported: 0,
+				unverified: 0,
+				evidenceReady: false,
+				audited: args.loadedCount,
+				verdicts: null,
+			};
+			auditStateCacheRef.current.set(auditKey, entry);
+			if (!active()) return;
+			const counts = applyAuditToCurrentItems(entry);
+			entry.unverified = counts.unverified;
+			setAutoEvidenceAudit({ ...entry });
+			updateAuditProvenance(entry, counts);
+		} finally {
+			auditInFlightRef.current.delete(auditKey);
 		}
 	};
+	const runHistoryEvidenceAuditRef = useRef(runHistoryEvidenceAudit);
+	runHistoryEvidenceAuditRef.current = runHistoryEvidenceAudit;
 
 	// 恢复服务端持久化的人工分析；轮询不得覆盖当前页面尚未保存的人工修改 (E2-R04 / B08-08)
 	useEffect(() => {
@@ -509,8 +580,8 @@ function BrandReportsWorkspace() {
 			setActionItems(keptItems);
 			setActionPlanInput(formatActionPlan(keptItems));
 			if (isAutoAnalysis) {
-				setAutoActionFilter({ runId: activeRunId, filteredCount, sourceVersion: analysisData.version ?? null });
-				actionFilterProvenanceRef.current = {
+				const filterState = { runId: activeRunId, filteredCount, sourceVersion: analysisData.version ?? null };
+				const provenance: ActionFilterProvenance = {
 					sourceAnalysisId: analysisData.analysis_id || "",
 					sourceVersion: analysisData.version ?? null,
 					filteredNoRef: frontendFilteredCount,
@@ -520,9 +591,22 @@ function BrandReportsWorkspace() {
 					unverified: 0,
 					evidenceReady: null,
 				};
+				setAutoActionFilter(filterState);
+				autoActionFilterByRunRef.current.set(activeRunId, filterState);
+				actionFilterProvenanceRef.current = provenance;
+				actionFilterProvenanceByRunRef.current.set(activeRunId, provenance);
 				// R01-F01: 有引用的历史自动建议需与本轮归档依据复核后才进入编辑清单
 				if (keptItems.length > 0 && analysisData.analysis_id) {
-					setAutoEvidenceAudit({ runId: activeRunId, state: "pending", unsupported: 0, unverified: 0, evidenceReady: true });
+					setAutoEvidenceAudit({
+						runId: activeRunId,
+						analysisId: analysisData.analysis_id,
+						state: "pending",
+						unsupported: 0,
+						unverified: 0,
+						evidenceReady: true,
+						audited: keptItems.length,
+						verdicts: null,
+					});
 					void runHistoryEvidenceAudit({
 						runId: activeRunId,
 						analysisId: analysisData.analysis_id,
@@ -536,11 +620,15 @@ function BrandReportsWorkspace() {
 				setAutoActionFilter(null);
 				setAutoEvidenceAudit(null);
 				actionFilterProvenanceRef.current = null;
+				autoActionFilterByRunRef.current.delete(activeRunId);
+				actionFilterProvenanceByRunRef.current.delete(activeRunId);
 			}
 		} else {
 			setAutoActionFilter(null);
 			setAutoEvidenceAudit(null);
 			actionFilterProvenanceRef.current = null;
+			autoActionFilterByRunRef.current.delete(activeRunId);
+			actionFilterProvenanceByRunRef.current.delete(activeRunId);
 		}
 		loadedAnalysisIdentityRef.current = identity;
 	}, [analysisData, activeRunId]);
@@ -649,7 +737,8 @@ function BrandReportsWorkspace() {
 		setContentGapsInput(unsaved?.contentGapsInput ?? "");
 		setActionPlanInput(unsaved?.actionPlanInput ?? "");
 		setRawActionPlan(unsaved?.rawActionPlan ?? []);
-		setActionItems(unsaved?.actionItems ?? (unsaved?.actionPlanInput ? inspectActionPlan(unsaved.actionPlanInput, unsaved.rawActionPlan).items : []));
+		const restoredItems = unsaved?.actionItems ?? (unsaved?.actionPlanInput ? inspectActionPlan(unsaved.actionPlanInput, unsaved.rawActionPlan).items : []);
+		setActionItems(restoredItems);
 		setActiveRevisionId("rev_01");
 		setRevisionInput("rev_01");
 		analysisDirtyRef.current = unsaved !== undefined;
@@ -659,8 +748,42 @@ function BrandReportsWorkspace() {
 		setReviewFeedback(null);
 		setDeleteConfirm(null);
 		setDeleteFeedback(null);
-		setAutoActionFilter(null);
-		actionFilterProvenanceRef.current = null;
+		setAutoActionFilter(autoActionFilterByRunRef.current.get(runId) ?? null);
+		actionFilterProvenanceRef.current = actionFilterProvenanceByRunRef.current.get(runId) ?? null;
+
+		// R02-F01-b: 核验状态与恢复的草稿/分析身份绑定；完成结果直接恢复，pending 则接续只读核验。
+		const draftAnalysisId = unsaved?.activeAnalysisId ?? "";
+		const cachedAudit = draftAnalysisId ? auditStateCacheRef.current.get(`${runId}:${draftAnalysisId}`) : undefined;
+		if (!unsaved) {
+			// 无未保存草稿时由 hydrate 重新判断是否自动分析并触发核验
+			setAutoEvidenceAudit(null);
+		} else if (!cachedAudit) {
+			setAutoEvidenceAudit(null);
+		} else if (cachedAudit.state === "pending") {
+			setAutoEvidenceAudit({ ...cachedAudit });
+			// 同步草稿身份，避免刚恢复时迟到的核验响应被当作别的任务丢弃
+			currentAnalysisFormRef.current = {
+				...currentAnalysisFormRef.current,
+				activeAnalysisId: draftAnalysisId,
+				actionItems: restoredItems,
+				rawActionPlan: unsaved.rawActionPlan,
+				actionPlanInput: unsaved.actionPlanInput,
+			};
+			void runHistoryEvidenceAuditRef.current({
+				runId,
+				analysisId: draftAnalysisId,
+				identity: "",
+				loadedCount: cachedAudit.audited,
+			});
+		} else {
+			// 离开期间已完成/失败：在恢复的草稿副本上应用结论，保留人工输入
+			const applied = computeAuditItems(restoredItems, cachedAudit);
+			setActionItems(applied.items);
+			setRawActionPlan(applied.items);
+			setActionPlanInput(formatActionPlan(applied.items));
+			setAutoEvidenceAudit({ ...cachedAudit, unsupported: applied.unsupported, unverified: applied.unverified });
+			updateAuditProvenance(cachedAudit, applied);
+		}
 	}, []);
 
 	const requestTaskFocus = useCallback((runId: string) => {
@@ -787,8 +910,11 @@ function BrandReportsWorkspace() {
 	});
 	const preparationBusy = freezeMutation.isPending || authorizeMutation.isPending || createRunMutation.isPending;
 	// 历史自动建议依据核验未完成前禁止保存，确保编辑副本与保存/装配清单一致 (R01-F01)
+	// 仅绑定当前任务与当前分析版本，切回后已完成的核验不会继续阻塞保存 (R02-F01-b)
 	const autoAuditPending =
-		autoEvidenceAudit?.runId === activeRunId && autoEvidenceAudit.state === "pending";
+		autoEvidenceAudit?.runId === activeRunId &&
+		autoEvidenceAudit.state === "pending" &&
+		(!activeAnalysisId || autoEvidenceAudit.analysisId === activeAnalysisId);
 	const handleStartDiagnosis = () => {
 		if (preparationBusy) return;
 		if (draft.submitted && draft.runId) {
