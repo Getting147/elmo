@@ -853,6 +853,39 @@ export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
 	});
 
 // ============================================================================
+// 7.05 历史自动分析依据核验 (GET /runs/{run_id}/analysis/{analysis_id}/evidence-audit) (R01-F01)
+// 只读复核，不调用模型；unsupported=编辑副本剔除，unverified=保留并标记“尚未核实”
+// ============================================================================
+
+export const auditBaselineAnalysisEvidenceFn = createServerFn({ method: "GET" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			runId: z.string(),
+			analysisId: z.string(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		return callBaselineBackend({
+			method: "GET",
+			path: `/api/baseline/v1/runs/${encodeURIComponent(data.runId)}/analysis/${encodeURIComponent(data.analysisId)}/evidence-audit`,
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
+		});
+	});
+
+// ============================================================================
 // 7.1. 触发或重试 AI 自动分析与报告生成 (POST /runs/{run_id}/analysis/auto) (REPORT-001F)
 // ============================================================================
 

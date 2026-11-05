@@ -9,6 +9,8 @@ export type AnalysisAction = {
 	brand_id?: string;
 	snapshot_id?: string;
 	run_id?: string;
+	// 历史自动建议依据资料不足时的编辑态标记（R01-F01）；不写入保存 payload
+	audit_status?: "unverified";
 };
 
 function escapeField(value: string | undefined): string {

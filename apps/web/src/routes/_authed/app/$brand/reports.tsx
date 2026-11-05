@@ -13,7 +13,7 @@ import { AnswerMarkdown } from "@/components/answer-markdown";
 import { DEFAULT_SAMPLING_OUTPUT_TOKENS, samplingOutputTokens, samplingUsageCount } from "@/lib/baseline-sampling";
 import { diagnosisStages } from "@/lib/baseline-stages";
 import { questionObservationMessage, diagnosisAnalysisFailureMessage, diagnosisAnalysisFormStatus, diagnosisCountText, diagnosisStatusText, diagnosisTaskSection, isBaselineRunActive, isDiagnosisInProgress } from "@/lib/baseline-status";
-import { createFileRoute, Link, type ErrorComponentProps } from "@tanstack/react-router";
+import { createFileRoute, Link, useLoaderData, type ErrorComponentProps } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBrand } from "@/hooks/use-brands";
 import { getBrandReports } from "@/server/report-files";
@@ -30,6 +30,7 @@ import {
 	deleteBaselineReportRevisionFn,
 	listBaselineRunsFn,
 	getBaselineAnalysisFn,
+	auditBaselineAnalysisEvidenceFn,
 	getBaselineReportFn,
 	getBaselineActiveAuthFn,
 	registerBaselineServerAuthFn,
@@ -112,6 +113,8 @@ function BrandReportsWorkspace() {
 	const { runId: requestedRunId } = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const { brand } = useBrand(brandId);
+	// R01-F03: 删除入口按组织角色控制（未知/加载中一律不给入口），服务端强校验仍独立生效
+	const { canDeleteRevisions } = useLoaderData({ from: "/_authed/app/$brand" });
 	const isZh = typeof navigator !== "undefined" ? navigator.language?.startsWith("zh") : true;
 
 	// 顶栏 Tab: portal (诊断工作台) vs legacy (历史报告)
@@ -129,11 +132,23 @@ function BrandReportsWorkspace() {
 	const [deleteFeedback, setDeleteFeedback] = useState<{ tone: "success" | "error"; runId: string; revisionId: string; message: string } | null>(null);
 	// AI 自动分析载入编辑副本时的无依据建议过滤提示 (B18-CORE)
 	const [autoActionFilter, setAutoActionFilter] = useState<{ runId: string; filteredCount: number; sourceVersion: number | null } | null>(null);
+	// 历史自动建议依据核验状态（R01-F01）：pending 时禁止保存，避免未核验项混入新产物
+	const [autoEvidenceAudit, setAutoEvidenceAudit] = useState<{
+		runId: string;
+		state: "pending" | "done" | "failed";
+		unsupported: number;
+		unverified: number;
+		evidenceReady: boolean;
+	} | null>(null);
 	const actionFilterProvenanceRef = useRef<{
 		sourceAnalysisId: string;
 		sourceVersion: number | null;
 		filteredNoRef: number;
 		backendFiltered: number;
+		audited: number;
+		unsupported: number;
+		unverified: number;
+		evidenceReady: boolean | null;
 	} | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -348,6 +363,99 @@ function BrandReportsWorkspace() {
 		enabled: !!brandId && activeTab === "legacy",
 	});
 
+	// 历史自动建议依据核验（R01-F01）：按每条建议自身 refs+action 匹配后端结论，
+	// 不按数组下标套用其他条目的核验信息；资料不足/读取失败保留并标记“尚未核实”。
+	const runHistoryEvidenceAudit = async (args: {
+		runId: string;
+		analysisId: string;
+		identity: string;
+		loadedCount: number;
+	}) => {
+		const active = () =>
+			loadedAnalysisIdentityRef.current === args.identity && activeRunIdRef.current === args.runId;
+		const applyItems = (next: AnalysisAction[]) => {
+			setActionItems(next);
+			setRawActionPlan(next);
+			setActionPlanInput(formatActionPlan(next));
+		};
+		const markAllUnverified = (state: "failed") => {
+			if (!active()) return;
+			const next = currentAnalysisFormRef.current.actionItems.map((item) =>
+				Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0
+					? { ...item, audit_status: "unverified" as const }
+					: item,
+			);
+			const unverified = next.filter((item) => item.audit_status === "unverified").length;
+			applyItems(next);
+			setAutoEvidenceAudit({ runId: args.runId, state, unsupported: 0, unverified, evidenceReady: false });
+			if (actionFilterProvenanceRef.current) {
+				actionFilterProvenanceRef.current = {
+					...actionFilterProvenanceRef.current,
+					audited: args.loadedCount,
+					unsupported: 0,
+					unverified,
+					evidenceReady: false,
+				};
+			}
+		};
+		try {
+			const res: any = await auditBaselineAnalysisEvidenceFn({
+				data: { brandId: brandId!, runId: args.runId, analysisId: args.analysisId },
+			});
+			if (!active()) return;
+			const verdicts: any[] = Array.isArray(res?.items) ? res.items : [];
+			const evidenceReady = res?.evidence_ready !== false;
+			const keyOf = (action: unknown, refs: unknown) =>
+				JSON.stringify([action ?? "", Array.isArray(refs) ? refs : []]);
+			const rank: Record<string, number> = { unsupported: 3, unverified: 2, supported: 1, no_refs: 0 };
+			const verdictByKey = new Map<string, string>();
+			for (const verdict of verdicts) {
+				const status = String(verdict?.status || "");
+				if (!(status in rank)) continue;
+				const key = keyOf(verdict.action, verdict.evidence_refs);
+				const previous = verdictByKey.get(key);
+				if (!previous || rank[status] > rank[previous]) verdictByKey.set(key, status);
+			}
+			let unsupported = 0;
+			let unverified = 0;
+			const next: AnalysisAction[] = [];
+			for (const item of currentAnalysisFormRef.current.actionItems) {
+				const hasRefs = Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0;
+				const status = hasRefs
+					? verdictByKey.get(keyOf(item.action, item.evidence_refs))
+					: undefined;
+				if (!evidenceReady) {
+					next.push(hasRefs ? { ...item, audit_status: "unverified" as const } : item);
+					if (hasRefs) unverified += 1;
+					continue;
+				}
+				if (status === "unsupported") {
+					unsupported += 1;
+					continue;
+				}
+				if (status === "unverified") {
+					unverified += 1;
+					next.push({ ...item, audit_status: "unverified" as const });
+					continue;
+				}
+				next.push(item);
+			}
+			applyItems(next);
+			setAutoEvidenceAudit({ runId: args.runId, state: "done", unsupported, unverified, evidenceReady });
+			if (actionFilterProvenanceRef.current) {
+				actionFilterProvenanceRef.current = {
+					...actionFilterProvenanceRef.current,
+					audited: args.loadedCount,
+					unsupported,
+					unverified,
+					evidenceReady,
+				};
+			}
+		} catch {
+			markAllUnverified("failed");
+		}
+	};
+
 	// 恢复服务端持久化的人工分析；轮询不得覆盖当前页面尚未保存的人工修改 (E2-R04 / B08-08)
 	useEffect(() => {
 		if (!activeRunId || analysisData?.run_id !== activeRunId || analysisDirtyRef.current) return;
@@ -407,13 +515,31 @@ function BrandReportsWorkspace() {
 					sourceVersion: analysisData.version ?? null,
 					filteredNoRef: frontendFilteredCount,
 					backendFiltered: backendFilteredCount,
+					audited: 0,
+					unsupported: 0,
+					unverified: 0,
+					evidenceReady: null,
 				};
+				// R01-F01: 有引用的历史自动建议需与本轮归档依据复核后才进入编辑清单
+				if (keptItems.length > 0 && analysisData.analysis_id) {
+					setAutoEvidenceAudit({ runId: activeRunId, state: "pending", unsupported: 0, unverified: 0, evidenceReady: true });
+					void runHistoryEvidenceAudit({
+						runId: activeRunId,
+						analysisId: analysisData.analysis_id,
+						identity,
+						loadedCount: keptItems.length,
+					});
+				} else {
+					setAutoEvidenceAudit(null);
+				}
 			} else {
 				setAutoActionFilter(null);
+				setAutoEvidenceAudit(null);
 				actionFilterProvenanceRef.current = null;
 			}
 		} else {
 			setAutoActionFilter(null);
+			setAutoEvidenceAudit(null);
 			actionFilterProvenanceRef.current = null;
 		}
 		loadedAnalysisIdentityRef.current = identity;
@@ -660,6 +786,9 @@ function BrandReportsWorkspace() {
 		},
 	});
 	const preparationBusy = freezeMutation.isPending || authorizeMutation.isPending || createRunMutation.isPending;
+	// 历史自动建议依据核验未完成前禁止保存，确保编辑副本与保存/装配清单一致 (R01-F01)
+	const autoAuditPending =
+		autoEvidenceAudit?.runId === activeRunId && autoEvidenceAudit.state === "pending";
 	const handleStartDiagnosis = () => {
 		if (preparationBusy) return;
 		if (draft.submitted && draft.runId) {
@@ -713,8 +842,8 @@ function BrandReportsWorkspace() {
 				if (!["P0", "P1", "P2", "P3"].includes(priority)) {
 					throw new Error(`行动建议第 ${index + 1} 项优先级无效，请填写 P0/P1/P2/P3。`);
 				}
+				// 显式构造保存字段：编辑态标记 audit_status 不写入分析 payload (R01-F01)
 				return {
-					...item,
 					priority: priority as "P0" | "P1" | "P2" | "P3",
 					evidence_refs: item.evidence_refs ?? [],
 					action: item.action ?? "",
@@ -722,6 +851,9 @@ function BrandReportsWorkspace() {
 					deliverable: item.deliverable ?? "",
 					verification_method: item.verification_method ?? "",
 					finding: item.finding ?? "",
+					...(item.brand_id !== undefined ? { brand_id: item.brand_id } : {}),
+					...(item.snapshot_id !== undefined ? { snapshot_id: item.snapshot_id } : {}),
+					...(item.run_id !== undefined ? { run_id: item.run_id } : {}),
 				};
 			});
 
@@ -750,6 +882,12 @@ function BrandReportsWorkspace() {
 										source_version: filterProvenance.sourceVersion,
 										filtered_no_ref: filterProvenance.filteredNoRef,
 										backend_filtered: filterProvenance.backendFiltered,
+										historical_audit: {
+											audited: filterProvenance.audited,
+											unsupported_filtered: filterProvenance.unsupported,
+											unverified_kept: filterProvenance.unverified,
+											evidence_ready: filterProvenance.evidenceReady,
+										},
 									},
 								}
 							: {}),
@@ -847,7 +985,7 @@ function BrandReportsWorkspace() {
 		},
 	});
 	const handleSaveAnalysis = () => {
-		if (saveWorkflowRef.current || !activeRunId) return;
+		if (saveWorkflowRef.current || !activeRunId || autoAuditPending) return;
 		// 保存与后续自动装配都锁定发起任务与当时的下一个修订号 (B08-R02 F01)
 		// B18-CORE: 下一修订号按含删除历史的最大修订序号分配，不因删除回退编号
 		const initiatingRunId = activeRunId;
@@ -1161,8 +1299,10 @@ function BrandReportsWorkspace() {
 				? `当前修订 ${activeRevisionId} 状态为 ${revisionStatusLabel(activeRevision.status)}，未就绪，审核门禁不可用。`
 				: null;
 	// B18-CORE: 仅草稿/已退回且不在渲染中的修订可删除；approved/未知状态不给可用入口（服务端仍独立校验）
+	// R01-F03: 角色不满足时同样不给入口
 	const activeRevisionDeletable = Boolean(
-		activeRevision &&
+		canDeleteRevisions &&
+			activeRevision &&
 			!activeRevision.deleted_at &&
 			(activeRevision.review_status === "draft" || activeRevision.review_status === "rejected") &&
 			activeRevision.status !== "rendering",
@@ -2141,9 +2281,23 @@ function BrandReportsWorkspace() {
 									<p className="text-muted-foreground text-xs">
 										每条建议独立编号并分开编辑。缺少具体行动或证据引用的项保持未就绪草稿，不可批准交付；题码存在不等于语义依据充分，仍须人工审核原文。
 									</p>
-									{autoActionFilter && autoActionFilter.runId === activeRunId && autoActionFilter.filteredCount > 0 && (
+									{autoActionFilter && autoActionFilter.runId === activeRunId && (autoActionFilter.filteredCount > 0 || (autoEvidenceAudit?.runId === activeRunId && autoEvidenceAudit.state !== "pending")) && (
 										<p role="status" className="text-amber-700 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2 text-xs">
-											已过滤 {autoActionFilter.filteredCount} 条无题目依据的自动建议（原分析记录保持不变）。以下为 AI 自动建议，尚未人工核实；依据资料不足的项按“尚未核实”处理，需人工逐条核对原文。
+											{autoActionFilter.filteredCount > 0 && (
+												<span className="block">
+													已过滤 {autoActionFilter.filteredCount} 条无题目依据的自动建议（原分析记录保持不变）。以下为 AI 自动建议，尚未人工核实；依据资料不足的项按“尚未核实”处理，需人工逐条核对原文。
+												</span>
+											)}
+											{autoEvidenceAudit?.runId === activeRunId && autoEvidenceAudit.state === "done" && (
+												<span className="block font-semibold">
+													历史自动建议依据核验完成：剔除 {autoEvidenceAudit.unsupported} 条（题码/引文/来源与本次证据不匹配），另有 {autoEvidenceAudit.unverified} 条资料不足已标记“尚未核实”并保留。
+												</span>
+											)}
+											{autoEvidenceAudit?.runId === activeRunId && autoEvidenceAudit.state === "failed" && (
+												<span className="block font-semibold">
+													历史自动建议依据核验暂时不可用：已保留全部自动建议并标记“尚未核实”（未删除任何项），请人工逐条核对原文后再保存。
+												</span>
+											)}
 										</p>
 									)}
 									{actionError && (
@@ -2199,6 +2353,11 @@ function BrandReportsWorkspace() {
 																<span className={`text-[11px] px-2 py-0.5 rounded ${hasRefs ? "bg-muted text-muted-foreground" : "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"}`}>
 																	{hasRefs ? `关联题码: ${item.evidence_refs?.join(", ")}` : "尚未关联题目依据"}
 																</span>
+																{item.audit_status === "unverified" && (
+																	<span className="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 font-semibold">
+																		尚未核实
+																	</span>
+																)}
 															</div>
 															<button
 																type="button"
@@ -2367,15 +2526,18 @@ function BrandReportsWorkspace() {
 											? "分析已保存，正在自动装配一次报告修订…"
 											: foreignSaveWorkflowBusy
 												? "另一任务的保存/装配仍在进行，完成前暂不可提交本任务。"
-												: !analysisForm.editable
-													? "当前阶段不可编辑或保存。"
-													: "保存后会自动装配一次新报告修订，不调用模型。"}
+												: autoAuditPending
+													? "正在核验历史自动建议的依据（逐条比对本次原文），完成前不可保存，避免未核验项混入新产物。"
+													: !analysisForm.editable
+														? "当前阶段不可编辑或保存。"
+														: "保存后会自动装配一次新报告修订，不调用模型。"}
 								</div>
 								<button
 									type="button"
 									onClick={handleSaveAnalysis}
 									disabled={
 										saveWorkflowBusy ||
+										autoAuditPending ||
 										!analysisForm.editable ||
 										!analystName.trim() ||
 										!executiveConclusion.trim() ||
@@ -2583,6 +2745,8 @@ function BrandReportsWorkspace() {
 										)}
 
 									{/* 草稿/已退回修订受控删除 (B18-CORE)：仅 Owner/Admin + draft/rejected + 非渲染中；服务端同事务独立校验 */}
+									{canDeleteRevisions && (
+									<>
 									<div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border border-red-200 dark:border-red-800 rounded-xl p-4 bg-red-50/30 dark:bg-red-950/10">
 										<div className="text-xs">
 											<span className="font-bold text-destructive">删除此修订</span>
@@ -2633,6 +2797,8 @@ function BrandReportsWorkspace() {
 												</button>
 											</div>
 										</div>
+									)}
+									</>
 									)}
 									{deleteMutation.isPending && deleteMutation.variables?.runId === activeRunId && (
 										<div role="status" aria-live="polite" className="text-xs text-blue-700 dark:text-blue-300 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 flex items-center gap-2">
