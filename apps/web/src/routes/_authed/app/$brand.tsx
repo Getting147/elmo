@@ -17,8 +17,8 @@ import {
 	listUserOrganizations,
 } from "@/lib/auth/helpers";
 import { db } from "@workspace/lib/db/db";
-import { brands, prompts, competitors } from "@workspace/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { brands, prompts, competitors, member } from "@workspace/lib/db/schema";
+import { and, eq } from "drizzle-orm";
 import type { BrandWithPrompts } from "@workspace/lib/db/schema";
 import { SidebarInset, SidebarProvider } from "@workspace/ui/components/sidebar";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -39,6 +39,9 @@ const getBrandData = createServerFn({ method: "GET" })
 			isAdmin: boolean;
 			hasReportAccess: boolean;
 			hasAccess: boolean;
+			// 组织角色与修订删除入口权限（R01-F03）：未知/非 owner/admin 时前端不提供可用删除
+			orgRole: string | null;
+			canDeleteRevisions: boolean;
 			// true = brand row exists but was soft-deleted (hide + stop scanning + keep data)
 			deleted: boolean;
 		}> => {
@@ -54,7 +57,7 @@ const getBrandData = createServerFn({ method: "GET" })
 			// Verify access
 			const hasAccess = await checkOrgAccess(session.user.id, effectiveOrgId);
 			if (!hasAccess) {
-				return { brand: null, brandName: null, isAdmin: false, hasReportAccess: false, hasAccess: false, deleted: false };
+				return { brand: null, brandName: null, isAdmin: false, hasReportAccess: false, hasAccess: false, orgRole: null, canDeleteRevisions: false, deleted: false };
 			}
 
 			// Get brand metadata (name from org membership — org exists even if not in DB yet)
@@ -64,13 +67,21 @@ const getBrandData = createServerFn({ method: "GET" })
 
 			const admin = isAdmin(session);
 			const reportAccess = hasReportAccess(session);
+			const [membership] = await db
+				.select({ role: member.role })
+				.from(member)
+				.where(and(eq(member.userId, session.user.id), eq(member.organizationId, effectiveOrgId)))
+				.limit(1);
+			const orgRole = membership?.role ?? null;
+			// 系统管理员或组织 owner/admin 才提供修订删除入口；角色未知一律不可用
+			const canDeleteRevisions = admin || orgRole === "owner" || orgRole === "admin";
 
 			if (!brand) {
-				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, deleted: false };
+				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, orgRole, canDeleteRevisions, deleted: false };
 			}
 
 			if (brand.deletedAt) {
-				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, deleted: true };
+				return { brand: null, brandName, isAdmin: admin, hasReportAccess: reportAccess, hasAccess: true, orgRole, canDeleteRevisions, deleted: true };
 			}
 
 			const brandPrompts = await db.query.prompts.findMany({
@@ -91,6 +102,8 @@ const getBrandData = createServerFn({ method: "GET" })
 				isAdmin: admin,
 				hasReportAccess: reportAccess,
 				hasAccess: true,
+				orgRole,
+				canDeleteRevisions,
 				deleted: false,
 			};
 		},
@@ -156,6 +169,7 @@ export const Route = createFileRoute("/_authed/app/$brand")({
 			brandName: result.brandName,
 			isAdmin: result.isAdmin,
 			hasReportAccess: result.hasReportAccess,
+			canDeleteRevisions: result.canDeleteRevisions,
 			deleted: result.deleted,
 			needsOnboarding: result.hasAccess && !result.brand && !result.deleted,
 		};

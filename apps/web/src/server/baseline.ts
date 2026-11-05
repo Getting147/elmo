@@ -748,6 +748,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 				.default([]),
 			channelGaps: z.array(z.record(z.string(), z.any())).default([]),
 			contentGaps: z.union([z.string(), z.array(z.string())]).default("待人工补充内容资产缺口"),
+			// B18-CORE: 允许保存空行动清单（未就绪草稿）；正式交付仍由后端审核门禁拦截
 			actionPlan: z
 				.array(
 					z.object({
@@ -762,8 +763,7 @@ export const saveBaselineAnalysisFn = createServerFn({ method: "POST" })
 						snapshot_id: z.string().optional(),
 						run_id: z.string().optional(),
 					}),
-				)
-				.min(1),
+				),
 			aiMetadata: z.record(z.string(), z.any()).optional(),
 			parentVersion: z.number().int().optional(),
 		}),
@@ -850,6 +850,39 @@ export const getBaselineAnalysisFn = createServerFn({ method: "GET" })
 			}
 			throw err;
 		}
+	});
+
+// ============================================================================
+// 7.05 历史自动分析依据核验 (GET /runs/{run_id}/analysis/{analysis_id}/evidence-audit) (R01-F01)
+// 只读复核，不调用模型；unsupported=编辑副本剔除，unverified=保留并标记“尚未核实”
+// ============================================================================
+
+export const auditBaselineAnalysisEvidenceFn = createServerFn({ method: "GET" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			runId: z.string(),
+			analysisId: z.string(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineOperatorAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		await requireBaselineOperatorAccess(session, organizationId);
+
+		return callBaselineBackend({
+			method: "GET",
+			path: `/api/baseline/v1/runs/${encodeURIComponent(data.runId)}/analysis/${encodeURIComponent(data.analysisId)}/evidence-audit`,
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
+		});
 	});
 
 // ============================================================================
@@ -999,6 +1032,42 @@ export const reviewBaselineReportRevisionFn = createServerFn({ method: "POST" })
 			brandId: brand.id,
 			callerId: session.user.id,
 			body: payload,
+		});
+	});
+
+// ============================================================================
+// 9.5 删除草稿/已退回报告修订 (DELETE /reports/{report_id}/revisions/{revision_id})
+// 仅 Owner/Admin；服务端在同一写事务内校验状态（B18-CORE）
+// ============================================================================
+
+export const deleteBaselineReportRevisionFn = createServerFn({ method: "POST" })
+	.validator(
+		z.object({
+			brandId: z.string(),
+			reportId: z.string(),
+			revisionId: z.string(),
+			reason: z.string().optional(),
+		}),
+	)
+	.handler(async ({ data }) => {
+		const session = await requireAuthSession();
+		const {
+			getBrandAndOrg,
+			requireBaselineReviewerAccess,
+			callBaselineBackend,
+		} = await import("./baseline.server");
+
+		const { brand, organizationId } = await getBrandAndOrg(data.brandId);
+		// 删除与审核同级强门禁：仅组织 owner/admin（服务端仍独立复核修订状态）
+		await requireBaselineReviewerAccess(session, organizationId);
+
+		return callBaselineBackend({
+			method: "DELETE",
+			path: `/api/baseline/v1/reports/${data.reportId}/revisions/${data.revisionId}`,
+			organizationId,
+			brandId: brand.id,
+			callerId: session.user.id,
+			body: { reason: data.reason },
 		});
 	});
 

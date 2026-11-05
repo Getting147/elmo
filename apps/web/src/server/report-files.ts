@@ -11,7 +11,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
-import { requireAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
+import { requireAuthSession, requireBrandAccess } from "@/lib/auth/helpers";
 
 export const REPORTS_DIR =
 	process.env.GEO_REPORTS_DIR || "/srv/geo/brand_report/data/v2_reports";
@@ -76,7 +76,7 @@ export const getBrandReports = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string() }))
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 
 		if (!fs.existsSync(REPORTS_DIR)) {
 			return [];
