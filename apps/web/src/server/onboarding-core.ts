@@ -9,12 +9,14 @@
  */
 
 import { MAX_COMPETITORS } from "@workspace/lib/constants";
+import { randomUUID } from "node:crypto";
+import { productResearchEvidenceSchema } from "@workspace/lib/onboarding/product-evidence";
 import { db } from "@workspace/lib/db/db";
 import { ensureOrganization } from "@workspace/lib/db/provisioning";
 import * as schema from "@workspace/lib/db/schema";
 import { brandProductLines, brandProductSkus, brands, competitors, prompts } from "@workspace/lib/db/schema";
 import { computeSystemTags, sanitizeUserTags } from "@workspace/lib/tag-utils";
-import { count, eq, type ExtractTablesWithRelations } from "drizzle-orm";
+import { and, count, eq, sql, type ExtractTablesWithRelations } from "drizzle-orm";
 import type { NodePgTransaction } from "drizzle-orm/node-postgres";
 
 type Tx = NodePgTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
@@ -63,11 +65,13 @@ const skuInputSchema = z.object({
 	model: z.string().optional(),
 	oneLiner: z.string().min(1),
 	evidenceUrl: z.string().url("evidenceUrl must be a valid URL"),
+	evidenceQuote: z.string().optional(),
 });
 
 const productLineInputSchema = z.object({
 	name: z.string().min(1),
 	category: z.string().optional(),
+	researchEvidence: productResearchEvidenceSchema.optional(),
 	differentiators: z.string().optional(),
 	targetAudience: z.string().optional(),
 	skus: z.array(skuInputSchema).optional().default([]),
@@ -338,32 +342,40 @@ async function insertProductLines(args: {
 }): Promise<{ productLineId: string; skuCount: number }[]> {
 	const dbc = args.tx ?? db;
 	if (args.source.length === 0) return [];
+	await dbc.execute(sql`SELECT pg_advisory_xact_lock(hashtext('brand-product-lines'), hashtext(${args.brandId}))`);
+	const existingLines = await dbc.query.brandProductLines.findMany({ where: eq(brandProductLines.brandId, args.brandId) });
+	const existingSkus = await dbc.query.brandProductSkus.findMany({ where: eq(brandProductSkus.brandId, args.brandId) });
 	const results: { productLineId: string; skuCount: number }[] = [];
 	for (let i = 0; i < args.source.length; i++) {
 		const pl = args.source[i];
-		if (!pl.name || !pl.skus || pl.skus.length === 0) continue;
-		const id = `bpl_${i}_${args.brandId}`;
-		await dbc
-			.insert(brandProductLines)
-			.values({
+		if (!pl.name) continue;
+		const existing = existingLines.find((line) => line.name.toLowerCase() === pl.name.toLowerCase()
+			&& line.category === (pl.category ?? null) && line.researchEvidence?.kind === pl.researchEvidence?.kind);
+		const id = existing?.id ?? `bpl_${randomUUID()}`;
+		const values = {
 				id,
 				brandId: args.brandId,
 				name: pl.name,
 				category: pl.category ?? null,
-				coreParams: pl.differentiators ?? null,
+				researchEvidence: pl.researchEvidence ?? null,
+				coreParams: pl.differentiators ?? existing?.coreParams ?? null,
 				// differentiators 列 NOT NULL（A-1 契约）——LLM 未产出时空串兜底
-				differentiators: pl.differentiators ?? "",
-				targetAudience: pl.targetAudience ?? null,
+				differentiators: pl.differentiators ?? existing?.differentiators ?? "",
+				targetAudience: pl.targetAudience ?? existing?.targetAudience ?? null,
 				position: i,
-			})
-			.onConflictDoNothing();
+			};
+		if (existing) await dbc.update(brandProductLines).set(values).where(and(eq(brandProductLines.id, id), eq(brandProductLines.brandId, args.brandId)));
+		else {
+			await dbc.insert(brandProductLines).values(values);
+			existingLines.push({ ...values, createdAt: new Date(), updatedAt: new Date() });
+		}
 
 		for (let j = 0; j < pl.skus.length; j++) {
 			const sku = pl.skus[j];
-			const skuId = `bsku_${i}_${j}_${args.brandId}`;
-			await dbc
-				.insert(brandProductSkus)
-				.values({
+			const previous = existingSkus.find((row) => row.productLineId === id && row.name.toLowerCase() === sku.name.toLowerCase()
+				&& row.model === (sku.model ?? null));
+			const skuId = previous?.id ?? `bsku_${randomUUID()}`;
+			const skuValues = {
 					id: skuId,
 					brandId: args.brandId,
 					productLineId: id,
@@ -371,9 +383,14 @@ async function insertProductLines(args: {
 					model: sku.model ?? null,
 					oneLiner: sku.oneLiner,
 					evidenceUrl: sku.evidenceUrl,
+					evidenceQuote: sku.evidenceQuote ?? null,
 					position: j,
-				})
-				.onConflictDoNothing();
+				};
+			if (previous) await dbc.update(brandProductSkus).set(skuValues).where(and(eq(brandProductSkus.id, skuId), eq(brandProductSkus.brandId, args.brandId)));
+			else {
+				await dbc.insert(brandProductSkus).values(skuValues);
+				existingSkus.push({ ...skuValues, createdAt: new Date(), updatedAt: new Date() });
+			}
 		}
 		results.push({ productLineId: id, skuCount: pl.skus.length });
 	}
@@ -491,6 +508,7 @@ export async function updateBrand(input: UpdateBrandInput, tx?: DbOrTx): Promise
 // ============================================================================
 
 export async function saveWizardOnboarding(input: WizardOnboardingInput, tx?: DbOrTx): Promise<BrandResult> {
+	if (!tx || tx === db) return db.transaction((transaction) => saveWizardOnboarding(input, transaction));
 	const txToUse = tx ?? db;
 	// 软删除守卫：已删品牌不可被 onboarding/draft confirm 复活（re CR minor，语义同 getBrand 404）
 	const guard = await txToUse.query.brands.findFirst({ where: eq(brands.id, input.brandId) });

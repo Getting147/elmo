@@ -86,13 +86,18 @@ export function resolveResearchProvider(env: Record<string, string | undefined> 
  * heavy lifting (web search, structured outputs, retry) lives inside each
  * provider's `runStructuredResearch` impl — we just pick the provider.
  */
-export async function runStructuredResearchPrompt<T>(prompt: string, schema: z.ZodType<T>): Promise<T> {
+export async function runStructuredResearchPrompt<T>(
+	prompt: string,
+	schema: z.ZodType<T>,
+	onResult?: (result: StructuredResearchResult<T>) => void,
+): Promise<T> {
 	const provider = resolveResearchProvider();
 	if (!provider.runStructuredResearch) {
 		throw new Error(`Provider "${provider.id}" does not implement structured research`);
 	}
 	// 单次预算上限硬性生效：maxRetries 显式传 0，避免底层异常时静默重试产生额外开销
-	const result = await provider.runStructuredResearch({ prompt, schema, maxRetries: 0 });
+	const result = await provider.runStructuredResearch({ prompt, schema, webSearch: false, maxRetries: 0 });
+	onResult?.(result);
 	return result.object;
 }
 

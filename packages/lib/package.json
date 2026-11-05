@@ -23,6 +23,7 @@
 		"./profile-completeness": "./src/profile-completeness.ts",
 		"./text-extraction": "./src/text-extraction.ts",
 		"./onboarding": "./src/onboarding/index.ts",
+		"./onboarding/product-evidence": "./src/onboarding/product-evidence.ts",
 		"./tag-utils": "./src/tag-utils.ts",
 		"./bulk-prompts": "./src/bulk-prompts.ts",
 		"./website-excerpt": "./src/website-excerpt.ts",

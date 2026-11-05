@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
+import { checkApiBrandAccess } from "@/lib/auth/policies";
 
 const PRODUCT_LINE_BASE = {
 	name: z.string().trim().min(1, "name is required"),
@@ -70,9 +71,9 @@ async function ensureBrandExists(brandId: string): Promise<void> {
 async function ensureRowBelongsToBrand(
 	brandId: string,
 	id: string,
-): Promise<void> {
+): Promise<{ name: string; category: string | null }> {
 	const row = await db
-		.select({ id: brandProductLines.id, brandId: brandProductLines.brandId })
+		.select({ id: brandProductLines.id, brandId: brandProductLines.brandId, name: brandProductLines.name, category: brandProductLines.category })
 		.from(brandProductLines)
 		.where(eq(brandProductLines.id, id))
 		.limit(1);
@@ -86,6 +87,7 @@ async function ensureRowBelongsToBrand(
 			`Product line "${id}" does not belong to brand "${brandId}".`,
 		);
 	}
+	return row[0];
 }
 
 export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-lines")({
@@ -94,8 +96,9 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 			POST: createApiHandler({
 				body: createBody,
 				status: 201,
-				handle: async ({ params, body }) => {
+				handle: async ({ request, params, body }) => {
 					const { brandId } = params;
+					if (!await checkApiBrandAccess(request, brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					await ensureBrandExists(brandId);
 
 					const dup = await findDuplicateDifferentiator(brandId, body.differentiators);
@@ -131,10 +134,11 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 
 			PUT: createApiHandler({
 				body: updateBody,
-				handle: async ({ params, body }) => {
+				handle: async ({ request, params, body }) => {
 					const { brandId } = params;
+					if (!await checkApiBrandAccess(request, brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					await ensureBrandExists(brandId);
-					await ensureRowBelongsToBrand(brandId, body.id);
+					const existing = await ensureRowBelongsToBrand(brandId, body.id);
 
 					const dup = await findDuplicateDifferentiator(
 						brandId,
@@ -152,6 +156,7 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 							targetAudience: body.targetAudience,
 							position: body.position,
 							// updated_at 自动通过 Drizzle .$onUpdate 维护（A1-10 断言）
+							...(existing.name !== body.name || existing.category !== (body.category ?? null) ? { researchEvidence: null } : {}),
 						})
 						.where(eq(brandProductLines.id, body.id))
 						.returning();
@@ -172,8 +177,9 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/product-li
 
 			DELETE: createApiHandler({
 				body: deleteBody,
-				handle: async ({ params, body }) => {
+				handle: async ({ request, params, body }) => {
 					const { brandId } = params;
+					if (!await checkApiBrandAccess(request, brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					await ensureBrandExists(brandId);
 					await ensureRowBelongsToBrand(brandId, body.id);
 

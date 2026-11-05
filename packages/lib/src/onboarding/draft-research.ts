@@ -113,6 +113,7 @@ export interface MarkFailedArgs {
 	error: string;
 	expectedState?: string;
 	expectedResearchStatus?: string;
+	payload?: unknown;
 }
 
 /**
@@ -140,6 +141,7 @@ export async function markFailed(args: MarkFailedArgs): Promise<{ updated: boole
 			state: "failed",
 			researchStatus: "failed",
 			error,
+			...(args.payload !== undefined ? { payload: args.payload } : {}),
 			updatedAt: new Date(),
 		})
 		.where(and(...conditions))

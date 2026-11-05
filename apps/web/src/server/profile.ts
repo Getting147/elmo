@@ -12,6 +12,7 @@ import { requireAuthSession, requireBrandAccess } from "@/lib/auth/helpers";
 import { db } from "@workspace/lib/db/db";
 import {
 	brandProductLines,
+	brandProductSkus,
 	brandCredentials,
 	brands,
 	competitors,
@@ -51,7 +52,7 @@ export const getBrandProfileFn = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
 		await requireBrandAccess(session.user.id, data.brandId);
-		const [productLines, credentials] = await Promise.all([
+		const [productLines, credentials, skus] = await Promise.all([
 			db.query.brandProductLines.findMany({
 				where: eq(brandProductLines.brandId, data.brandId),
 				orderBy: [brandProductLines.position],
@@ -60,8 +61,12 @@ export const getBrandProfileFn = createServerFn({ method: "GET" })
 				where: eq(brandCredentials.brandId, data.brandId),
 				orderBy: [brandCredentials.position],
 			}),
+			db.query.brandProductSkus.findMany({
+				where: eq(brandProductSkus.brandId, data.brandId),
+				orderBy: [brandProductSkus.position],
+			}),
 		]);
-		return { productLines, credentials };
+		return { productLines: productLines.map((line) => ({ ...line, skus: skus.filter((sku) => sku.productLineId === line.id) })), credentials };
 	});
 
 export const createProductLineFn = createServerFn({ method: "POST" })
@@ -97,6 +102,10 @@ export const updateProductLineFn = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const session = await requireAuthSession();
 		await requireBrandAccess(session.user.id, data.brandId);
+		const existing = await db.query.brandProductLines.findFirst({
+			where: and(eq(brandProductLines.id, data.productLineId), eq(brandProductLines.brandId, data.brandId)),
+		});
+		if (!existing) throw new Error("Product line not found");
 		const [row] = await db
 			.update(brandProductLines)
 			.set({
@@ -106,6 +115,8 @@ export const updateProductLineFn = createServerFn({ method: "POST" })
 				differentiators: data.differentiators,
 				targetAudience: data.targetAudience ?? null,
 				position: data.position,
+				...((data.name !== undefined && data.name !== existing.name)
+					|| (data.category !== undefined && data.category !== existing.category) ? { researchEvidence: null } : {}),
 			})
 			.where(
 				and(

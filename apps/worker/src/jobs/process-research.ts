@@ -10,7 +10,7 @@
 
 import { db } from "@workspace/lib/db/db";
 import { draftResearch } from "@workspace/lib/db/schema";
-import { analyzeBrand, markFailed } from "@workspace/lib/onboarding";
+import { analyzeBrand, markFailed, ResearchFailureError } from "@workspace/lib/onboarding";
 import { and, eq, gte } from "drizzle-orm";
 import type { Job } from "pg-boss";
 
@@ -102,6 +102,14 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 			maxProducts: input?.maxProducts ?? 10,
 			crawledPageTexts,
 			requireLiveWebsite: true,
+			additionalDomains: job.data.additionalDomains,
+			isActive: async () => {
+				const draft = await db.query.draftResearch.findFirst({
+					where: eq(draftResearch.id, draftId),
+					columns: { researchStatus: true, state: true },
+				});
+				return draft?.researchStatus === "running" && draft.state === "pending_review";
+			},
 		});
 
 		// validateEvidence 已经在 analyzeBrand 内调用（M1 集成）— 无需重复
@@ -139,11 +147,20 @@ export async function processResearchJob(jobs: Job<ProcessResearchJobData>[]): P
 	} catch (err) {
 		// 4. 异常 → markFailed（CAS：仅当仍处于 running + pending_review 态时才写 failed）
 		const errorMsg = err instanceof Error ? err.message : String(err);
+		let failedPayload: unknown;
+		if (err instanceof ResearchFailureError) {
+			const current = await db.query.draftResearch.findFirst({ where: eq(draftResearch.id, draftId) });
+			failedPayload = {
+				...(current?.payload ?? {}),
+				researchDiagnostics: err.diagnostics,
+			};
+		}
 		const { updated } = (await markFailed({
 			id: draftId,
 			error: errorMsg,
 			expectedState: "pending_review",
 			expectedResearchStatus: "running",
+			...(failedPayload !== undefined ? { payload: failedPayload } : {}),
 		})) ?? { updated: true };
 
 		if (!updated) {

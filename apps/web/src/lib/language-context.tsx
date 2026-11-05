@@ -49,15 +49,15 @@ export const translations = {
 
     // 品牌调研与向导
     researchTitle: "品牌数据调研",
-    researchSubtitle: "我们将深度分析您的品牌官网，并推荐最适合追踪的生成式 AI 提示词与竞品对标。该过程约需 1~2 分钟。",
-    researchIdleDesc: "我们将通过联网搜索分析您的品牌主站，生成竞品对标、附加域名/别名以及初始 AI 提示词库。",
+    researchSubtitle: "程序有限抓取官网材料，再由 Negency-Agent 分析并生成建档草稿。执行结束不代表所有结果都已核实，请审阅来源与问题状态。",
+    researchIdleDesc: "本轮最多取材 6 个官方页面，每页最多 3 次抓取请求；模型只分析已提供材料，不是内置全站搜索。",
     analyzeBrandBtn: "开始品牌调研",
     queuedForResearch: "排队中…",
     analyzingBrandWebsite: "正在分析品牌官网…",
     analyzingBrand: "正在调研品牌…",
     retryResearch: "重新调研",
     cancelBtn: "取消",
-    researchTimedOut: "品牌调研超时，请重试。",
+    researchTimedOut: "页面等待超时不代表后台已结束。请刷新核对原任务状态，不要直接重发调研。",
     researchFailed: "品牌调研失败，请重试。",
 
     // 品牌资料
@@ -188,15 +188,15 @@ export const translations = {
 
     // Brand Research & Wizard
     researchTitle: "Research Brand Data",
-    researchSubtitle: "We will analyze your website and find the best generative AI prompts to track. This process may take a couple of minutes.",
-    researchIdleDesc: "We'll analyze the brand website using web search to suggest competitors, additional domains/aliases, and a starter set of AI prompts to track.",
+    researchSubtitle: "The program fetches limited official material, then Negency-Agent produces a research draft. Finished execution does not mean every result is verified; review sources and question status.",
+    researchIdleDesc: "Up to 6 official pages and 3 fetch requests per page. The model analyzes supplied material; this is not built-in full-site search.",
     analyzeBrandBtn: "Analyze brand",
     queuedForResearch: "Queued for research…",
     analyzingBrandWebsite: "Analyzing brand website…",
     analyzingBrand: "Analyzing brand…",
     retryResearch: "Retry research",
     cancelBtn: "Cancel",
-    researchTimedOut: "Brand research timed out. Please try again.",
+    researchTimedOut: "Page waiting timed out; the background task may still be running. Refresh to check the original task instead of resubmitting.",
     researchFailed: "Brand research failed. Please try again.",
 
     // Brand Details

@@ -9,6 +9,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
 import {
 	brandProductLines,
+	brandProductSkus,
 	brandCredentials,
 	competitors,
 	brands,
@@ -19,13 +20,15 @@ import {
 	completenessTier,
 } from "@workspace/lib/profile-completeness";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
+import { checkApiBrandAccess } from "@/lib/auth/policies";
 
 export const Route = createFileRoute("/api/v1/brands/$brandId/profile/")({
 	server: {
 		handlers: {
 			GET: createApiHandler({
-				handle: async ({ params }) => {
+				handle: async ({ request, params }) => {
 					const { brandId } = params;
+					if (!await checkApiBrandAccess(request, brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					// 1. brand 基础信息（用于 completeness 品牌判定 + 404 守卫）
 					const brandRow = await db
 						.select({
@@ -58,6 +61,7 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/")({
 							asc(brandProductLines.position),
 							asc(brandProductLines.createdAt),
 						);
+					const skus = await db.select().from(brandProductSkus).where(eq(brandProductSkus.brandId, brandId)).orderBy(asc(brandProductSkus.position));
 
 					// 4. credentials（按 position ASC 排序）
 					const credentials = await db
@@ -88,7 +92,7 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/profile/")({
 					});
 
 					return {
-						product_lines: productLines,
+						product_lines: productLines.map((line) => ({ ...line, skus: skus.filter((sku) => sku.productLineId === line.id) })),
 						credentials,
 						completeness: {
 							...completeness,

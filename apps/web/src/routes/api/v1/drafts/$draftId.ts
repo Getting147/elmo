@@ -3,10 +3,13 @@
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import { productResearchEvidenceSchema } from "@workspace/lib/onboarding/product-evidence";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
+import { checkApiBrandAccess } from "@/lib/auth/policies";
 import {
 	confirmDraft,
 	DraftConflictError,
+	DraftEvidenceError,
 	DraftNotFoundError,
 	getDraftById,
 	rollbackDraft,
@@ -15,6 +18,7 @@ import {
 
 /** DraftNotFoundError → 404（GET/POST 统一映射，避免裸 Error 落 500） */
 function notFoundMapper(err: unknown): ApiError | undefined {
+	if (err instanceof DraftEvidenceError) return new ApiError(400, "Invalid evidence", err.message);
 	if (err instanceof DraftNotFoundError) {
 		return new ApiError(404, "Not Found", err.message);
 	}
@@ -23,6 +27,7 @@ function notFoundMapper(err: unknown): ApiError | undefined {
 
 /** PATCH 映射：404（不存在）+ 409（非 pending_review） */
 function patchErrorMapper(err: unknown): ApiError | undefined {
+	if (err instanceof DraftEvidenceError) return new ApiError(400, "Invalid evidence", err.message);
 	if (err instanceof DraftNotFoundError) return new ApiError(404, "Not Found", err.message);
 	if (err instanceof DraftConflictError) {
 		return new ApiError(409, "Conflict", `Draft is in state "${err.state}" — only pending_review is editable.`);
@@ -35,11 +40,14 @@ const skuSchema = z.object({
 	model: z.string().optional(),
 	oneLiner: z.string().trim().min(1, "sku oneLiner is required"),
 	evidenceUrl: z.string().trim().min(1, "sku evidenceUrl is required"),
+	evidenceQuote: z.string().optional(),
 });
 
 const productLineSchema = z.object({
 	name: z.string().trim().min(1, "product line name is required"),
-	skus: z.array(skuSchema).min(1, "each product line needs at least one SKU"),
+	skus: z.array(skuSchema),
+	category: z.string().optional(),
+	researchEvidence: productResearchEvidenceSchema.optional(),
 });
 
 /** PATCH body — 与 OnboardingSuggestion 部分字段对齐（全部可选 = 部分回写） */
@@ -84,9 +92,10 @@ export const Route = createFileRoute("/api/v1/drafts/$draftId")({
 		handlers: {
 			GET: createApiHandler({
 				mapError: notFoundMapper,
-				handle: async ({ params }) => {
+				handle: async ({ request, params }) => {
 					const draft = await getDraftById(params.draftId);
 					if (!draft) throw new DraftNotFoundError(params.draftId);
+					if (!await checkApiBrandAccess(request, draft.brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					return draft;
 				},
 			}),
@@ -95,7 +104,12 @@ export const Route = createFileRoute("/api/v1/drafts/$draftId")({
 			PATCH: createApiHandler({
 				mapError: patchErrorMapper,
 				body: patchBody,
-				handle: async ({ params, body }) => updateDraftPayload(params.draftId, body),
+				handle: async ({ request, params, body }) => {
+					const draft = await getDraftById(params.draftId);
+					if (!draft) throw new DraftNotFoundError(params.draftId);
+					if (!await checkApiBrandAccess(request, draft.brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
+					return updateDraftPayload(params.draftId, body);
+				},
 			}),
 
 			// POST 用作子资源动作（confirm / rollback 通过 _action 参数区分）
@@ -104,7 +118,10 @@ export const Route = createFileRoute("/api/v1/drafts/$draftId")({
 				body: z.object({
 					_action: z.enum(["confirm", "rollback"]),
 				}),
-				handle: async ({ params, body }) => {
+				handle: async ({ request, params, body }) => {
+					const draft = await getDraftById(params.draftId);
+					if (!draft) throw new DraftNotFoundError(params.draftId);
+					if (!await checkApiBrandAccess(request, draft.brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					if (body._action === "confirm") {
 						try {
 							return await confirmDraft(params.draftId);

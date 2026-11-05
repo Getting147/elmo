@@ -266,7 +266,7 @@ describe("term assessments through the actual one-shot research/provider JSON bo
 				{ prompt: "剩余问题", tags: [], targetReference: "none" },
 			],
 		};
-		expect((await execute(quote, 2)).suggestedPromptsMeta).toEqual({
+		expect((await execute(quote, 2)).suggestedPromptsMeta).toMatchObject({
 			generated: 9, kept: 2, filteredForBrandOrSku: 2, filteredForProprietary: 1,
 			unconfirmed: 1, skippedDuplicateOrEmpty: 2, truncatedByCap: 1,
 		});

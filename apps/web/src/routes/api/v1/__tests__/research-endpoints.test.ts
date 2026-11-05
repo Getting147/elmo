@@ -63,6 +63,7 @@ vi.mock("@/server/research", () => {
 		rollbackDraft: rollbackDraftMock,
 		DraftNotFoundError,
 		DraftConflictError,
+		DraftEvidenceError: class extends Error {},
 	};
 });
 

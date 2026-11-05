@@ -2,12 +2,12 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 
 const MAX_EXCERPT_LINES = 200;
-const JINA_TIMEOUT_MS = 30_000;
-const DIRECT_TIMEOUT_MS = 15_000;
+export const JINA_TIMEOUT_MS = 30_000;
+export const DIRECT_TIMEOUT_MS = 15_000;
 
 // A realistic desktop-browser UA. The Jina reader — and especially direct site
 // fetches — are less likely to be treated as bot traffic than a custom UA.
-const BROWSER_UA =
+export const BROWSER_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 /**
@@ -208,14 +208,25 @@ async function fromReadability(url: string): Promise<string | null> {
 	if (!html.trim()) {
 		return null;
 	}
+	return extractWebsiteHtml(html, url).text || null;
+}
+
+export function extractWebsiteHtml(html: string, url: string): { text: string; links: { url: string; label: string }[] } {
+	if (!html.trim()) return { text: "", links: [] };
 	const { document } = parseHTML(html);
+	const links: { url: string; label: string }[] = [];
+	for (const anchor of document.querySelectorAll("a[href]")) {
+		try {
+			const href = anchor.getAttribute("href");
+			if (href) links.push({ url: new URL(href, url).href, label: anchor.textContent?.trim() ?? "" });
+		} catch {
+			// An invalid navigation link is not a fetch target.
+		}
+	}
+	for (const element of document.querySelectorAll("script,style,noscript")) element.remove();
 	const article = new Readability(document).parse();
 	const text = article?.textContent?.trim();
-	if (text) {
-		return text;
-	}
-	// Readability couldn't isolate an article; fall back to all visible text.
-	return document.body?.textContent?.trim() || null;
+	return { text: toExcerpt(text || document.body?.textContent?.trim() || ""), links };
 }
 
 /** Collapse extraction output to the first N lines, matching prior behavior. */

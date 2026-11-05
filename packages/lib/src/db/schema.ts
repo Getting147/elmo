@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, jsonb, index, integer, smallint } from "drizzle-orm/pg-core";
+import type { ProductResearchEvidence } from "../onboarding/product-evidence";
 // `organization` is referenced by the brands FK below; the re-export makes it
 // (and the rest of the auth schema) visible to `import * as schema` consumers.
 import { organization } from "./schema-auth";
@@ -317,6 +318,7 @@ export const brandProductLines = pgTable(
 			.notNull(),
 		name: text("name").notNull(),
 		category: text("category"),
+		researchEvidence: jsonb("research_evidence").$type<ProductResearchEvidence>(),
 		coreParams: text("core_params"),
 		differentiators: text("differentiators").notNull(),
 		targetAudience: text("target_audience"),
@@ -384,6 +386,7 @@ export const brandProductSkus = pgTable(
 		position: smallint("position").default(0).notNull(),
 		/** M1 evidence.ts L1 校验：URL 属抓取页集合（normalize 后）；L2：SKU name grep 此 URL 文本 */
 		evidenceUrl: text("evidence_url"),
+		evidenceQuote: text("evidence_quote"),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()

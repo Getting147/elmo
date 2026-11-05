@@ -29,5 +29,5 @@ export async function analyzeBrandJob(jobs: Job<AnalyzeBrandData>[]): Promise<On
 	}
 
 	const { website, brandName, maxCompetitors, maxPrompts } = job.data;
-	return analyzeBrand({ website, brandName, maxCompetitors, maxPrompts });
+	return analyzeBrand({ website, brandName, maxCompetitors, maxPrompts, requireLiveWebsite: true });
 }

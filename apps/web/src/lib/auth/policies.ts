@@ -206,6 +206,13 @@ export async function validateApiKeyFromRequest(request: Request): Promise<boole
 	}
 }
 
+export async function checkApiBrandAccess(request: Request, brandId: string): Promise<boolean> {
+	if (evaluateApiKeyAuth(request.headers.get("Authorization"), getAdminApiKeys()) === "allow") return true;
+	const [{ auth }, { checkBrandAccess }] = await Promise.all([import("./server"), import("./helpers")]);
+	const session = await auth.api.getSession({ headers: request.headers });
+	return session !== null && session !== undefined && await checkBrandAccess(session.user.id, brandId);
+}
+
 // ============================================================================
 // Signup Allowlist
 // ============================================================================

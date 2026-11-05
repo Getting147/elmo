@@ -28,6 +28,9 @@ vi.mock("@workspace/lib/onboarding", () => ({
 	analyzeBrand: analyzeBrandMock,
 	validateEvidence: vi.fn(),
 	markFailed: markFailedMock,
+	ResearchFailureError: class extends Error {
+		constructor(message: string, public readonly diagnostics: unknown) { super(message); }
+	},
 }));
 
 vi.mock("@workspace/lib/db/schema", () => ({
@@ -64,6 +67,7 @@ vi.mock("@workspace/lib/db/db", () => ({
 }));
 
 import { type ProcessResearchJobData, processResearchJob } from "./process-research";
+import { ResearchFailureError } from "@workspace/lib/onboarding";
 
 type FakeJob = Job<ProcessResearchJobData>;
 
@@ -115,6 +119,16 @@ describe("c3-job-fix5 processResearchJob — 4 态转移", () => {
 			}),
 		);
 		expect(markFailedMock).not.toHaveBeenCalled();
+	});
+
+	it("retains source-stage diagnostics with guarded failure payload", async () => {
+		const diagnostics = { sources: { status: "failed" as const, pages: [], requestCount: 3, maxPages: 6, maxRequestsPerPage: 3 } };
+		analyzeBrandMock.mockRejectedValue(new ResearchFailureError("官网抓取失败", diagnostics));
+		await processResearchJob([makeJob()]);
+		expect(markFailedMock).toHaveBeenCalledWith(expect.objectContaining({
+			id: "d1", expectedState: "pending_review", expectedResearchStatus: "running",
+			payload: { researchDiagnostics: diagnostics },
+		}));
 	});
 
 	it("② analyzeBrand 抛错 → running→failed + markFailed CAS", async () => {

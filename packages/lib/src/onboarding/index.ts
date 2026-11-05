@@ -8,6 +8,11 @@ export {
 	type OnboardingSuggestion,
 	type TermAssessmentCheck,
 	type TermAssessmentsInput,
+	type OnboardingProductLine,
+	type OnboardingSku,
+	type SuggestedPromptsMeta,
+	type ResearchDiagnostics,
+	ResearchFailureError,
 } from "./analyze";
 export {
 	computeExpiresAt,
@@ -35,3 +40,4 @@ export {
 	cleanUrl as cleanOnboardingUrl,
 	inferBrandNameFromDomain,
 } from "./utils";
+export { productResearchEvidenceSchema, checkSourceQuote, type ProductResearchEvidence } from "./product-evidence";

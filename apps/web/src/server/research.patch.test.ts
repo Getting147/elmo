@@ -9,11 +9,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDraftByIdMock, setMock, whereMock } = vi.hoisted(() => {
+const { getDraftByIdMock, setMock, whereMock, returningMock } = vi.hoisted(() => {
 	const getDraftByIdMock = vi.fn();
 	const setMock = vi.fn();
 	const whereMock = vi.fn();
-	return { getDraftByIdMock, setMock, whereMock };
+	const returningMock = vi.fn();
+	return { getDraftByIdMock, setMock, whereMock, returningMock };
 });
 
 vi.mock("@workspace/lib/onboarding", () => ({
@@ -32,7 +33,7 @@ vi.mock("@workspace/lib/db/db", () => ({
 		update: () => ({
 			set: (data: unknown) => {
 				setMock(data);
-				return { where: whereMock };
+				return { where: (condition: unknown) => { whereMock(condition); return { returning: returningMock }; } };
 			},
 		}),
 	},
@@ -73,6 +74,15 @@ function pendingDraft(payload: unknown = BASE_PAYLOAD) {
 }
 
 describe("applyDraftPayloadPatch 纯 merge", () => {
+	it("moves an explicitly reviewer-marked uncertain role to pending instead of blocking all valid data", () => {
+		const line = { name: "待核候选", skus: [], researchEvidence: { kind: "uncertain" as const, evidenceUrl: null, evidenceQuote: null } };
+		const result = applyDraftPayloadPatch({ ...BASE_PAYLOAD }, { productLines: [{ line }] });
+		const productLines = result.productLines as { confirmed: unknown[]; unverified: { line: unknown; reason: string }[] };
+		expect(productLines.confirmed).toEqual([]);
+		expect(productLines.unverified.at(-1)?.line).toEqual(line);
+		expect(productLines.unverified.at(-1)?.reason).toContain("ROLE_UNCONFIRMED");
+		expect(result.suggestedPrompts).toEqual(BASE_PAYLOAD.suggestedPrompts);
+	});
 	it("单字段 summary → 其余字段全保留", () => {
 		const next = applyDraftPayloadPatch({ ...BASE_PAYLOAD }, { summary: "new summary" });
 		expect(next.summary).toBe("new summary");
@@ -184,6 +194,7 @@ describe("updateDraftPayload 服务", () => {
 		getDraftByIdMock.mockReset();
 		setMock.mockClear();
 		whereMock.mockClear();
+		returningMock.mockResolvedValue([{ id: "d1" }]);
 	});
 
 	it("happy：merge 后 payload 落库 + 返回 {id, state:'pending_review'}", async () => {
@@ -258,6 +269,43 @@ describe("updateDraftPayload 服务", () => {
 	it("404：draft 不存在 → DraftNotFoundError + 不落库", async () => {
 		getDraftByIdMock.mockResolvedValue(undefined);
 		await expect(updateDraftPayload("missing", { summary: "x" })).rejects.toThrow(DraftNotFoundError);
+		expect(setMock).not.toHaveBeenCalled();
+	});
+
+	it("rejects edits of running research and reports a lost state race without success", async () => {
+		getDraftByIdMock.mockResolvedValue({ ...pendingDraft(), researchStatus: "running" });
+		await expect(updateDraftPayload("d1", { summary: "edited" })).rejects.toThrow(DraftConflictError);
+		expect(setMock).not.toHaveBeenCalled();
+		getDraftByIdMock.mockResolvedValue(pendingDraft());
+		returningMock.mockResolvedValue([]);
+		await expect(updateDraftPayload("d1", { summary: "edited" })).rejects.toThrow("changed during edit");
+	});
+
+	it("keeps sourced no-SKU hierarchy and quote through PATCH and JSON, and rejects edited unsupported names", async () => {
+		const sourceUrl = "https://example.invalid/products";
+		const quote = "仓储业务下设仓储设备产品线。";
+		const line = {
+			name: "仓储设备", category: "仓储业务", skus: [],
+			researchEvidence: {
+				kind: "productLine" as const, evidenceUrl: sourceUrl, evidenceQuote: quote,
+				parent: { name: "仓储业务", evidenceUrl: sourceUrl, evidenceQuote: quote },
+			},
+		};
+		getDraftByIdMock.mockResolvedValue(pendingDraft({
+			...BASE_PAYLOAD,
+			researchDiagnostics: {
+				prompts: { status: "complete", message: "合成" },
+				sources: { status: "complete", requestCount: 1, maxPages: 6, maxRequestsPerPage: 3,
+					pages: [{ url: sourceUrl, finalUrl: sourceUrl, status: "success", fetchedAt: new Date().toISOString(), text: quote, links: [], attempts: [] }] },
+			},
+			productLines: { confirmed: [{ line, sourceEvidenceChecked: 1 }], unverified: [] },
+		}));
+		await updateDraftPayload("d1", { productLines: [{ line }] });
+		const restored = JSON.parse(JSON.stringify(setMock.mock.calls[0][0].payload));
+		expect(restored.productLines.confirmed[0]).toEqual({ line, sourceEvidenceChecked: 1 });
+		expect(restored.researchDiagnostics.sources.pages[0].text).toBe(quote);
+		setMock.mockClear();
+		await expect(updateDraftPayload("d1", { productLines: [{ line: { ...line, name: "无来源名称" } }] })).rejects.toThrow("类别来源待核");
 		expect(setMock).not.toHaveBeenCalled();
 	});
 

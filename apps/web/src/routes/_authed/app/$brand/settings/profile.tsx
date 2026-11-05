@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useBrand } from "@/hooks/use-brands";
+import { useLanguage } from "@/lib/language-context";
 import { getAppName, getBrandName, buildTitle } from "@/lib/route-head";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
@@ -39,7 +40,7 @@ import {
 	deleteCredentialFn,
 	getProfileCompletenessFn,
 } from "@/server/profile";
-import type { BrandProductLine, BrandCredential } from "@workspace/lib/db/schema";
+import type { BrandProductLine, BrandProductSku, BrandCredential } from "@workspace/lib/db/schema";
 
 export const Route = createFileRoute("/_authed/app/$brand/settings/profile")({
 	head: ({ matches, match }) => {
@@ -71,12 +72,13 @@ const MISSING_LABELS: Record<string, string> = {
 };
 
 interface ProfileData {
-	productLines: BrandProductLine[];
+	productLines: (BrandProductLine & { skus: BrandProductSku[] })[];
 	credentials: BrandCredential[];
 }
 
 function BrandProfilePage() {
 	const { brand } = useBrand();
+	const { language } = useLanguage();
 	const [profile, setProfile] = useState<ProfileData>({ productLines: [], credentials: [] });
 	const [completeness, setCompleteness] = useState<{ overall: number; buckets: Record<string, number | null>; missing: string[] } | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -193,6 +195,15 @@ function BrandProfilePage() {
 						<div>
 							<div className="font-medium">{pl.name}</div>
 							{pl.category && <div className="text-xs text-muted-foreground">{pl.category}</div>}
+							<div className="text-xs text-muted-foreground" data-no-i18n>
+								{language === "zh"
+									? pl.researchEvidence?.kind === "business" ? "业务板块" : pl.researchEvidence?.kind === "productLine" ? "产品线" : "历史未分类 / 人工条目，来源待核"
+									: pl.researchEvidence?.kind === "business" ? "Business sector" : pl.researchEvidence?.kind === "productLine" ? "Product line" : "Legacy / manual, source pending"}
+								{" · "}{pl.skus.length} SKU
+								{pl.researchEvidence && <p className="break-all">{language === "zh" ? "类别来源：" : "Category source: "}{pl.researchEvidence.evidenceUrl}<br />{pl.researchEvidence.evidenceQuote}<br />{language === "zh" ? "来源逐字核对，不等于独立商业事实审计。" : "Verbatim source checked, not an independent business audit."}</p>}
+								{pl.researchEvidence && pl.skus.length === 0 && <p>{language === "zh" ? "本轮尚无已核对的具体型号。" : "No concrete model established in this crawl."}</p>}
+								{pl.skus.map((sku) => <p key={sku.id} className="mt-1 break-all">{sku.name}{sku.model ? ` · ${sku.model}` : ""}<br />{sku.evidenceUrl}<br />{sku.evidenceQuote ?? (language === "zh" ? "历史型号未留逐字引文" : "Legacy model has no verbatim quote")}</p>)}
+							</div>
 							{pl.differentiators && <div className="mt-1 text-sm">{pl.differentiators}</div>}
 							{pl.targetAudience && <div className="mt-1 text-xs text-muted-foreground">Target: {pl.targetAudience}</div>}
 						</div>

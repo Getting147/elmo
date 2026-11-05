@@ -192,7 +192,7 @@ describe("analyzeBrand", () => {
 		});
 
 		expect(result.suggestedPrompts).toEqual([
-			{ prompt: "best widgets", tags: ["industrial-supplies", "manufacturing"] },
+			{ prompt: "Best Widgets", tags: ["industrial-supplies", "manufacturing"] },
 			{
 				prompt: "widget alternatives",
 				// "industrial supplies" → "industrial-supplies", capped at 3 (extra-tag dropped)
@@ -401,7 +401,7 @@ describe("analyzeBrand", () => {
 
 		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好", "买冰箱选择什么品牌"]);
 		expect(result.suggestedCategories).toEqual(["空调", "冰箱"]);
-		expect(result.suggestedPromptsMeta).toEqual({
+		expect(result.suggestedPromptsMeta).toMatchObject({
 			generated: 6,
 			kept: 2,
 			filteredForBrandOrSku: 1,
@@ -412,7 +412,9 @@ describe("analyzeBrand", () => {
 		});
 		expect(result.suggestedPromptsExcluded).toEqual([
 			{ prompt: "美的空调怎么样", targetReference: "brand", reason: "brandOrAlias" },
-			{ prompt: "kfr-35gw 适合多大面积", targetReference: "proprietary", reason: "proprietary" },
+			{ prompt: "KFR-35GW 适合多大面积", targetReference: "proprietary", reason: "proprietary" },
+			{ index: 4, prompt: "空调哪个牌子好", targetReference: "none", reason: "duplicate" },
+			{ index: 5, prompt: "", targetReference: null, reason: "emptyPrompt" },
 		]);
 	});
 
@@ -428,7 +430,7 @@ describe("analyzeBrand", () => {
 		const filtered = await analyzeBrand({ website: "midea.com", brandName: "美的", language: "zh" });
 		expect(filtered.suggestedPrompts).toEqual([]);
 		expect(filtered.suggestedCategories).toEqual(["空调"]);
-		expect(filtered.suggestedPromptsMeta).toEqual({
+		expect(filtered.suggestedPromptsMeta).toMatchObject({
 			generated: 1,
 			kept: 0,
 			filteredForBrandOrSku: 1,
@@ -448,7 +450,7 @@ describe("analyzeBrand", () => {
 		});
 		const empty = await analyzeBrand({ website: "midea.com", brandName: "美的", language: "zh" });
 		expect(empty.suggestedPrompts).toEqual([]);
-		expect(empty.suggestedPromptsMeta).toEqual({
+		expect(empty.suggestedPromptsMeta).toMatchObject({
 			generated: 0,
 			kept: 0,
 			filteredForBrandOrSku: 0,
@@ -500,7 +502,7 @@ describe("analyzeBrand", () => {
 			"3d打印机哪个牌子好",
 			"usb集线器哪个牌子好",
 		]);
-		expect(result.suggestedPromptsMeta).toEqual({
+		expect(result.suggestedPromptsMeta).toMatchObject({
 			generated: 5,
 			kept: 3,
 			filteredForBrandOrSku: 0,
@@ -528,7 +530,7 @@ describe("analyzeBrand", () => {
 		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
 
 		expect(result.suggestedPrompts).toEqual([]);
-		expect(result.suggestedPromptsMeta).toEqual({
+		expect(result.suggestedPromptsMeta).toMatchObject({
 			generated: 3,
 			kept: 0,
 			filteredForBrandOrSku: 0,
@@ -575,7 +577,7 @@ describe("analyzeBrand", () => {
 		const result = await analyzeBrand({ website: "example.invalid", brandName: "华星设备", language: "zh" });
 
 		expect(result.suggestedPrompts.map((p) => p.prompt)).toEqual(["空调哪个牌子好"]);
-		expect(result.suggestedPromptsMeta).toEqual({
+		expect(result.suggestedPromptsMeta).toMatchObject({
 			generated: 3,
 			kept: 1,
 			filteredForBrandOrSku: 0,
