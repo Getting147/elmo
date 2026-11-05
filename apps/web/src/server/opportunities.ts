@@ -22,7 +22,7 @@ import { brandOpportunities, brands, competitors } from "@workspace/lib/db/schem
 import { runStructuredCompletionPrompt } from "@workspace/lib/onboarding";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuthSession, requireOrgAccess } from "@/lib/auth/helpers";
+import { requireAuthSession, requireBrandAccess } from "@/lib/auth/helpers";
 import { extractDomain } from "@/lib/domain-categories";
 import { categorizeDomain } from "@/lib/domain-categories.server";
 import {
@@ -476,7 +476,7 @@ export const getOpportunitiesFn = createServerFn({ method: "GET" })
 	.validator(z.object({ brandId: z.string(), timezone: z.string().default("UTC"), language: z.enum(["en", "zh"]).default("en") }))
 	.handler(async ({ data }): Promise<OpportunitiesResponse> => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const language = data.language === "zh" ? "zh" : "en";
 
 		// REPORT-001E: 页面只读已有分析，严禁在 GET/刷新时隐式调用 LLM 生成
@@ -515,7 +515,7 @@ export const triggerOpportunitiesAnalysisFn = createServerFn({ method: "POST" })
 	.validator(z.object({ brandId: z.string(), timezone: z.string().default("UTC"), language: z.enum(["en", "zh"]).default("en") }))
 	.handler(async ({ data }): Promise<OpportunitiesResponse> => {
 		const session = await requireAuthSession();
-		await requireOrgAccess(session.user.id, data.brandId);
+		await requireBrandAccess(session.user.id, data.brandId);
 		const language = data.language === "zh" ? "zh" : "en";
 
 		const [latest] = await db
