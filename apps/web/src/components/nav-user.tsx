@@ -17,6 +17,7 @@ import type { ClientConfig } from "@workspace/config/types";
 import { authClient } from "@workspace/lib/auth/client";
 import { useAuth } from "@/hooks/use-auth";
 import { resetPostHog } from "@/lib/posthog";
+import { clearPendingBrandIntent } from "@/lib/pending-brand-intent";
 
 export function NavUser() {
 	const { user } = useAuth();
@@ -96,6 +97,7 @@ export function NavUser() {
 								authClient.signOut({
 									fetchOptions: {
 										onSuccess: () => {
+											clearPendingBrandIntent();
 											resetPostHog();
 											window.location.href = "/auth/logout";
 										},

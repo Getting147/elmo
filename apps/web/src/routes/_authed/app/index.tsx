@@ -28,6 +28,7 @@ import FullPageCard from "@/components/full-page-card";
 import { listUserOrganizations, requireAuthSession, type UserOrgEntry } from "@/lib/auth/helpers";
 import { getDeployment } from "@/lib/config/server";
 import { useLanguage } from "@/lib/language-context";
+import { clearPendingBrandIntent } from "@/lib/pending-brand-intent";
 import { resetPostHog } from "@/lib/posthog";
 import { deleteBrandFn } from "@/server/brands";
 
@@ -121,6 +122,7 @@ function BrandSwitcherPage() {
 			await authClient.signOut({
 				fetchOptions: {
 					onSuccess: () => {
+						clearPendingBrandIntent();
 						resetPostHog();
 						window.location.href = "/auth/logout";
 					},

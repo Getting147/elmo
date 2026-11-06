@@ -1,0 +1,184 @@
+import { useState } from "react";
+import { IconArrowRight, IconSparkles, IconWorld, IconBuilding } from "@tabler/icons-react";
+import { Button } from "@workspace/ui/components/button";
+import { Input } from "@workspace/ui/components/input";
+import { validateWebsiteUrl } from "@/lib/brand-website";
+
+interface HomeHeroProps {
+	onStartDiagnosis: (brandName: string, website: string) => void;
+	defaultBrandName?: string;
+	defaultWebsite?: string;
+}
+
+export function HomeHero({
+	onStartDiagnosis,
+	defaultBrandName = "",
+	defaultWebsite = "",
+}: HomeHeroProps) {
+	const [brandName, setBrandName] = useState(defaultBrandName);
+	const [website, setWebsite] = useState(defaultWebsite);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleSubmit = (e: React.FormEvent) => {
+		e.preventDefault();
+		setError(null);
+
+		const trimmedName = brandName.trim();
+		if (!trimmedName) {
+			setError("请输入品牌名称");
+			return;
+		}
+		if (trimmedName.length > 100) {
+			setError("品牌名称不能超过 100 个字符");
+			return;
+		}
+
+		const trimmedWebsite = website.trim();
+		if (!trimmedWebsite) {
+			setError("请输入品牌官网地址");
+			return;
+		}
+
+		const validation = validateWebsiteUrl(trimmedWebsite);
+		if (!validation.isValid) {
+			setError("请输入有效的网站地址（如 negency.com 或 https://example.com）");
+			return;
+		}
+
+		onStartDiagnosis(trimmedName, validation.formattedUrl);
+	};
+
+	return (
+		<section className="relative overflow-hidden py-16 sm:py-24">
+			{/* Decorative ambient background glows */}
+			<div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-40 dark:opacity-30">
+				<div className="size-[500px] rounded-full bg-blue-500/15 blur-3xl" />
+				<div className="size-[350px] -translate-x-32 translate-y-24 rounded-full bg-indigo-500/10 blur-3xl" />
+			</div>
+
+			<div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+				{/* Top Tag */}
+				<div className="inline-flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/5 px-3.5 py-1 text-xs font-medium text-blue-600 dark:text-blue-400">
+					<IconSparkles className="size-3.5" />
+					<span>新一代生成式引擎优化 · GENERATIVE ENGINE OPTIMIZATION</span>
+				</div>
+
+				{/* Main Headline */}
+				<h1 className="mt-6 text-3xl font-extrabold tracking-tight text-foreground sm:text-5xl sm:leading-tight">
+					让 AI 在每一个高价值问答中，
+					<br className="hidden sm:inline" />
+					<span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 bg-clip-text text-transparent">
+						优先推荐你的品牌
+					</span>
+				</h1>
+
+				{/* Subtitle */}
+				<p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground sm:text-lg sm:leading-relaxed">
+					穿透豆包、DeepSeek 等主流生成式引擎，实时审计信源引用、推荐位次与竞品共现，建立可验证的品牌 AI 资产防御体系。
+				</p>
+
+				{/* Interactive Diagnosis Form Card */}
+				<div className="mx-auto mt-10 max-w-2xl rounded-2xl border border-border/80 bg-card/80 p-4 shadow-xl backdrop-blur-md sm:p-6 text-left">
+					<form onSubmit={handleSubmit} className="space-y-4">
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+							{/* Brand Name Input */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="hero-brand-name"
+									className="flex items-center gap-1.5 text-xs font-semibold text-foreground/80"
+								>
+									<IconBuilding className="size-3.5 text-muted-foreground" />
+									品牌名称
+								</label>
+								<Input
+									id="hero-brand-name"
+									type="text"
+									value={brandName}
+									onChange={(e) => {
+										setBrandName(e.target.value);
+										if (error) setError(null);
+									}}
+									placeholder="例如：熵宜 Negency"
+									className="h-11 bg-background text-sm"
+									autoComplete="organization"
+								/>
+							</div>
+
+							{/* Website Input */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="hero-website"
+									className="flex items-center gap-1.5 text-xs font-semibold text-foreground/80"
+								>
+									<IconWorld className="size-3.5 text-muted-foreground" />
+									品牌官网
+								</label>
+								<Input
+									id="hero-website"
+									type="text"
+									value={website}
+									onChange={(e) => {
+										setWebsite(e.target.value);
+										if (error) setError(null);
+									}}
+									placeholder="例如：https://www.negency.com/zh/"
+									className="h-11 bg-background text-sm"
+									autoComplete="url"
+								/>
+							</div>
+						</div>
+
+						{/* Validation Error Feedback */}
+						{error && (
+							<div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+								{error}
+							</div>
+						)}
+
+						{/* Action Button */}
+						<Button
+							type="submit"
+							size="lg"
+							className="h-12 w-full gap-2 text-sm font-semibold shadow-md cursor-pointer transition-all hover:shadow-lg"
+						>
+							<span>开始品牌 AI 表现诊断</span>
+							<IconArrowRight className="size-4" />
+						</Button>
+
+						{/* Hint & Guarantees */}
+						<div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2 text-[11px] text-muted-foreground">
+							<span className="flex items-center gap-1">
+								<span className="size-1.5 rounded-full bg-emerald-500" />
+								支持保留多语言及二级路径（如 /zh），作为主权威信源基准
+							</span>
+							<span className="opacity-80">
+								点击后进入登录接续 · 资料自动预填
+							</span>
+						</div>
+					</form>
+				</div>
+
+				{/* Engine Support Badges */}
+				<div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted-foreground/80">
+					<span className="font-medium text-foreground/60">实测审计覆盖引擎：</span>
+					<span className="flex items-center gap-1.5">
+						<span className="size-1.5 rounded-full bg-blue-500" />
+						字节跳动 · 豆包 (Doubao)
+					</span>
+					<span className="flex items-center gap-1.5">
+						<span className="size-1.5 rounded-full bg-indigo-500" />
+						深度求索 · DeepSeek
+					</span>
+					<span className="flex items-center gap-1.5">
+						<span className="size-1.5 rounded-full bg-cyan-500" />
+						智谱清言 · GLM
+					</span>
+					<span className="flex items-center gap-1.5">
+						<span className="size-1.5 rounded-full bg-emerald-500" />
+						百川智能 · Baichuan
+					</span>
+				</div>
+			</div>
+		</section>
+	);
+}

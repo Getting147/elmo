@@ -98,6 +98,37 @@ export function EmailPasswordLogin({
 	isCloud?: boolean;
 	canRegister?: boolean;
 }) {
+	return (
+		<FullPageCard title="Sign in" subtitle={isDemo ? undefined : "Enter your email and password to continue"}>
+			<EmailPasswordLoginForm
+				returnTo={returnTo}
+				isDemo={isDemo}
+				isCloud={isCloud}
+				canRegister={canRegister}
+			/>
+		</FullPageCard>
+	);
+}
+
+export interface EmailPasswordLoginFormProps {
+	returnTo?: string;
+	isDemo?: boolean;
+	isCloud?: boolean;
+	canRegister?: boolean;
+	onSuccess?: () => void;
+	submitButtonText?: string;
+	className?: string;
+}
+
+export function EmailPasswordLoginForm({
+	returnTo,
+	isDemo,
+	isCloud,
+	canRegister,
+	onSuccess,
+	submitButtonText,
+	className,
+}: EmailPasswordLoginFormProps) {
 	const navigate = useNavigate();
 	const [email, setEmail] = useState(isDemo ? "demo@elmohq.com" : "");
 	const [password, setPassword] = useState(isDemo ? "demo" : "");
@@ -125,7 +156,11 @@ export function EmailPasswordLogin({
 				return;
 			}
 
-			navigate({ to: safeReturnTo(returnTo) });
+			if (onSuccess) {
+				onSuccess();
+			} else {
+				navigate({ to: safeReturnTo(returnTo) });
+			}
 		} catch {
 			setError("Something went wrong. Please try again.");
 			setLoading(false);
@@ -133,7 +168,7 @@ export function EmailPasswordLogin({
 	}
 
 	return (
-		<FullPageCard title="Sign in" subtitle={isDemo ? undefined : "Enter your email and password to continue"}>
+		<div className={className ?? "w-full"}>
 			{isCloud && (
 				<div className="space-y-4 w-full pb-4">
 					<Button
@@ -195,8 +230,8 @@ export function EmailPasswordLogin({
 						</div>
 					</>
 				)}
-				<Button type="submit" className="w-full" disabled={loading}>
-					{loading ? "Signing in..." : "Sign in"}
+				<Button type="submit" className="w-full cursor-pointer" disabled={loading}>
+					{loading ? "Signing in..." : (submitButtonText ?? "Sign in")}
 				</Button>
 			</form>
 			{canRegister && (
@@ -211,7 +246,7 @@ export function EmailPasswordLogin({
 					</Link>
 				</p>
 			)}
-		</FullPageCard>
+		</div>
 	);
 }
 
