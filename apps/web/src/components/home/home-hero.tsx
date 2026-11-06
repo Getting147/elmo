@@ -50,10 +50,40 @@ export function HomeHero({
 
 	return (
 		<section className="relative overflow-hidden py-16 sm:py-24">
-			{/* Decorative ambient background glows */}
-			<div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-40 dark:opacity-30">
-				<div className="size-[500px] rounded-full bg-blue-500/15 blur-3xl" />
-				<div className="size-[350px] -translate-x-32 translate-y-24 rounded-full bg-indigo-500/10 blur-3xl" />
+			{/* High-Tech Grid & Radar Ambient Background */}
+			<div className="pointer-events-none absolute inset-0 overflow-hidden">
+				{/* Fine Engineering Grid */}
+				<div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(15,23,42,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,0.06)_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_35%,#000_55%,transparent_100%)]" />
+
+				{/* Concentric Radar / Scanner Orbital Rings */}
+				<div className="absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2 opacity-70 dark:opacity-80">
+					{/* Inner subtle radar orbit */}
+					<div className="size-[580px] rounded-full border border-blue-500/15 dark:border-blue-400/15 [mask-image:radial-gradient(ellipse_at_center,#000_40%,transparent_95%)]" />
+					{/* Outer dashed orbital ring */}
+					<div className="absolute inset-0 -m-[130px] size-[840px] rounded-full border border-dashed border-indigo-500/10 dark:border-indigo-400/15 [mask-image:radial-gradient(ellipse_at_center,#000_50%,transparent_90%)]" />
+				</div>
+
+				{/* Precision Crosshair Coordinate Marks in Negative Space */}
+				<div className="hidden lg:flex items-center gap-1.5 absolute left-[8%] top-[32%] text-[10px] font-mono text-muted-foreground/40 select-none">
+					<span className="text-blue-500/60">+</span>
+					<span>GEO-RADAR // ACTIVE</span>
+				</div>
+				<div className="hidden lg:flex items-center gap-1.5 absolute right-[8%] top-[32%] text-[10px] font-mono text-muted-foreground/40 select-none">
+					<span>AUDIT-GRID // 48PX</span>
+					<span className="text-blue-500/60">+</span>
+				</div>
+				<div className="hidden xl:block absolute left-[6%] top-[58%] text-[10px] font-mono text-muted-foreground/30 select-none">
+					+ —— +
+				</div>
+				<div className="hidden xl:block absolute right-[6%] top-[58%] text-[10px] font-mono text-muted-foreground/30 select-none">
+					+ —— +
+				</div>
+
+				{/* Ambient Ambient Glows */}
+				<div className="absolute left-1/2 top-[32%] -translate-x-1/2 -translate-y-1/2">
+					<div className="size-[560px] rounded-full bg-blue-500/10 dark:bg-blue-600/15 blur-3xl" />
+					<div className="size-[380px] -translate-x-36 translate-y-16 rounded-full bg-indigo-500/10 dark:bg-indigo-600/10 blur-3xl" />
+				</div>
 			</div>
 
 			<div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
