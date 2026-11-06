@@ -56,27 +56,11 @@ export function HomeHero({
 				<div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(15,23,42,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,0.06)_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_35%,#000_55%,transparent_100%)]" />
 
 				{/* Concentric Radar / Scanner Orbital Rings */}
-				<div className="absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2 opacity-70 dark:opacity-80">
+				<div className="absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2 opacity-60 dark:opacity-70">
 					{/* Inner subtle radar orbit */}
 					<div className="size-[580px] rounded-full border border-blue-500/15 dark:border-blue-400/15 [mask-image:radial-gradient(ellipse_at_center,#000_40%,transparent_95%)]" />
-					{/* Outer dashed orbital ring */}
-					<div className="absolute inset-0 -m-[130px] size-[840px] rounded-full border border-dashed border-indigo-500/10 dark:border-indigo-400/15 [mask-image:radial-gradient(ellipse_at_center,#000_50%,transparent_90%)]" />
-				</div>
-
-				{/* Precision Crosshair Coordinate Marks in Negative Space */}
-				<div className="hidden lg:flex items-center gap-1.5 absolute left-[8%] top-[32%] text-[10px] font-mono text-muted-foreground/40 select-none">
-					<span className="text-blue-500/60">+</span>
-					<span>GEO-RADAR // ACTIVE</span>
-				</div>
-				<div className="hidden lg:flex items-center gap-1.5 absolute right-[8%] top-[32%] text-[10px] font-mono text-muted-foreground/40 select-none">
-					<span>AUDIT-GRID // 48PX</span>
-					<span className="text-blue-500/60">+</span>
-				</div>
-				<div className="hidden xl:block absolute left-[6%] top-[58%] text-[10px] font-mono text-muted-foreground/30 select-none">
-					+ —— +
-				</div>
-				<div className="hidden xl:block absolute right-[6%] top-[58%] text-[10px] font-mono text-muted-foreground/30 select-none">
-					+ —— +
+					{/* Outer orbital ring */}
+					<div className="absolute inset-0 -m-[130px] size-[840px] rounded-full border border-indigo-500/10 dark:border-indigo-400/10 [mask-image:radial-gradient(ellipse_at_center,#000_50%,transparent_90%)]" />
 				</div>
 
 				{/* Ambient Ambient Glows */}
