@@ -5,6 +5,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
+import { checkApiBrandAccess } from "@/lib/auth/policies";
 import { BrandNotFoundError } from "@/server/onboarding-core";
 import { DraftNotFoundError, listDraftsByBrand, ResearchStartError, triggerResearch } from "@/server/research";
 
@@ -39,8 +40,9 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 			POST: createApiHandler({
 				mapError: brandNotFoundMapper,
 				body: postBody,
-				handle: async ({ params, body }) => {
+				handle: async ({ request, params, body }) => {
 					const { brandId } = params;
+					if (!await checkApiBrandAccess(request, brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					try {
 						// c3-job-fix: triggerResearch 替代 researchBrand（async job 化，<100ms 即返）
 						const result = await triggerResearch({
@@ -66,6 +68,7 @@ export const Route = createFileRoute("/api/v1/brands/$brandId/research/")({
 			GET: createApiHandler({
 				handle: async ({ request, params }) => {
 					const url = new URL(request.url);
+					if (!await checkApiBrandAccess(request, params.brandId)) throw new ApiError(403, "Forbidden", "No access to this brand");
 					const includeAll = url.searchParams.get("include_all") === "true";
 					const rows = await listDraftsByBrand(params.brandId, includeAll);
 					// c3-job-fix3: 端点返回字段 — researchStatus 含进 draft payload

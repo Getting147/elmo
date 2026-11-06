@@ -28,6 +28,8 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getBoss } from "@/lib/boss-client";
 import { BrandNotFoundError, saveWizardOnboarding, type WizardOnboardingInput } from "@/server/onboarding-core";
 import { type ResearchDatabase, withResearchLock } from "@/server/research-lock";
+import { checkSourceQuote, type ProductResearchEvidence } from "@workspace/lib/onboarding/product-evidence";
+import type { ResearchDiagnostics } from "@workspace/lib/onboarding";
 
 export class ResearchStartError extends Error {
 	constructor(cause: unknown) {
@@ -53,6 +55,13 @@ export class DraftConflictError extends Error {
 	}
 }
 
+export class DraftEvidenceError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "DraftEvidenceError";
+	}
+}
+
 /**
  * convertOnboardingSuggestionToWizardInput — V1.2 改造前临时方案。
  * 把 LLM 输出的 OnboardingSuggestion 转为 wizardOnboardingInputSchema 可消费对象。
@@ -69,9 +78,11 @@ function convertOnboardingSuggestionToWizardInput(args: {
 
 	// productLines 只取 confirmed[] — unverified 全部丢弃（按 hill mtqroz9m5a 拍板 V1 语义）
 	const confirmedProductLines = (suggestion.productLines?.confirmed ?? []).map(
-		({ line }): { name: string; skus: typeof line.skus } => ({
+		({ line }) => ({
 			name: line.name,
 			skus: line.skus,
+			category: line.category,
+			researchEvidence: line.researchEvidence,
 		}),
 	);
 
@@ -138,6 +149,7 @@ export async function researchBrand(args: {
 			maxPrompts: args.maxPrompts ?? 30,
 			maxProducts: args.maxProducts ?? 10,
 			crawledPageTexts: args.crawledPageTexts,
+			requireLiveWebsite: true,
 		});
 	} catch (err) {
 		// LLM/抓取失败 → 先创建 failed 草稿（让前端能查到失败原因）
@@ -203,6 +215,7 @@ export async function confirmDraft(draftId: string): Promise<{ id: string }> {
 		}
 
 		const payload = draft.payload as OnboardingSuggestion;
+		validateDraftProductEvidence(payload);
 		const input = convertOnboardingSuggestionToWizardInput({
 			brandId: draft.brandId,
 			website: payload.website,
@@ -764,11 +777,14 @@ export interface DraftPayloadSku {
 	model?: string;
 	oneLiner: string;
 	evidenceUrl: string;
+	evidenceQuote?: string;
 }
 
 export interface DraftPayloadLine {
 	name: string;
 	skus: DraftPayloadSku[];
+	category?: string;
+	researchEvidence?: ProductResearchEvidence;
 }
 
 /** PATCH body（路由 zod 消费）— 与 OnboardingSuggestion 部分字段对齐（productLines 只收 confirmed 结构） */
@@ -819,12 +835,16 @@ export function applyDraftPayloadPatch(
 	}
 	if (patch.productLines !== undefined) {
 		const prevProductLines = prev.productLines as OnboardingSuggestion["productLines"];
+		const pending = patch.productLines.filter(({ line }) => line.researchEvidence?.kind === "uncertain");
 		next.productLines = {
-			confirmed: patch.productLines.map(({ line, evidence }) => ({
+			confirmed: patch.productLines.filter(({ line }) => line.researchEvidence?.kind !== "uncertain").map(({ line, evidence }) => ({
 				line,
 				sourceEvidenceChecked: evidence ?? 0,
 			})),
-			unverified: prevProductLines?.unverified ?? [],
+			unverified: [
+				...(prevProductLines?.unverified ?? []),
+				...pending.map(({ line }) => ({ line, reason: "ROLE_UNCONFIRMED: 层级判断由审核者标为待核，未自动采纳" })),
+			],
 		};
 	}
 	return next;
@@ -841,13 +861,54 @@ export async function updateDraftPayload(
 	const draft = await getDraftById(draftId);
 	if (!draft) throw new DraftNotFoundError(draftId);
 	if (draft.state !== "pending_review") throw new DraftConflictError(draftId, draft.state);
+	if (draft.researchStatus === "queued" || draft.researchStatus === "running") {
+		throw new DraftConflictError(draftId, `research:${draft.researchStatus}`);
+	}
 
 	const prev = (draft.payload ?? {}) as Record<string, unknown>;
 	const next = applyDraftPayloadPatch(prev, patch);
-	await db
+	validateDraftProductEvidence(next);
+	const updated = await db
 		.update(draftResearch)
 		.set({ payload: next as never, updatedAt: new Date() })
-		.where(eq(draftResearch.id, draftId));
+		.where(and(eq(draftResearch.id, draftId), eq(draftResearch.state, "pending_review"),
+			sql`(${draftResearch.researchStatus} = 'done' OR ${draftResearch.researchStatus} IS NULL)`))
+		.returning({ id: draftResearch.id });
+	if (updated.length === 0) throw new DraftConflictError(draftId, "changed during edit");
 
 	return { id: draftId, state: "pending_review" };
+}
+
+function validateDraftProductEvidence(payload: {
+	productLines?: OnboardingSuggestion["productLines"];
+	researchDiagnostics?: Partial<ResearchDiagnostics>;
+}): void {
+	const sources = payload.researchDiagnostics?.sources;
+	if (!sources) return;
+	const pages = new Map<string, string>();
+	for (const page of sources.pages) {
+		if (page.status === "success") {
+			pages.set(page.url, page.text);
+			pages.set(page.finalUrl, page.text);
+		}
+	}
+	for (const entry of payload.productLines?.confirmed ?? []) {
+		const { line } = entry;
+		const source = line.researchEvidence;
+		if (!source || source.kind === "uncertain" || checkSourceQuote(line.name, source, pages) !== "verified") {
+			throw new DraftEvidenceError(`“${line.name}”的类别来源待核，请保留可核对的官网 URL 与逐字引文。`);
+		}
+		if (line.category && (!source.parent || source.parent.name !== line.category
+			|| checkSourceQuote(line.category, source.parent, pages) !== "verified"
+			|| checkSourceQuote(line.name, source.parent, pages) !== "verified")) {
+			throw new DraftEvidenceError(`“${line.name}”的父业务板块关系来源待核。`);
+		}
+		for (const sku of line.skus) {
+			if (source.kind === "business" || checkSourceQuote(sku.name, sku, pages) !== "verified"
+				|| (sku.model && checkSourceQuote(sku.model, sku, pages) !== "verified")) {
+				throw new DraftEvidenceError(`“${sku.name}”的具体型号来源待核，不能作为已核对 SKU 入库。`);
+			}
+		}
+		entry.sourceEvidenceChecked = 1 + line.skus.length;
+	}
 }

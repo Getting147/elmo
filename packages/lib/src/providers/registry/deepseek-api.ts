@@ -107,19 +107,6 @@ export function normalizeDeepSeekOutput(parsed: unknown): unknown {
 		});
 	}
 
-	if (Array.isArray(obj.suggestedPrompts)) {
-		obj.suggestedPrompts = obj.suggestedPrompts.map((p) => {
-			if (typeof p === "string") return { prompt: p, tags: [] };
-			if (p && typeof p === "object") {
-				const item = p as Record<string, unknown>;
-				if (!Array.isArray(item.tags)) item.tags = [];
-				if (typeof item.prompt !== "string") item.prompt = String(item.prompt ?? "");
-				return item;
-			}
-			return { prompt: String(p ?? ""), tags: [] };
-		});
-	}
-
 	if (Array.isArray(obj.productLines)) {
 		obj.productLines = obj.productLines.map((line) => {
 			if (!line || typeof line !== "object") return line;
@@ -132,7 +119,7 @@ export function normalizeDeepSeekOutput(parsed: unknown): unknown {
 					if (!sku || typeof sku !== "object") return sku;
 					const skuObj = sku as Record<string, unknown>;
 					if (typeof skuObj.name !== "string") skuObj.name = "";
-					if (typeof skuObj.model !== "string") skuObj.model = null;
+					if (skuObj.model === undefined) skuObj.model = null;
 					if (typeof skuObj.oneLiner !== "string") skuObj.oneLiner = "";
 					if (typeof skuObj.evidenceUrl !== "string") skuObj.evidenceUrl = null;
 					return skuObj;
@@ -237,7 +224,9 @@ export async function deepseekChat(
 
 		if (!res.ok) {
 			const errText = await res.text();
-			throw new Error(`DeepSeek API error (${res.status}): ${errText}`);
+			throw new DeepSeekStructureError(`DeepSeek API error (${res.status})`, {
+				status: res.status, body: errText.replaceAll(apiKey, "[REDACTED]"),
+			});
 		}
 		return (await res.json()) as ChatResponse;
 	} catch (err) {
@@ -299,26 +288,38 @@ export const deepseekApi: Provider = {
 		);
 
 		console.log(`[deepseek-api] LLM responded in ${Date.now() - startTs}ms`);
-		const rawText = data?.choices?.[0]?.message?.content ?? "{}";
+		const rawText = data?.choices?.[0]?.message?.content;
+		if (!rawText?.trim()) throw new DeepSeekStructureError("DeepSeek 未返回结构化内容", data);
 		const cleaned = stripThinkingBlocks(rawText);
 
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(cleaned);
 		} catch (err) {
-			console.error("[deepseek-api] Failed to parse JSON:", cleaned);
-			throw new Error(`DeepSeek returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+			throw new DeepSeekStructureError(`DeepSeek returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`, data);
 		}
 
-		const normalized = normalizeDeepSeekOutput(parsed);
-		const validated = (schema as z.ZodType).parse(normalized) as T;
+		const normalized = normalizeDeepSeekOutput(structuredClone(parsed));
+		const checked = schema.safeParse(normalized);
+		if (!checked.success) {
+			throw new DeepSeekStructureError(`DeepSeek 结构契约校验失败：${checked.error.issues.map((issue) => issue.path.join(".")).join(", ")}`, data);
+		}
 
 		return {
-			object: validated,
+			object: checked.data,
 			modelVersion: data?.model ?? model,
+			requestModel: model,
+			finishReason: data?.choices?.[0]?.finish_reason,
 			raw: data,
 			usage: data?.usage,
 			prompt,
 		};
 	},
 };
+
+export class DeepSeekStructureError extends Error {
+	constructor(message: string, public readonly response: unknown) {
+		super(message);
+		this.name = "DeepSeekStructureError";
+	}
+}

@@ -207,6 +207,7 @@ export const adminAnalyzeBrandFn = createServerFn({ method: "POST" })
 			brandName: data.brandName,
 			maxCompetitors: data.maxCompetitors,
 			maxPrompts: data.maxPrompts,
+			requireLiveWebsite: true,
 		});
 	});
 

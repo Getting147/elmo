@@ -43,6 +43,8 @@ export interface StructuredResearchResult<T> {
 		total_tokens?: number;
 	};
 	prompt?: string;
+	requestModel?: string;
+	finishReason?: string;
 }
 
 export interface Provider {

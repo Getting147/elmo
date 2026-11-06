@@ -6,13 +6,14 @@ const { findFirstBrandMock, updateMock } = vi.hoisted(() => {
 	return { findFirstBrandMock, updateMock };
 });
 
-vi.mock("@workspace/lib/db/db", () => ({
-	db: {
+vi.mock("@workspace/lib/db/db", () => {
+	const transaction = {
 		query: { brands: { findFirst: findFirstBrandMock } },
 		update: updateMock,
 		insert: vi.fn(),
-	},
-}));
+	};
+	return { db: { ...transaction, transaction: async (operation: (tx: typeof transaction) => unknown) => operation(transaction) } };
+});
 
 vi.mock("@workspace/lib/db/provisioning", () => ({ ensureOrganization: vi.fn() }));
 vi.mock("@/lib/job-scheduler", () => ({ createMultiplePromptJobSchedulers: vi.fn() }));

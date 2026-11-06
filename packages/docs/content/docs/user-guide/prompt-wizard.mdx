@@ -17,6 +17,13 @@ The wizard walks you through five stages:
 
 Elmo visits your website and extracts information about your products, services, and offerings.
 
+Research uses a limited set of at most six public official pages, discovered
+from the supplied page's real navigation links. It is not a full-site scan.
+Each page has one shared budget of at most three HTTP requests, including
+reader/direct-fetch switching and redirects. Recoverable failures wait before
+retrying; successful pages are not fetched again. If no page yields material,
+the website-dependent research stops without a model request.
+
 {/* TODO: Screenshot of the website analysis step */}
 
 ### 2. Discover Keywords
@@ -62,9 +69,34 @@ and source-check results are retained in the research draft. Missing fields in
 older responses do not discard the rest of the research, rewrite saved prompts,
 or trigger another model call; review doubtful suggestions manually.
 
+Every generated question must have non-empty text in `prompt`. Missing text,
+empty text, invalid rows, duplicates and target-reference exclusions are
+reported separately; a completed job with no usable questions is not a complete
+research success. Valid rows retain their wording and casing. No default
+questions are added, and model failures do not trigger an automatic retry.
+
+Review distinguishes business sectors, product lines and concrete SKUs.
+A category with a checked official source quote may have no verified SKU.
+An unsupported SKU remains pending without discarding its sourced category or
+other verified SKUs. Unknown parent relationships are not invented.
+Hierarchy, source URLs and verbatim quotes survive draft editing, confirmation
+and profile reload. Historical records without these fields remain readable as
+unclassified or pending; they are not researched again.
+
+Layer names remain model suggestions until reviewed. An authentic quote can
+describe a sub-brand rather than a product line. Marking a suggested role as
+uncertain keeps it pending without removing valid questions or other categories.
+
+Address safety checks reject private, loopback and benchmark/fake-IP destinations.
+When an explicitly authorized isolated deployment needs an encrypted DNS route,
+`WEBSITE_RESEARCH_DNS_OVER_HTTPS=1.1.1.1` uses that public resolver with TLS
+verification and checked-address pinning. It does not change system DNS or
+exempt private addresses. DNS queries are cached per host, bounded to fourteen
+per research and recorded separately from website HTTP requests.
+
 ## After the Wizard
 
-Once you confirm the prompts, Elmo marks your brand as onboarded and you're taken to the main dashboard. The worker will begin querying AI models on the next scheduled run.
+Once you confirm the prompts, Elmo marks your brand as onboarded and you're taken to the main dashboard. Saving and viewing the result do not authorize a new research, sampling or model call; monitoring is started explicitly.
 
 You can always add, edit, or disable prompts later in **Settings → Prompts**.
 

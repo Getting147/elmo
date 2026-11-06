@@ -5,17 +5,9 @@
  * 端点契约见 research/index.ts + drafts/$draftId.ts。
  */
 
-import type { TermAssessmentCheck, TermAssessmentsInput } from "@workspace/lib/onboarding";
+import type { OnboardingProductLine, ResearchDiagnostics, SuggestedPromptsMeta, TermAssessmentCheck, TermAssessmentsInput } from "@workspace/lib/onboarding";
 
-export interface SuggestedPromptsMeta {
-	generated: number;
-	kept: number;
-	filteredForBrandOrSku: number;
-	filteredForProprietary: number;
-	unconfirmed: number;
-	skippedDuplicateOrEmpty: number;
-	truncatedByCap: number;
-}
+export type { SuggestedPromptsMeta };
 
 export interface ExcludedSuggestedPrompt {
 	prompt: string;
@@ -31,22 +23,21 @@ export interface ResearchDraftPayload {
 	competitors: Array<{ name: string; domains: string[]; aliases: string[] }>;
 	suggestedPrompts: Array<{ prompt: string; tags: string[] }>;
 	suggestedCategories?: string[];
+	suggestedCategoryChecks?: { category: string; status: "sourced" | "unconfirmed" }[];
 	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	suggestedPromptsExcluded?: ExcludedSuggestedPrompt[];
 	termAssessments?: TermAssessmentsInput;
 	termAssessmentChecks?: TermAssessmentCheck[];
 	summary?: string;
 	description?: string;
+	researchDiagnostics?: ResearchDiagnostics;
 	productLines?: {
 		confirmed: Array<{
-			line: {
-				name: string;
-				skus: Array<{ name: string; model?: string; oneLiner: string; evidenceUrl: string }>;
-			};
+			line: OnboardingProductLine;
 			sourceEvidenceChecked?: number;
 		}>;
 		unverified: Array<{
-			line: { name: string; skus: Array<{ name: string; model?: string }> };
+			line: { name: string; skus: Array<{ name: string; model?: string }> } & Partial<Pick<OnboardingProductLine, "category" | "researchEvidence">>;
 			reason: string;
 		}>;
 	};
@@ -54,10 +45,7 @@ export interface ResearchDraftPayload {
 
 /** PATCH /drafts/{id} 回写契约 — confirmed 数组（unverified 由后端保留，不灌库仅展示） */
 export interface DraftPatchProductLine {
-	line: {
-		name: string;
-		skus: Array<{ name: string; model?: string; oneLiner: string; evidenceUrl: string }>;
-	};
+	line: OnboardingProductLine;
 	evidence?: number;
 }
 

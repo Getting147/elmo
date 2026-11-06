@@ -33,6 +33,7 @@ import {
 	fetchBrandDrafts,
 	fetchDraft,
 	patchDraft,
+	rollbackDraft,
 	type ResearchDraftPayload,
 	type SuggestedPromptsMeta,
 	triggerResearch,
@@ -57,6 +58,7 @@ interface WizardData {
 	competitors: CompetitorEntry[];
 	prompts: EditablePrompt[];
 	suggestedCategories: string[];
+	suggestedCategoryChecks?: ResearchDraftPayload["suggestedCategoryChecks"];
 	suggestedPromptsMeta?: SuggestedPromptsMeta;
 	// Epic A-2 (V1.0): 公司档案（一句话定位 + 简介）+ 产品线/SKU
 	summary: string;
@@ -106,6 +108,9 @@ export function buildPromptNotice(args: {
 				: "No suggested prompts yet — add one manually."
 			: null;
 	}
+	if (meta.fieldStatus === "invalid") return isZh
+		? "模型的问题清单字段结构不合法，本轮问题产出失败；其他已产资料保留，不补写默认问题。"
+		: "The model returned an invalid prompt-list structure. Question generation failed; other material is retained, without default questions.";
 	const brand = meta.filteredForBrandOrSku;
 	const proprietary = meta.filteredForProprietary;
 	const unconfirmed = meta.unconfirmed;
@@ -114,13 +119,17 @@ export function buildPromptNotice(args: {
 	const filteredTotal = brand + proprietary;
 	const reasonParts = (zh: boolean): string[] => {
 		const parts: string[] = [];
+		if ((meta.missingPrompt ?? 0) > 0) parts.push(zh ? `${meta.missingPrompt} 条缺少题文 prompt 字段` : `${meta.missingPrompt} missing prompt fields`);
+		if ((meta.emptyPrompt ?? 0) > 0) parts.push(zh ? `${meta.emptyPrompt} 条题文为空` : `${meta.emptyPrompt} empty prompt texts`);
+		if ((meta.invalidPrompt ?? 0) > 0) parts.push(zh ? `${meta.invalidPrompt} 条题文类型或结构不合法` : `${meta.invalidPrompt} invalid prompt rows`);
+		if ((meta.duplicate ?? 0) > 0) parts.push(zh ? `${meta.duplicate} 条重复` : `${meta.duplicate} duplicates`);
 		if (brand > 0)
 			parts.push(zh ? `${brand} 条因包含品牌名或别名被防引导规则过滤` : `${brand} were filtered for naming the brand or an alias`);
 		if (proprietary > 0)
 			parts.push(zh ? `${proprietary} 条因指向专有产品、系列或型号被过滤` : `${proprietary} were filtered for pointing at a proprietary product, series or model`);
 		if (unconfirmed > 0)
 			parts.push(zh ? `${unconfirmed} 条指向未确认，未自动纳入、待人工确认` : `${unconfirmed} have an unconfirmed target reference and were not auto-included`);
-		if (skipped > 0) parts.push(zh ? `${skipped} 条为空或重复` : `${skipped} were empty or duplicates`);
+		if (skipped > 0 && meta.emptyPrompt === undefined) parts.push(zh ? `${skipped} 条为空或重复（历史统计未拆分）` : `${skipped} were empty or duplicates (legacy combined count)`);
 		if (truncated > 0) parts.push(zh ? `${truncated} 条因数量上限未处理` : `${truncated} were not processed due to the prompt cap`);
 		return parts;
 	};
@@ -141,6 +150,10 @@ export function buildPromptNotice(args: {
 				? `模型生成了 ${meta.generated} 条建议，${parts}，未得到可用问题；可手动添加。`
 				: `The model returned ${meta.generated} suggestions: ${parts}; no usable question remained. Add one manually.`;
 		}
+	}
+	if ((meta.missingPrompt ?? 0) + (meta.emptyPrompt ?? 0) + (meta.invalidPrompt ?? 0) + (meta.duplicate ?? 0) > 0) {
+		return isZh ? `本轮自动生成部分成功：保留 ${meta.kept} 条有效题文；${reasonParts(true).join("，")}。当前清单 ${promptCount} 条，编辑不触发新调研。`
+			: `Research partially succeeded: ${meta.kept} usable prompts retained; ${reasonParts(false).join("; ")}. Current list: ${promptCount}; editing does not run research again.`;
 	}
 	if (filteredTotal > 0 || unconfirmed > 0) {
 		const extra = unconfirmed > 0 ? (isZh ? `，另有 ${unconfirmed} 条指向未确认未自动纳入` : `, and ${unconfirmed} more with an unconfirmed target reference were not auto-included`) : "";
@@ -192,6 +205,8 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	const router = useRouter();
 	const [phase, setPhase] = useState<"idle" | "analyzing" | "review">("idle");
 	const [error, setError] = useState<string | null>(null);
+	const [historyReady, setHistoryReady] = useState(false);
+	const [isCancelling, setIsCancelling] = useState(false);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [isSaving, setIsSaving] = useState(false);
 	const [data, setData] = useState<WizardData>({
@@ -218,13 +233,14 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	const stopAnalyzing = useCallback((errorMessage: string | null) => {
 		setPhase("idle");
 		setError(errorMessage);
-		setDraftId(null);
+		setHistoryReady(false);
 		payloadRef.current = null;
 	}, []);
 
 	// Mount: 恢复活动草稿（刷新/离开后重进续接管道；done+pending_review 直接进 review）
 	useEffect(() => {
 		if (!brandId) return;
+		setHistoryReady(false);
 		let cancelled = false;
 		(async () => {
 			try {
@@ -239,6 +255,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					(d) => (d.researchStatus === "failed" || d.state === "failed") && d.state !== "rolled_back",
 				);
 				if (cancelled) return;
+				setHistoryReady(true);
 				if (active) {
 					payloadRef.current = active.payload;
 					setDraftId(active.id);
@@ -253,8 +270,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					setDraftId(latestFailed.id);
 					setError(latestFailed.error || (language === "zh" ? "品牌调研失败" : "Research failed"));
 				}
-			} catch {
-				// drafts 不可达（未登录/无权限等）——保持 idle，用户仍可手动触发
+			} catch (error) {
+				if (!cancelled) setError(language === "zh"
+					? `无法核对历史任务状态，请刷新后再操作：${error instanceof Error ? error.message : String(error)}`
+					: `Cannot check historical task status. Refresh before starting research: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		})();
 		return () => {
@@ -300,6 +319,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	}, []);
 
 	const handleAnalyze = useCallback(async () => {
+		if (!historyReady) {
+			setError(language === "zh" ? "历史任务状态尚未核对，未发起新调研。请刷新恢复。" : "Historical task status is unknown; no new research was started. Refresh first.");
+			return;
+		}
 		if (!brand?.website || !brand?.id) return;
 		const isRetry = Boolean(error);
 		const oldDraftId = draftId;
@@ -320,7 +343,22 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			setError(err instanceof Error ? err.message : (language === "zh" ? "调研请求失败" : "Research request failed"));
 			setPhase("idle");
 		}
-	}, [brand?.website, brand?.id, error, draftId, language, queryClient]);
+	}, [brand?.website, brand?.id, error, draftId, language, queryClient, historyReady]);
+
+	const handleCancelResearch = useCallback(async () => {
+		if (!draftId) return;
+		setIsCancelling(true);
+		try {
+			await rollbackDraft(draftId);
+			stopAnalyzing(language === "zh"
+				? "本轮调研已取消，不会继续发起后续请求；已发出的请求无法追回。请刷新核对记录。"
+				: "Research cancelled; no further requests will be started. Already issued requests cannot be recalled. Refresh to check the record.");
+		} catch (error) {
+			stopAnalyzing(error instanceof Error ? error.message : String(error));
+		} finally {
+			setIsCancelling(false);
+		}
+	}, [draftId, language, stopAnalyzing]);
 
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({
@@ -427,6 +465,8 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				.map((line) => ({
 					line: {
 						name: line.name.trim(),
+						category: line.category,
+						researchEvidence: line.researchEvidence,
 						skus: line.skus
 							.filter((s) => s.name.trim() && s.evidenceUrl.trim())
 							.map((s) => ({
@@ -434,10 +474,11 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 								model: s.model?.trim() || undefined,
 								oneLiner: s.oneLiner.trim(),
 								evidenceUrl: s.evidenceUrl.trim(),
+								evidenceQuote: s.evidenceQuote,
 							})),
 					},
 				}))
-				.filter((entry) => entry.line.name && entry.line.skus.length > 0);
+				.filter((entry) => entry.line.name);
 
 			const base = payloadRef.current;
 			// PATCH 回写用户编辑（payload 单一真源）——契约 = confirmed 数组 {line, evidence}；unverified 由后端保留（不灌库，仅展示）
@@ -480,17 +521,17 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	}, [brand, data, draftId, queryClient, router, onComplete]);
 
 	if (phase === "idle" || phase === "analyzing") {
+		const failedSources = (draftData?.payload ?? payloadRef.current)?.researchDiagnostics?.sources;
 		return (
 			<div className="max-w-2xl mx-auto space-y-3" data-no-i18n>
 				<p className="text-sm text-muted-foreground">
 					{language === "zh" ? (
 						<>
-							系统将通过网页搜索深入分析 <strong>{brand?.website}</strong>，推荐竞品、相关域名/别名，并生成一套初始 AI 评测提示词。
+							程序对 <strong>{brand?.website}</strong> 有限取材（最多 6 页、每页最多 3 次请求），由 Negency-Agent 分析已提供材料，生成类别、竞品与无品牌引导问题。模型不会自行联网全站搜索，也不会自动重试。
 						</>
 					) : (
 						<>
-							We'll analyze <strong>{brand?.website}</strong> using web search to suggest competitors, additional
-							domains/aliases, and a starter set of AI prompts to track.
+							The program fetches limited material from <strong>{brand?.website}</strong> (up to 6 pages, 3 requests per page). Negency-Agent analyzes those sources for categories, competitors and unbranded questions, without built-in full-site search or automatic model retries.
 						</>
 					)}
 				</p>
@@ -500,10 +541,16 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						<span>{error}</span>
 					</div>
 				)}
+				{failedSources?.status === "failed" && <p className="text-sm text-amber-700">
+					{language === "zh" ? `取材阶段未取得可用正文，实际抓取 HTTP 请求 ${failedSources.requestCount} 次。` : `No usable source text; ${failedSources.requestCount} fetch HTTP requests.`}
+					{failedSources.pages.some((page) => page.attempts.some((attempt) => attempt.outcome === "blocked"))
+						? language === "zh" ? " 地址/域名安全校验阻断，不等于官网停机；模型阶段未开始。" : " Address/domain safety checks blocked access; this does not establish site downtime. Model stage did not start."
+						: language === "zh" ? " 已保留失败来源，本轮未继续调用模型。" : " Failed sources retained; no model call followed."}
+				</p>}
 				<div className="flex items-center gap-2">
 					<Button
 						onClick={handleAnalyze}
-						disabled={phase === "analyzing"}
+						disabled={phase === "analyzing" || !historyReady}
 						className="flex items-center gap-2 cursor-pointer"
 					>
 						{phase === "analyzing" ? (
@@ -523,7 +570,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						)}
 					</Button>
 					{phase === "analyzing" && (
-						<Button variant="outline" onClick={() => stopAnalyzing(null)} className="cursor-pointer">
+						<Button variant="outline" onClick={handleCancelResearch} disabled={!draftId || isCancelling} className="cursor-pointer">
 							{t.cancelBtn}
 						</Button>
 					)}
@@ -607,6 +654,18 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					onIgnoreUnverified={ignoreUnverified}
 					disabled={isSaving}
 				/>
+				{payloadRef.current?.researchDiagnostics?.sources && (
+				<div className="space-y-1 text-xs text-muted-foreground">
+					<p>{payloadRef.current.researchDiagnostics.mode === "synthetic"
+						? language === "zh" ? "合成测试来源素材（未抓取真实官网）" : "Synthetic source fixture, not a real website fetch"
+						: language === "zh" ? "本轮有限官网取材（非全站扫描）" : "Limited official-site material, not a full-site scan"}：
+						{payloadRef.current.researchDiagnostics.sources.pages.filter((page) => page.status === "success").length}
+						/{payloadRef.current.researchDiagnostics.sources.pages.length} {language === "zh" ? "页成功" : "pages succeeded"}，
+						{payloadRef.current.researchDiagnostics.sources.requestCount} {language === "zh" ? "次抓取请求" : "fetch requests"}
+					</p>
+					{payloadRef.current.researchDiagnostics.sources.pages.map((page) => <p key={page.url} className="break-all">{page.status === "success" ? "✓" : "!"} {page.finalUrl} · {page.attempts.length} {language === "zh" ? "次尝试" : "attempts"}</p>)}
+				</div>
+				)}
 			</div>
 
 			<Separator />
@@ -636,6 +695,11 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					notice={promptNotice ?? undefined}
 					categoryHint={categoryHint ?? undefined}
 				/>
+				{data.suggestedCategoryChecks?.some((check) => check.status === "unconfirmed") && <p className="text-xs text-muted-foreground">
+					{language === "zh" ? "以下建议分类尚无已核对类别来源，不影响有效题文保留：" : "Categories without checked sources do not remove valid question text: "}
+					{data.suggestedCategoryChecks.filter((check) => check.status === "unconfirmed").map((check) => check.category).join(" · ")}
+				</p>}
+				{payloadRef.current?.researchDiagnostics?.prompts.status === "failed" && <p className="text-sm text-amber-700">{payloadRef.current.researchDiagnostics.prompts.message}</p>}
 			</div>
 
 			{submitError && (
@@ -647,7 +711,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			<Button
 				onClick={handleSubmit}
-				disabled={isSaving || previewCounts.totalNew === 0}
+				disabled={isSaving}
 				className="flex items-center gap-2 cursor-pointer"
 			>
 				{isSaving ? (
@@ -656,7 +720,9 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					</>
 				) : (
 					<>
-						<Rocket className="h-4 w-4" /> {language === "zh" ? `开始监控（${previewCounts.totalNew} 条新提示词）` : `Start tracking (${previewCounts.totalNew} new prompts)`}
+						<Rocket className="h-4 w-4" /> {language === "zh" ? previewCounts.totalNew === 0
+							? "仅保存建档资料（未选可用采样问题）" : `保存建档（${previewCounts.totalNew} 条选定问题）`
+							: previewCounts.totalNew === 0 ? "Save profile only (no selected questions)" : `Save profile (${previewCounts.totalNew} selected questions)`}
 					</>
 				)}
 			</Button>
@@ -692,18 +758,22 @@ export function suggestionToWizardData(
 			newPromptEntry({ value: p.prompt, tags: p.tags || [], enabled: true }),
 		),
 		suggestedCategories: suggestion.suggestedCategories ?? [],
+		suggestedCategoryChecks: suggestion.suggestedCategoryChecks,
 		suggestedPromptsMeta: suggestion.suggestedPromptsMeta,
 		summary: suggestion.summary ?? "",
 		description: suggestion.description ?? "",
 		productLines: productLines.map((entry) =>
 			newEditableProductLine({
 				name: entry.line.name,
+				category: entry.line.category,
+				researchEvidence: entry.line.researchEvidence,
 				skus: entry.line.skus.map((s) =>
 					newEditableSku({
 						name: s.name,
 						model: s.model ?? "",
 						oneLiner: s.oneLiner,
 						evidenceUrl: s.evidenceUrl,
+						evidenceQuote: s.evidenceQuote,
 					}),
 				),
 			}),
@@ -713,6 +783,7 @@ export function suggestionToWizardData(
 			name: entry.line.name,
 			skuNames: entry.line.skus.map((s) => s.name),
 			reason: entry.reason,
+			researchEvidence: entry.line.researchEvidence,
 		})),
 	};
 }

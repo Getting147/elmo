@@ -43,6 +43,7 @@ export const Route = createFileRoute("/api/v1/tools/analyze")({
 						brandName: body.brandName,
 						maxCompetitors: body.maxCompetitors ?? 20,
 						maxPrompts: body.maxPrompts,
+						requireLiveWebsite: true,
 					});
 				},
 			}),

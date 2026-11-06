@@ -124,8 +124,8 @@ describe("deepseek-api normalizeDeepSeekOutput", () => {
 			suggestedPrompts: ["Best light steel house", { prompt: "Prefab villa cost" }],
 			productLines: [{ name: "Light Steel Villa", skus: [{ name: "Model A" }] }],
 		}) as any;
-		expect(normalized.suggestedPrompts[0]).toEqual({ prompt: "Best light steel house", tags: [] });
-		expect(normalized.suggestedPrompts[1]).toEqual({ prompt: "Prefab villa cost", tags: [] });
+		expect(normalized.suggestedPrompts[0]).toBe("Best light steel house");
+		expect(normalized.suggestedPrompts[1]).toEqual({ prompt: "Prefab villa cost" });
 		expect(normalized.productLines[0].skus[0].model).toBeNull();
 		expect(normalized.productLines[0].skus[0].oneLiner).toBe("");
 	});
