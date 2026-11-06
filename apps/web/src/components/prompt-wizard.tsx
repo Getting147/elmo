@@ -34,6 +34,7 @@ import {
 	fetchDraft,
 	patchDraft,
 	rollbackDraft,
+	type ResearchDraft,
 	type ResearchDraftPayload,
 	type SuggestedPromptsMeta,
 	triggerResearch,
@@ -49,6 +50,16 @@ interface PromptWizardProps {
 /** Brand analysis runs in the worker (LLM + web search, ~1 min); the client polls for the result. */
 const POLL_INTERVAL_MS = 2000;
 const ANALYZE_TIMEOUT_MS = 6 * 60 * 1000; // give up after ~6 minutes
+
+export function researchDraftPhase(draft: ResearchDraft) {
+	if (draft.state === "rolled_back") return "cancelled";
+	if (draft.state === "done") return "settled";
+	if (draft.state === "failed" || draft.researchStatus === "failed") return "failed";
+	if (draft.state !== "pending_review") return "unknown";
+	if (draft.researchStatus === "queued" || draft.researchStatus === "running") return "active";
+	if (draft.researchStatus === "done") return "review";
+	return "unknown";
+}
 
 interface WizardData {
 	brandName: string;
@@ -229,6 +240,43 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	const [draftId, setDraftId] = useState<string | null>(null);
 	// 完整 payload 快照 —— PATCH 时与用户编辑 merge（unverified 行保留原 evidence，仅被忽略的行移除）
 	const payloadRef = useRef<ResearchDraftPayload | null>(null);
+	const generationRef = useRef(0);
+	const cancellingRef = useRef(false);
+	const cancelledDraftsRef = useRef(new Set<string>());
+	const cancelledMessage = language === "zh"
+		? "本轮调研已取消，可明确点击重新调研；不会继续发起后续请求，已发出的请求无法追回。"
+		: "Research cancelled. You can explicitly start again; no further requests will be started. Already issued requests cannot be recalled.";
+
+	const restoreHistory = useCallback((drafts: ResearchDraft[]) => {
+		const ownDrafts = drafts.filter((draft) => draft.brandId === brandId);
+		const active = ownDrafts.find((draft) =>
+			!cancelledDraftsRef.current.has(draft.id) &&
+			["active", "review", "unknown"].includes(researchDraftPhase(draft)));
+		const latest = active ?? ownDrafts.find((draft) =>
+			cancelledDraftsRef.current.has(draft.id) ||
+			["cancelled", "failed"].includes(researchDraftPhase(draft)));
+		setHistoryReady(!active || researchDraftPhase(active) !== "unknown");
+		setPhase("idle");
+		setDraftId(latest?.id ?? null);
+		payloadRef.current = latest?.payload ?? null;
+		setError(null);
+		if (!latest) return;
+		const status = cancelledDraftsRef.current.has(latest.id) ? "cancelled" : researchDraftPhase(latest);
+		if (status === "active") setPhase("analyzing");
+		else if (status === "review") {
+			setData(suggestionToWizardData(latest.payload, brand?.name || "", brand?.website || "", { isDraftRestore: true }));
+			setPhase("review");
+		} else if (status === "cancelled") {
+			payloadRef.current = null;
+			setError(cancelledMessage);
+		} else if (status === "failed") {
+			setError(latest.error || (language === "zh" ? "品牌调研失败" : "Research failed"));
+		} else {
+			setError(language === "zh" ? "历史任务执行状态未知，未发起新调研。" : "Historical execution status is unknown; no new research was started.");
+		}
+	}, [brandId, brand?.name, brand?.website, cancelledMessage, language]);
+	const restoreHistoryRef = useRef(restoreHistory);
+	restoreHistoryRef.current = restoreHistory;
 
 	const stopAnalyzing = useCallback((errorMessage: string | null) => {
 		setPhase("idle");
@@ -240,36 +288,20 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	// Mount: 恢复活动草稿（刷新/离开后重进续接管道；done+pending_review 直接进 review）
 	useEffect(() => {
 		if (!brandId) return;
+		const generation = ++generationRef.current;
+		cancellingRef.current = false;
+		setIsCancelling(false);
+		setPhase("idle");
+		setDraftId(null);
+		setError(null);
+		payloadRef.current = null;
 		setHistoryReady(false);
 		let cancelled = false;
 		(async () => {
 			try {
 				const { drafts } = await fetchBrandDrafts(brandId, true);
-				const active = drafts.find(
-					(d) =>
-						d.researchStatus === "queued" ||
-						d.researchStatus === "running" ||
-						(d.researchStatus === "done" && d.state === "pending_review"),
-				);
-				const latestFailed = drafts.find(
-					(d) => (d.researchStatus === "failed" || d.state === "failed") && d.state !== "rolled_back",
-				);
-				if (cancelled) return;
-				setHistoryReady(true);
-				if (active) {
-					payloadRef.current = active.payload;
-					setDraftId(active.id);
-					if (active.researchStatus === "done") {
-						setData(suggestionToWizardData(active.payload, brand?.name || "", brand?.website || "", { isDraftRestore: true }));
-						setPhase("review");
-					} else {
-						setPhase("analyzing");
-					}
-				} else if (latestFailed) {
-					payloadRef.current = latestFailed.payload;
-					setDraftId(latestFailed.id);
-					setError(latestFailed.error || (language === "zh" ? "品牌调研失败" : "Research failed"));
-				}
+				if (cancelled || generation !== generationRef.current) return;
+				restoreHistoryRef.current(drafts);
 			} catch (error) {
 				if (!cancelled) setError(language === "zh"
 					? `无法核对历史任务状态，请刷新后再操作：${error instanceof Error ? error.message : String(error)}`
@@ -278,6 +310,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		})();
 		return () => {
 			cancelled = true;
+			generationRef.current++;
 		};
 	}, [brandId, brand?.name, brand?.website]);
 
@@ -324,6 +357,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			return;
 		}
 		if (!brand?.website || !brand?.id) return;
+		const generation = ++generationRef.current;
 		const isRetry = Boolean(error);
 		const oldDraftId = draftId;
 		setError(null);
@@ -331,34 +365,69 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		payloadRef.current = null;
 		if (oldDraftId) {
 			queryClient.removeQueries({ queryKey: ["research-draft", oldDraftId] });
-			if (isRetry) {
-				setDraftId(null);
-			}
+			setDraftId(null);
 		}
 		try {
 			const res = await triggerResearch(brand.id, brand.website, isRetry, oldDraftId || undefined, language);
+			if (generation !== generationRef.current) return;
 			setDraftId(res.draftId);
 			await queryClient.refetchQueries({ queryKey: ["research-draft", res.draftId] });
 		} catch (err) {
+			if (generation !== generationRef.current) return;
 			setError(err instanceof Error ? err.message : (language === "zh" ? "调研请求失败" : "Research request failed"));
 			setPhase("idle");
+			setHistoryReady(false);
 		}
 	}, [brand?.website, brand?.id, error, draftId, language, queryClient, historyReady]);
 
 	const handleCancelResearch = useCallback(async () => {
-		if (!draftId) return;
+		if (!draftId || !brandId || cancellingRef.current) return;
+		const generation = ++generationRef.current;
+		cancellingRef.current = true;
 		setIsCancelling(true);
+		setHistoryReady(false);
+		let cancellationError: string | null = null;
 		try {
-			await rollbackDraft(draftId);
-			stopAnalyzing(language === "zh"
-				? "本轮调研已取消，不会继续发起后续请求；已发出的请求无法追回。请刷新核对记录。"
-				: "Research cancelled; no further requests will be started. Already issued requests cannot be recalled. Refresh to check the record.");
+			await queryClient.cancelQueries({ queryKey: ["research-draft", draftId] });
+			const result = await rollbackDraft(draftId);
+			if (generation !== generationRef.current) return;
+			if (result.rolledBack === true) cancelledDraftsRef.current.add(draftId);
+			else cancellationError = language === "zh" ? "取消结果未确认。" : "Cancellation was not confirmed.";
 		} catch (error) {
-			stopAnalyzing(error instanceof Error ? error.message : String(error));
-		} finally {
-			setIsCancelling(false);
+			cancellationError = error instanceof Error ? error.message : String(error);
 		}
-	}, [draftId, language, stopAnalyzing]);
+		if (generation !== generationRef.current) return;
+		try {
+			const { drafts } = await fetchBrandDrafts(brandId, true);
+			if (generation !== generationRef.current) return;
+			const target = drafts.find((draft) => draft.id === draftId && draft.brandId === brandId);
+			if (target && researchDraftPhase(target) === "cancelled") cancelledDraftsRef.current.add(draftId);
+			queryClient.removeQueries({ queryKey: ["research-draft", draftId] });
+			restoreHistoryRef.current(drafts);
+			if (!target && cancelledDraftsRef.current.has(draftId) &&
+				!drafts.some((draft) => draft.brandId === brandId &&
+					["active", "review", "unknown"].includes(researchDraftPhase(draft)))) {
+				setDraftId(draftId);
+				setError(cancelledMessage);
+			}
+			if (!cancelledDraftsRef.current.has(draftId)) {
+				setError(cancellationError || (language === "zh" ? "未能确认取消，请核对当前任务状态。" : "Cancellation could not be confirmed. Check the current task status."));
+				if (!target) setHistoryReady(false);
+			}
+		} catch (error) {
+			if (generation !== generationRef.current) return;
+			setPhase("idle");
+			payloadRef.current = null;
+			setError(`${cancelledDraftsRef.current.has(draftId) ? cancelledMessage : cancellationError || ""} ${
+				language === "zh" ? "无法核对其它活动任务，未允许新调研。请刷新核对：" : "Other active tasks could not be checked; new research is disabled. Refresh to verify:"
+			} ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (generation === generationRef.current) {
+				cancellingRef.current = false;
+				setIsCancelling(false);
+			}
+		}
+	}, [draftId, brandId, language, queryClient, cancelledMessage]);
 
 	// 轮询 draft.researchStatus（queued/running 持续，done/failed 停）
 	const draftQuery = useQuery({
@@ -367,12 +436,12 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 			if (!draftId) throw new Error("No research draft in flight");
 			return fetchDraft(draftId);
 		},
-		enabled: phase === "analyzing" && !!draftId,
+		enabled: phase === "analyzing" && !!draftId && !isCancelling,
 		staleTime: 0,
 		gcTime: 0,
 		refetchInterval: (query) => {
-			const s = query.state.data?.researchStatus;
-			return s === "queued" || s === "running" ? POLL_INTERVAL_MS : false;
+			const draft = query.state.data;
+			return draft && researchDraftPhase(draft) === "active" ? POLL_INTERVAL_MS : false;
 		},
 		refetchIntervalInBackground: true,
 	});
@@ -380,13 +449,31 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	// 轮询结果驱动 phase 转移
 	const draftData = draftQuery.data;
 	useEffect(() => {
-		if (phase !== "analyzing" || !draftData) return;
-		if (draftData.researchStatus === "failed" || draftData.state === "failed") {
+		if (phase !== "analyzing" || !draftData || cancellingRef.current ||
+			draftData.id !== draftId || draftData.brandId !== brandId ||
+			cancelledDraftsRef.current.has(draftData.id)) return;
+		const status = researchDraftPhase(draftData);
+		if (status === "cancelled") {
+			cancelledDraftsRef.current.add(draftData.id);
+			stopAnalyzing(cancelledMessage);
+			const generation = generationRef.current;
+			fetchBrandDrafts(draftData.brandId, true).then(({ drafts }) => {
+				if (generation === generationRef.current) restoreHistoryRef.current(drafts);
+			}).catch((error: unknown) => {
+				if (generation === generationRef.current) setError(`${cancelledMessage} ${error instanceof Error ? error.message : String(error)}`);
+			});
+			return;
+		}
+		if (status === "unknown" || status === "settled") {
+			stopAnalyzing(language === "zh" ? "任务不再处于可恢复执行状态，请刷新核对历史。" : "Task is not in a resumable execution state. Refresh to check history.");
+			return;
+		}
+		if (status === "failed") {
 			setError(draftData.error || t.researchFailed);
 			setPhase("idle");
 			return;
 		}
-		if (draftData.researchStatus === "done") {
+		if (status === "review") {
 			payloadRef.current = draftData.payload;
 			setData(suggestionToWizardData(draftData.payload, brand?.name || "", brand?.website || ""));
 			setPhase("review");
@@ -396,7 +483,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 				product_line_count: draftData.payload.productLines?.confirmed?.length || 0,
 			});
 		}
-	}, [phase, draftData, brand?.name, brand?.website, t.researchFailed]);
+	}, [phase, draftData, draftId, brandId, brand?.name, brand?.website, t.researchFailed, stopAnalyzing, cancelledMessage, language]);
 
 	// Give up on a stuck research instead of polling forever.
 	useEffect(() => {
@@ -535,10 +622,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						</>
 					)}
 				</p>
-				{error && (
+				{(error || draftQuery.error) && (
 					<div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
 						<AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-						<span>{error}</span>
+						<span>{error || `${language === "zh" ? "无法核对执行状态，不会自动重发：" : "Cannot check execution status; no automatic resubmission:"} ${draftQuery.error?.message}`}</span>
 					</div>
 				)}
 				{failedSources?.status === "failed" && <p className="text-sm text-amber-700">
@@ -581,6 +668,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	return (
 		<div className="max-w-2xl mx-auto space-y-6" data-no-i18n>
+			{error && <p role="alert" className="text-sm text-red-700">{error}</p>}
 			<div className="space-y-2">
 				<h2 className="text-2xl font-bold">{t.brandDetailsTitle}</h2>
 				<p className="text-muted-foreground">

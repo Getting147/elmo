@@ -91,6 +91,7 @@ export function PromptsListEditor({
 	// Row whose category input was last focused, so its candidate chips stay
 	// clickable without stealing focus from the input.
 	const [activeCategoryIndex, setActiveCategoryIndex] = useState<number | null>(null);
+	const [categoryInputs, setCategoryInputs] = useState<Record<string, string>>({});
 
 	const allCategoryOptions = useMemo(() => {
 		const set = new Set<string>(categoryOptions ?? []);
@@ -117,6 +118,7 @@ export function PromptsListEditor({
 		onChange(prompts.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 	};
 	const handleCategoryChange = (index: number, newCat: string) => {
+		setCategoryInputs((previous) => ({ ...previous, [prompts[index]._key]: newCat }));
 		const nextTags = setPromptCategory(prompts[index].tags, newCat);
 		update(index, { tags: nextTags });
 	};
@@ -141,7 +143,10 @@ export function PromptsListEditor({
 						key={option}
 						type="button"
 						onMouseDown={(event) => event.preventDefault()}
-						onClick={() => handleCategoryChange(index, option)}
+						onClick={() => {
+							handleCategoryChange(index, option);
+							setActiveCategoryIndex(null);
+						}}
 						className="rounded border bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
 					>
 						{option}
@@ -385,9 +390,15 @@ export function PromptsListEditor({
 										<div className="flex-1 space-y-1">
 											<Input
 												list="prompt-category-options"
-												value={promptCategory}
+												value={categoryInputs[prompt._key] ?? promptCategory}
 												onChange={(e) => handleCategoryChange(index, e.target.value)}
 												onFocus={() => setActiveCategoryIndex(index)}
+												onClick={() => setActiveCategoryIndex(index)}
+												onBlur={() => setCategoryInputs((previous) => {
+													const next = { ...previous };
+													delete next[prompt._key];
+													return next;
+												})}
 												placeholder={t.selectCategoryPlaceholder}
 												className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 											/>
@@ -432,9 +443,15 @@ export function PromptsListEditor({
 									<div className="space-y-1">
 										<Input
 											list="prompt-category-options"
-											value={promptCategory}
+											value={categoryInputs[prompt._key] ?? promptCategory}
 											onChange={(e) => handleCategoryChange(index, e.target.value)}
 											onFocus={() => setActiveCategoryIndex(index)}
+											onClick={() => setActiveCategoryIndex(index)}
+											onBlur={() => setCategoryInputs((previous) => {
+												const next = { ...previous };
+												delete next[prompt._key];
+												return next;
+											})}
 											placeholder={t.selectCategoryPlaceholder}
 											className={cn("min-w-0 text-xs", isUnclassified && "border-amber-500 focus-visible:ring-amber-500")}
 										/>
