@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { IconArrowRight, IconSparkles, IconWorld, IconBuilding } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { validateWebsiteUrl } from "@/lib/brand-website";
 
 interface HomeHeroProps {
-	onStartDiagnosis: (brandName: string, website: string) => void;
+	onStartDiagnosis: (brandName: string, website: string, trigger?: HTMLElement) => void;
 	defaultBrandName?: string;
 	defaultWebsite?: string;
 }
@@ -18,6 +18,23 @@ export function HomeHero({
 	const [brandName, setBrandName] = useState(defaultBrandName);
 	const [website, setWebsite] = useState(defaultWebsite);
 	const [error, setError] = useState<string | null>(null);
+
+	const isBrandEditedRef = useRef(false);
+	const isWebsiteEditedRef = useRef(false);
+
+	// Synchronize when defaultBrandName / defaultWebsite becomes available from sessionStorage,
+	// but never overwrite user's manual edits.
+	useEffect(() => {
+		if (!isBrandEditedRef.current && defaultBrandName && brandName !== defaultBrandName) {
+			setBrandName(defaultBrandName);
+		}
+	}, [defaultBrandName]);
+
+	useEffect(() => {
+		if (!isWebsiteEditedRef.current && defaultWebsite && website !== defaultWebsite) {
+			setWebsite(defaultWebsite);
+		}
+	}, [defaultWebsite]);
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -45,7 +62,12 @@ export function HomeHero({
 			return;
 		}
 
-		onStartDiagnosis(trimmedName, validation.formattedUrl);
+		const submitBtn = (e.nativeEvent as SubmitEvent)?.submitter as HTMLElement | null;
+		onStartDiagnosis(
+			trimmedName,
+			validation.formattedUrl,
+			submitBtn || (document.activeElement as HTMLElement) || undefined,
+		);
 	};
 
 	return (
@@ -109,6 +131,7 @@ export function HomeHero({
 									type="text"
 									value={brandName}
 									onChange={(e) => {
+										isBrandEditedRef.current = true;
 										setBrandName(e.target.value);
 										if (error) setError(null);
 									}}
@@ -132,6 +155,7 @@ export function HomeHero({
 									type="text"
 									value={website}
 									onChange={(e) => {
+										isWebsiteEditedRef.current = true;
 										setWebsite(e.target.value);
 										if (error) setError(null);
 									}}

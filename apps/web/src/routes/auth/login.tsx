@@ -46,7 +46,7 @@ function LoginPage() {
 	);
 }
 
-function SSOLogin({ returnTo }: { returnTo?: string }) {
+export function SSOLoginView({ returnTo, className }: { returnTo?: string; className?: string }) {
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -73,18 +73,31 @@ function SSOLogin({ returnTo }: { returnTo?: string }) {
 
 	if (error) {
 		return (
-			<FullPageCard title="Sign in">
+			<div className={className ?? "space-y-4 w-full"}>
 				<Alert variant="destructive">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 				<Button className="w-full" onClick={() => window.location.reload()}>
 					Try Again
 				</Button>
-			</FullPageCard>
+			</div>
 		);
 	}
 
-	return <FullPageCard title="Signing in..." subtitle="Redirecting to your identity provider" />;
+	return (
+		<div className={className ?? "space-y-4 w-full py-6 text-center"}>
+			<p className="font-semibold text-foreground">Signing in...</p>
+			<p className="text-xs text-muted-foreground">Redirecting to your identity provider</p>
+		</div>
+	);
+}
+
+export function SSOLogin({ returnTo }: { returnTo?: string }) {
+	return (
+		<FullPageCard title="Sign in">
+			<SSOLoginView returnTo={returnTo} />
+		</FullPageCard>
+	);
 }
 
 export function EmailPasswordLogin({

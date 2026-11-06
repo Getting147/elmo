@@ -1,13 +1,24 @@
 import { useEffect, useRef } from "react";
-import { IconX, IconShieldCheck, IconDatabase, IconLock, IconBuilding, IconWorld, IconSparkles } from "@tabler/icons-react";
-import { Button } from "@workspace/ui/components/button";
-import { EmailPasswordLoginForm } from "@/routes/auth/login";
+import {
+	IconX,
+	IconShieldCheck,
+	IconDatabase,
+	IconLock,
+	IconBuilding,
+	IconWorld,
+	IconSparkles,
+} from "@tabler/icons-react";
+import type { DeploymentMode } from "@workspace/config/types";
+import { EmailPasswordLoginForm, SSOLoginView } from "@/routes/auth/login";
 import type { PendingBrandIntent } from "@/lib/pending-brand-intent";
 
 interface HomeLoginModalProps {
 	isOpen: boolean;
 	onClose: () => void;
 	intent: PendingBrandIntent | null;
+	loginSource?: "diagnosis" | "direct";
+	triggerElement?: HTMLElement | null;
+	mode?: DeploymentMode;
 	isDemo?: boolean;
 	isCloud?: boolean;
 	canRegister?: boolean;
@@ -18,20 +29,112 @@ export function HomeLoginModal({
 	isOpen,
 	onClose,
 	intent,
+	loginSource = "direct",
+	triggerElement,
+	mode,
 	isDemo,
 	isCloud,
 	canRegister,
 	onLoginSuccess,
 }: HomeLoginModalProps) {
 	const overlayRef = useRef<HTMLDivElement>(null);
+	const modalRef = useRef<HTMLDivElement>(null);
+	const internalTriggerRef = useRef<HTMLElement | null>(null);
 
-	// Handle Escape key to close modal
+	const handleCloseAndRestoreFocus = () => {
+		onClose();
+		const target = triggerElement || internalTriggerRef.current;
+		if (target && typeof target.focus === "function") {
+			setTimeout(() => {
+				target.focus();
+			}, 50);
+		}
+	};
+
+	// Focus restoration: record trigger button when modal opens, restore focus on close
 	useEffect(() => {
+		if (isOpen) {
+			if (triggerElement) {
+				internalTriggerRef.current = triggerElement;
+			} else if (
+				document.activeElement &&
+				document.activeElement !== document.body &&
+				(!modalRef.current || !modalRef.current.contains(document.activeElement))
+			) {
+				internalTriggerRef.current = document.activeElement as HTMLElement;
+			}
+
+			// Auto-focus on primary interactive element inside modal
+			const timer = setTimeout(() => {
+				if (!modalRef.current) return;
+				const emailInput = modalRef.current.querySelector<HTMLElement>("#email");
+				if (emailInput && typeof emailInput.focus === "function") {
+					emailInput.focus();
+				} else {
+					const firstFocusable = modalRef.current.querySelector<HTMLElement>(
+						'button:not([disabled]), input:not([disabled]), [href], textarea, select, [tabindex]:not([tabindex="-1"])',
+					);
+					firstFocusable?.focus();
+				}
+			}, 50);
+
+			return () => clearTimeout(timer);
+		} else {
+			const target = triggerElement || internalTriggerRef.current;
+			if (target && typeof target.focus === "function") {
+				const timer = setTimeout(() => {
+					target.focus();
+				}, 50);
+				return () => clearTimeout(timer);
+			}
+		}
+	}, [isOpen, triggerElement]);
+
+	// Keyboard handling: Escape to close, Tab / Shift+Tab focus trap
+	useEffect(() => {
+		if (!isOpen) return;
+
 		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && isOpen) {
-				onClose();
+			if (e.key === "Escape") {
+				e.preventDefault();
+				handleCloseAndRestoreFocus();
+				return;
+			}
+
+			if (e.key === "Tab") {
+				const modal = modalRef.current;
+				if (!modal) return;
+
+				const focusableElements = Array.from(
+					modal.querySelectorAll<HTMLElement>(
+						'button:not([disabled]), input:not([disabled]), [href], textarea, select, [tabindex]:not([tabindex="-1"])',
+					),
+				).filter((el) => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
+
+				if (focusableElements.length === 0) {
+					e.preventDefault();
+					return;
+				}
+
+				const firstElement = focusableElements[0];
+				const lastElement = focusableElements[focusableElements.length - 1];
+
+				if (e.shiftKey) {
+					// Shift + Tab
+					if (document.activeElement === firstElement || !modal.contains(document.activeElement)) {
+						e.preventDefault();
+						lastElement.focus();
+					}
+				} else {
+					// Tab
+					if (document.activeElement === lastElement || !modal.contains(document.activeElement)) {
+						e.preventDefault();
+						firstElement.focus();
+					}
+				}
 			}
 		};
+
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [isOpen, onClose]);
@@ -50,7 +153,9 @@ export function HomeLoginModal({
 
 	if (!isOpen) return null;
 
-	const returnTo = intent ? "/app/new" : "/app";
+	// When loginSource is direct (e.g. from header login button), returnTo is fixed to /app
+	const returnTo = loginSource === "diagnosis" && intent ? "/app/new" : "/app";
+	const isWhitelabel = mode === "whitelabel";
 
 	return (
 		<div
@@ -58,11 +163,12 @@ export function HomeLoginModal({
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200"
 			onClick={(e) => {
 				if (e.target === overlayRef.current) {
-					onClose();
+					handleCloseAndRestoreFocus();
 				}
 			}}
 		>
 			<div
+				ref={modalRef}
 				className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-border/80 bg-background shadow-2xl animate-in zoom-in-95 duration-200"
 				role="dialog"
 				aria-modal="true"
@@ -70,7 +176,7 @@ export function HomeLoginModal({
 				{/* Close Button */}
 				<button
 					type="button"
-					onClick={onClose}
+					onClick={handleCloseAndRestoreFocus}
 					className="absolute top-4 right-4 z-20 flex size-8 items-center justify-center rounded-full bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer transition-colors"
 					aria-label="关闭弹窗"
 				>
@@ -87,11 +193,11 @@ export function HomeLoginModal({
 									<IconSparkles className="size-4" />
 								</div>
 								<span className="font-bold text-foreground">
-									{intent ? "待建档意图已暂存" : "Negency GEO 平台"}
+									{intent && loginSource === "diagnosis" ? "待建档意图已暂存" : "Negency GEO 平台"}
 								</span>
 							</div>
 
-							{intent ? (
+							{intent && loginSource === "diagnosis" ? (
 								<div className="space-y-3">
 									<p className="text-muted-foreground leading-relaxed">
 										您刚才填写的品牌资料已在本地会话暂存，登录成功后直接带入建档向导，无需重新填写。
@@ -140,29 +246,35 @@ export function HomeLoginModal({
 						</div>
 					</div>
 
-					{/* Middle Column: Login Form */}
+					{/* Middle Column: Login Form or SSO Form */}
 					<div className="md:col-span-5 p-6 sm:p-8 flex flex-col justify-center">
 						<div className="mb-6 text-center sm:text-left">
 							<h3 className="text-xl font-bold tracking-tight text-foreground">
 								登录 NegencyGEO
 							</h3>
 							<p className="mt-1 text-xs text-muted-foreground">
-								{intent
+								{intent && loginSource === "diagnosis"
 									? `登录后直接继续完成「${intent.brandName}」的建档配置`
 									: "请登录您的企业工作台账号"}
 							</p>
 						</div>
 
-						<EmailPasswordLoginForm
-							returnTo={returnTo}
-							isDemo={isDemo}
-							isCloud={isCloud}
-							canRegister={canRegister}
-							onSuccess={onLoginSuccess}
-							submitButtonText={
-								intent ? "立即登录并继续创建 →" : "登录工作台"
-							}
-						/>
+						{isWhitelabel ? (
+							<SSOLoginView returnTo={returnTo} />
+						) : (
+							<EmailPasswordLoginForm
+								returnTo={returnTo}
+								isDemo={isDemo}
+								isCloud={isCloud}
+								canRegister={canRegister}
+								onSuccess={onLoginSuccess}
+								submitButtonText={
+									intent && loginSource === "diagnosis"
+										? "立即登录并继续创建 →"
+										: "登录工作台"
+								}
+							/>
+						)}
 
 						<div className="mt-4 text-center">
 							<span className="text-[11px] text-muted-foreground/80">

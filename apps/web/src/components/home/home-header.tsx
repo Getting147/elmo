@@ -4,7 +4,7 @@ import { Button } from "@workspace/ui/components/button";
 interface HomeHeaderProps {
 	theme: "dark" | "light";
 	onToggleTheme: () => void;
-	onOpenLogin: () => void;
+	onOpenLogin: (trigger?: HTMLElement) => void;
 }
 
 export function HomeHeader({ theme, onToggleTheme, onOpenLogin }: HomeHeaderProps) {
@@ -77,7 +77,7 @@ export function HomeHeader({ theme, onToggleTheme, onOpenLogin }: HomeHeaderProp
 					<Button
 						variant="outline"
 						size="sm"
-						onClick={onOpenLogin}
+						onClick={(e) => onOpenLogin(e.currentTarget)}
 						className="cursor-pointer font-medium text-xs sm:text-sm px-3 sm:px-4"
 					>
 						登录

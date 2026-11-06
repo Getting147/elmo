@@ -65,7 +65,14 @@ function HomePage() {
 		return "dark";
 	});
 	const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-	const [currentIntent, setCurrentIntent] = useState<PendingBrandIntent | null>(null);
+	const [loginSource, setLoginSource] = useState<"diagnosis" | "direct">("direct");
+	const [triggerElement, setTriggerElement] = useState<HTMLElement | null>(null);
+	const [currentIntent, setCurrentIntent] = useState<PendingBrandIntent | null>(() => {
+		if (typeof window !== "undefined") {
+			return getPendingBrandIntent();
+		}
+		return null;
+	});
 
 	// Theme initialization & synchronization
 	useEffect(() => {
@@ -88,24 +95,36 @@ function HomePage() {
 		document.documentElement.classList.toggle("dark", nextTheme === "dark");
 	};
 
-	const handleStartDiagnosis = (brandName: string, website: string) => {
+	const handleStartDiagnosis = (brandName: string, website: string, trigger?: HTMLElement) => {
+		if (trigger) {
+			setTriggerElement(trigger);
+		} else if (typeof document !== "undefined" && document.activeElement && document.activeElement !== document.body) {
+			setTriggerElement(document.activeElement as HTMLElement);
+		}
 		const success = setPendingBrandIntent({ brandName, website });
 		if (success) {
 			const intent = getPendingBrandIntent();
 			setCurrentIntent(intent);
+			setLoginSource("diagnosis");
 			setIsLoginModalOpen(true);
 		}
 	};
 
-	const handleOpenDirectLogin = () => {
-		// When opening directly from header login button, do not inject diagnosis intent
-		setCurrentIntent(null);
+	const handleOpenDirectLogin = (trigger?: HTMLElement) => {
+		if (trigger) {
+			setTriggerElement(trigger);
+		} else if (typeof document !== "undefined" && document.activeElement && document.activeElement !== document.body) {
+			setTriggerElement(document.activeElement as HTMLElement);
+		}
+		// Explicitly mark as direct workspace login - must never be hijacked by pending diagnosis intent
+		setLoginSource("direct");
 		setIsLoginModalOpen(true);
 	};
 
 	const handleLoginSuccess = () => {
 		setIsLoginModalOpen(false);
-		if (currentIntent || hasPendingBrandIntent()) {
+		// Only redirect to /app/new when login was initiated via the diagnosis form
+		if (loginSource === "diagnosis") {
 			navigate({ to: "/app/new" });
 		} else {
 			navigate({ to: "/app" });
@@ -142,6 +161,9 @@ function HomePage() {
 				isOpen={isLoginModalOpen}
 				onClose={() => setIsLoginModalOpen(false)}
 				intent={currentIntent}
+				loginSource={loginSource}
+				triggerElement={triggerElement}
+				mode={mode}
 				isDemo={mode === "demo"}
 				isCloud={mode === "cloud"}
 				canRegister={canRegister}
