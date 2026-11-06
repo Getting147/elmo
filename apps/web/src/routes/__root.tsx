@@ -147,8 +147,13 @@ function RootComponent() {
 
 	if (!envValidation.isValid) {
 		return (
-			<html lang="en">
+			<html lang="en" className="dark">
 				<head>
+					<script
+						dangerouslySetInnerHTML={{
+							__html: `(function(){try{var t=localStorage.getItem('negency_theme');if(t==='light'){document.documentElement.classList.remove('dark')}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})();`,
+						}}
+					/>
 					<HeadContent />
 				</head>
 				<body className="font-sans antialiased">
@@ -160,8 +165,13 @@ function RootComponent() {
 	}
 
 	return (
-		<html lang="en">
+		<html lang="en" className="dark">
 			<head>
+				<script
+					dangerouslySetInnerHTML={{
+						__html: `(function(){try{var t=localStorage.getItem('negency_theme');if(t==='light'){document.documentElement.classList.remove('dark')}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})();`,
+					}}
+				/>
 				{clarityProjectId && <ScriptOnce>{clarityQueueScript}</ScriptOnce>}
 				{/* i18n-global: 组件级注入（TanStack head scripts 在 SSR 构建中不输出，实测丢失）。
 				    ?v= 为缓存破坏版本号——每次更新 public/i18n-global.js 必须同步 +1，否则浏览器缓存旧词表 */ }

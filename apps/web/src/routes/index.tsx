@@ -56,20 +56,23 @@ function HomePage() {
 	const mode = context.clientConfig?.mode;
 	const canRegister = context.clientConfig?.canRegister ?? false;
 
-	const [theme, setTheme] = useState<"dark" | "light">("dark");
+	const [theme, setTheme] = useState<"dark" | "light">(() => {
+		if (typeof window !== "undefined") {
+			const saved = localStorage.getItem("negency_theme") as "dark" | "light" | null;
+			if (saved) return saved;
+			return document.documentElement.classList.contains("dark") ? "dark" : "light";
+		}
+		return "dark";
+	});
 	const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 	const [currentIntent, setCurrentIntent] = useState<PendingBrandIntent | null>(null);
 
 	// Theme initialization & synchronization
 	useEffect(() => {
 		const savedTheme = localStorage.getItem("negency_theme") as "dark" | "light" | null;
-		if (savedTheme) {
-			setTheme(savedTheme);
-			document.documentElement.classList.toggle("dark", savedTheme === "dark");
-		} else {
-			setTheme("dark");
-			document.documentElement.classList.add("dark");
-		}
+		const current = savedTheme || "dark";
+		setTheme(current);
+		document.documentElement.classList.toggle("dark", current === "dark");
 
 		// Initial load of any existing intent
 		const stored = getPendingBrandIntent();

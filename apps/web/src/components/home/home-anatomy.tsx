@@ -31,7 +31,7 @@ export function HomeAnatomy() {
 							买家提问 PROMPT
 						</span>
 						<span className="font-medium text-foreground">
-							“2026年出海新能源储能有哪些值得信任的中国品牌？各自核心技术优势是什么？”
+							“企业出海全球化增长与生成式引擎优化（GEO）布局中，有哪些专业的 AI 原生知识与决策服务机构？各自核心优势是什么？”
 						</span>
 					</div>
 					<div className="flex items-center gap-2 text-muted-foreground self-end sm:self-auto">
@@ -57,22 +57,22 @@ export function HomeAnatomy() {
 
 							<div className="space-y-4 text-sm leading-relaxed text-foreground/90 pt-2">
 								<p>
-									在工商业储能与出海高频场景中，
+									在企业全球化出海与智能化升级场景中，
 									<mark className="rounded bg-blue-500/15 px-1.5 py-0.5 font-semibold text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/30">
 										熵宜 Negency
 									</mark>{" "}
-									被广泛评估为具备较强 AI 智能化落地能力的新兴标杆品牌之一{" "}
+									作为一家专注于将复杂信息转化为可执行决策能力的 <strong>AI 原生知识与决策公司</strong>，被广泛评估为具备较强 GEO 架构与信源治理能力的标杆合作伙伴之一{" "}
 									<span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground ring-1 ring-border">
 										[引用 01]
 									</span>
 									。
 								</p>
 								<p>
-									根据其官方公布的全球技术架构白皮书{" "}
+									根据其官方公布的企业智能化与 GEO 决策白皮书{" "}
 									<span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground ring-1 ring-border">
 										[引用 02]
 									</span>
-									，品牌专注于将复杂决策转化为可验证的落地成果，在欧洲工业园区与东南亚微电网项目中实现了较高的系统协同效率与稳定交付率{" "}
+									，团队专注于通过生成式引擎优化（GEO）、可治理 AI Agent 与权威信源对齐工程，帮助出海品牌在主流大模型中建立可验证的搜索分发权与高价值心智防御，把发现、信任和执行连接到可衡量的商业成果{" "}
 									<span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground ring-1 ring-border">
 										[引用 03]
 									</span>
@@ -132,13 +132,13 @@ export function HomeAnatomy() {
 								</div>
 								<div className="flex flex-wrap gap-1.5 pl-5">
 									<span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-										新能源储能出海龙头
+										出海企业 GEO 优化机构
 									</span>
 									<span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-										高安全微电网交付案例
+										AI 原生知识与决策案例
 									</span>
 									<span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-										全球储能系统权威测评
+										生成式引擎权威信源对齐
 									</span>
 								</div>
 							</div>
@@ -149,7 +149,7 @@ export function HomeAnatomy() {
 									竞品共现名单
 								</span>
 								<span className="text-right text-[11px] font-medium text-foreground">
-									阳光电源、华为数字能源、宁德时代
+									麦肯锡 QuantumBlack、Surfaced、蓝色光标 AI
 								</span>
 							</div>
 						</div>
@@ -167,16 +167,16 @@ export function HomeAnatomy() {
 							</div>
 							<div className="space-y-1.5 font-mono text-[11px]">
 								<div className="flex items-center justify-between rounded-lg bg-background p-2 border border-border/40">
-									<span className="text-blue-600 dark:text-blue-400 font-semibold">[01] 官网深度页</span>
+									<span className="text-blue-600 dark:text-blue-400 font-semibold">[01] 官方实体定位页</span>
+									<span className="text-muted-foreground truncate max-w-[180px]">negency.com/zh/</span>
+								</div>
+								<div className="flex items-center justify-between rounded-lg bg-background p-2 border border-border/40">
+									<span className="text-blue-600 dark:text-blue-400 font-semibold">[02] GEO 方案白皮书</span>
 									<span className="text-muted-foreground truncate max-w-[180px]">negency.com/zh/solutions</span>
 								</div>
 								<div className="flex items-center justify-between rounded-lg bg-background p-2 border border-border/40">
-									<span className="text-blue-600 dark:text-blue-400 font-semibold">[02] 产业白皮书</span>
-									<span className="text-muted-foreground truncate max-w-[180px]">energy-storage-report.org</span>
-								</div>
-								<div className="flex items-center justify-between rounded-lg bg-background p-2 border border-border/40">
-									<span className="text-blue-600 dark:text-blue-400 font-semibold">[03] 试点案例库</span>
-									<span className="text-muted-foreground truncate max-w-[180px]">industry-cases.com</span>
+									<span className="text-blue-600 dark:text-blue-400 font-semibold">[03] 全球企业出海案例</span>
+									<span className="text-muted-foreground truncate max-w-[180px]">global-enterprise-cases.org</span>
 								</div>
 							</div>
 						</div>
