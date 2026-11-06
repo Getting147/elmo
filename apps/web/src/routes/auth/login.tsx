@@ -46,7 +46,7 @@ function LoginPage() {
 	);
 }
 
-function SSOLogin({ returnTo }: { returnTo?: string }) {
+export function SSOLoginView({ returnTo, className }: { returnTo?: string; className?: string }) {
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -73,18 +73,31 @@ function SSOLogin({ returnTo }: { returnTo?: string }) {
 
 	if (error) {
 		return (
-			<FullPageCard title="Sign in">
+			<div className={className ?? "space-y-4 w-full"}>
 				<Alert variant="destructive">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 				<Button className="w-full" onClick={() => window.location.reload()}>
 					Try Again
 				</Button>
-			</FullPageCard>
+			</div>
 		);
 	}
 
-	return <FullPageCard title="Signing in..." subtitle="Redirecting to your identity provider" />;
+	return (
+		<div className={className ?? "space-y-4 w-full py-6 text-center"}>
+			<p className="font-semibold text-foreground">Signing in...</p>
+			<p className="text-xs text-muted-foreground">Redirecting to your identity provider</p>
+		</div>
+	);
+}
+
+export function SSOLogin({ returnTo }: { returnTo?: string }) {
+	return (
+		<FullPageCard title="Sign in">
+			<SSOLoginView returnTo={returnTo} />
+		</FullPageCard>
+	);
 }
 
 export function EmailPasswordLogin({
@@ -98,6 +111,37 @@ export function EmailPasswordLogin({
 	isCloud?: boolean;
 	canRegister?: boolean;
 }) {
+	return (
+		<FullPageCard title="Sign in" subtitle={isDemo ? undefined : "Enter your email and password to continue"}>
+			<EmailPasswordLoginForm
+				returnTo={returnTo}
+				isDemo={isDemo}
+				isCloud={isCloud}
+				canRegister={canRegister}
+			/>
+		</FullPageCard>
+	);
+}
+
+export interface EmailPasswordLoginFormProps {
+	returnTo?: string;
+	isDemo?: boolean;
+	isCloud?: boolean;
+	canRegister?: boolean;
+	onSuccess?: () => void;
+	submitButtonText?: string;
+	className?: string;
+}
+
+export function EmailPasswordLoginForm({
+	returnTo,
+	isDemo,
+	isCloud,
+	canRegister,
+	onSuccess,
+	submitButtonText,
+	className,
+}: EmailPasswordLoginFormProps) {
 	const navigate = useNavigate();
 	const [email, setEmail] = useState(isDemo ? "demo@elmohq.com" : "");
 	const [password, setPassword] = useState(isDemo ? "demo" : "");
@@ -125,7 +169,11 @@ export function EmailPasswordLogin({
 				return;
 			}
 
-			navigate({ to: safeReturnTo(returnTo) });
+			if (onSuccess) {
+				onSuccess();
+			} else {
+				navigate({ to: safeReturnTo(returnTo) });
+			}
 		} catch {
 			setError("Something went wrong. Please try again.");
 			setLoading(false);
@@ -133,7 +181,7 @@ export function EmailPasswordLogin({
 	}
 
 	return (
-		<FullPageCard title="Sign in" subtitle={isDemo ? undefined : "Enter your email and password to continue"}>
+		<div className={className ?? "w-full"}>
 			{isCloud && (
 				<div className="space-y-4 w-full pb-4">
 					<Button
@@ -195,8 +243,8 @@ export function EmailPasswordLogin({
 						</div>
 					</>
 				)}
-				<Button type="submit" className="w-full" disabled={loading}>
-					{loading ? "Signing in..." : "Sign in"}
+				<Button type="submit" className="w-full cursor-pointer" disabled={loading}>
+					{loading ? "Signing in..." : (submitButtonText ?? "Sign in")}
 				</Button>
 			</form>
 			{canRegister && (
@@ -211,7 +259,7 @@ export function EmailPasswordLogin({
 					</Link>
 				</p>
 			)}
-		</FullPageCard>
+		</div>
 	);
 }
 
